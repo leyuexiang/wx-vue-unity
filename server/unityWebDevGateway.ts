@@ -1,5 +1,5 @@
 import { createServer as createHttpsServer } from 'node:https'
-import { request as httpRequest } from 'node:http'
+import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { randomUUID, createHash } from 'node:crypto'
 import path from 'node:path'
@@ -17,8 +17,12 @@ const playerRoot = path.resolve(required('UNITY_WEB_DEV_PLAYER_DIR'))
 const artRoot = path.resolve(required('UNITY_WEB_DEV_ART_DIR'))
 const descriptor = readFileSync(required('UNITY_WEB_DEV_DESCRIPTOR_FILE'))
 const descriptorSha256 = `sha256:${createHash('sha256').update(descriptor).digest('hex')}`
-const tls = { key: readFileSync(required('UNITY_WEB_DEV_TLS_KEY')), cert: readFileSync(required('UNITY_WEB_DEV_TLS_CERT')) }
-const origin = `https://localhost:${port}`
+// 远程测试入口经反向代理访问；对外地址与环回监听地址独立配置。
+const publicOrigin = process.env.UNITY_WEB_DEV_PUBLIC_ORIGIN
+const origin = publicOrigin ? new URL(publicOrigin).origin : `https://localhost:${port}`
+if (publicOrigin && (origin !== publicOrigin || !origin.startsWith('https://'))) {
+  throw new Error('UNITY_WEB_DEV_PUBLIC_ORIGIN 必须是 HTTPS 根来源')
+}
 const sessions = new Map<string, { token: string; clientId: string; tenantId?: string; expiresAt: number }>()
 
 function required(name: string): string {
@@ -122,6 +126,10 @@ function proxyBusiness(req: IncomingMessage, res: ServerResponse, pathname: stri
   const match = /^\/session\/([0-9a-f-]{36})(\/.*)$/.exec(pathname)
   const session = match && sessions.get(match[1])
   if (!match || !session || session.expiresAt <= Date.now()) { reply(res, 401, { error: 'Session expired' }); return }
+  // 共享验收入口仅开放Unity启动所需的只读业务域；页面保存通过独立的管理接口完成。
+  if (publicOrigin && (req.method !== 'GET' || !/^\/(?:dim3d|dimensions)\/[\w/-]+$/.test(match[2]))) {
+    reply(res, 404, { error: 'Not found' }); return
+  }
   const target = new URL(`/${adminApi ? 'admin-api' : 'api'}${match[2]}`, backend)
   target.search = search
   const upstream = httpRequest(target, {
@@ -137,7 +145,7 @@ function proxyBusiness(req: IncomingMessage, res: ServerResponse, pathname: stri
   req.pipe(upstream)
 }
 
-const server = createHttpsServer(tls, (req, res) => {
+const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
   if (!cors(req, res)) return
   const url = new URL(req.url || '/', origin)
   let pathname: string
@@ -163,7 +171,11 @@ const server = createHttpsServer(tls, (req, res) => {
   }
   if (pathname.startsWith('/session/')) { proxyBusiness(req, res, pathname, url.search); return }
   reply(res, 404, { error: 'Not found' })
-})
+}
+// 部署时由外层网关终止TLS，内部服务只监听环回地址，无需读取服务器私钥。
+const server = publicOrigin ? createHttpServer(handleRequest) : createHttpsServer({
+  key: readFileSync(required('UNITY_WEB_DEV_TLS_KEY')), cert: readFileSync(required('UNITY_WEB_DEV_TLS_CERT')),
+}, handleRequest)
 server.listen(port, host, () => console.log(`Unity Web local gateway listening on ${origin}`))
 process.on('SIGINT', () => server.close())
 process.on('SIGTERM', () => server.close())

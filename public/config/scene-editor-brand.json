@@ -1,6 +1,10 @@
 {
-  "softwareName": "道地药材溯源平台",
+  "softwareName": "数据可视化生产平台",
   "projectNameFallback": "Scene Editor",
   "logoSrc": "images/scene-editor-brand-logo.png",
-  "logoAlt": "道地药材溯源平台标识"
+  "logoAlt": "道地药材溯源平台标识",
+  "managementBrand": {
+    "projectName": "数据可视化生产平平台",
+    "logoSrc": "images/scene-editor-brand-logo.png"
+  }
 }

@@ -6,6 +6,8 @@ export type SceneEditorBrandConfig = {
   projectNameFallback: string
   logoSrc: string
   logoAlt: string
+  /** 管理侧栏可以覆盖项目名称和标识，场景编辑器仍读取原有品牌字段。 */
+  managementBrand?: { projectName: string; logoSrc: string }
 }
 
 export type LoadSceneEditorBrandConfigOptions = {
@@ -52,7 +54,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const resolveRequiredText = (
   source: Record<string, unknown>,
-  key: keyof SceneEditorBrandConfig,
+  key: string,
   fallback: string,
 ) => {
   const value = source[key]
@@ -64,7 +66,7 @@ const resolveRequiredText = (
 
 const resolveOptionalText = (
   source: Record<string, unknown>,
-  key: keyof SceneEditorBrandConfig,
+  key: string,
   fallback: string,
 ) => {
   const value = source[key]
@@ -78,6 +80,8 @@ export const normalizeSceneEditorBrandConfig = (
   if (!isRecord(value)) return { ...fallback }
 
   const softwareName = resolveRequiredText(value, 'softwareName', fallback.softwareName)
+  const logoSrc = resolveOptionalText(value, 'logoSrc', fallback.logoSrc)
+  const management = isRecord(value.managementBrand) ? value.managementBrand : undefined
 
   return {
     softwareName,
@@ -86,8 +90,15 @@ export const normalizeSceneEditorBrandConfig = (
       'projectNameFallback',
       fallback.projectNameFallback,
     ),
-    logoSrc: resolveOptionalText(value, 'logoSrc', fallback.logoSrc),
+    logoSrc,
     logoAlt: resolveRequiredText(value, 'logoAlt', fallback.logoAlt || softwareName),
+    // 缺省字段继承共同品牌，空Logo地址可显式隐藏管理侧栏的标识。
+    ...(management && {
+      managementBrand: {
+        projectName: resolveRequiredText(management, 'projectName', softwareName),
+        logoSrc: resolveOptionalText(management, 'logoSrc', logoSrc),
+      },
+    }),
   }
 }
 

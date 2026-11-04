@@ -5,6 +5,20 @@
       文字裁除后由侧栏边界统一完成自然裁切；装饰层不参与菜单布局，也不会在路由切换时重复创建。
     -->
     <div class="manage-header__watermark" aria-hidden="true"></div>
+    <!-- 管理页复用编辑器的品牌配置，品牌区独立于下方可滚动的导航。 -->
+    <div class="manage-header__brand">
+      <img
+        v-if="managementBrand.logoSrc"
+        class="manage-header__brand-logo"
+        :src="resolveSceneEditorBrandAssetUrl(managementBrand.logoSrc)"
+        alt=""
+        width="28"
+        height="28"
+      />
+      <span class="manage-header__brand-name" :title="managementBrand.projectName">
+        {{ managementBrand.projectName }}
+      </span>
+    </div>
     <!--
       Figma 侧栏中的“资源管理”和“场景管理”是模块分类标识，不是可展开的菜单项。
       分类使用普通容器承载，业务入口仍交给 Element Plus 菜单注册，以保留路由选中态和键盘导航。
@@ -96,12 +110,22 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { isEmbeddedMode } from '@/auth/runtime'
 import { getCurrentManagementCapabilities } from '@/auth/capabilities'
+import {
+  getDefaultSceneEditorBrandConfig,
+  loadSceneEditorBrandConfig,
+  resolveSceneEditorBrandAssetUrl,
+} from '@/config/sceneEditorBrand'
 
 defineOptions({ name: 'LayoutHeader' })
 
 const appStore = useAppStore()
 const router = useRouter()
 const activeIndex = ref()
+const brandConfig = ref(getDefaultSceneEditorBrandConfig())
+const managementBrand = computed(() => brandConfig.value.managementBrand ?? {
+  projectName: brandConfig.value.softwareName,
+  logoSrc: brandConfig.value.logoSrc,
+})
 const { theme, toggleTheme } = useManageTheme()
 /** 布局在认证完成后挂载，此快照可稳定控制当前平台整个侧栏生命周期。 */
 const managementCapabilities = getCurrentManagementCapabilities()
@@ -132,6 +156,10 @@ const isManageRouteName = (
 
 onBeforeMount(() => {
   setActive(router.currentRoute.value.name)
+})
+
+onMounted(async () => {
+  brandConfig.value = await loadSceneEditorBrandConfig()
 })
 
 watch(

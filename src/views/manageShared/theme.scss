@@ -475,6 +475,33 @@ html[data-manage-theme='dark'] .manage-message-box {
   transform: translate(-50%, -50%) rotate(-23.75deg) skewX(5.65deg);
   transform-origin: center;
 }
+
+.manage-header__brand {
+  /* 品牌行固定在滚动菜单上方，复用侧栏分隔线并与导航一起对齐。 */
+  display: flex;
+  flex: 0 0 56px;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 0 4px 1px;
+  color: #fff;
+  background: var(--manage-sidebar-divider-image) center bottom / 100% 1px no-repeat;
+}
+
+.manage-header__brand-logo {
+  flex: 0 0 28px;
+  object-fit: contain;
+}
+
+.manage-header__brand-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .manage-header__menu {
   position: relative;
   left: -16px;
@@ -753,6 +780,21 @@ html[data-manage-theme='dark'] .manage-header__menu .el-menu-item.is-active .man
   background: var(--manage-color-accent-soft);
   border-color: var(--manage-color-accent-border-strong);
 }
+
+/* 暗色侧栏的工具入口只用图标和文字表达状态，保留原点击区域与键盘焦点。 */
+html[data-manage-theme='dark'] .manage-header__bottom-tools {
+  .manage-header__theme-toggle,
+  .manage-header__user {
+    background: transparent;
+    border-color: transparent;
+  }
+
+  .manage-header__user:focus-visible {
+    outline: 2px solid var(--manage-accent);
+    outline-offset: 2px;
+  }
+}
+
 .manage-page {
   display: flex;
   flex: 1;
