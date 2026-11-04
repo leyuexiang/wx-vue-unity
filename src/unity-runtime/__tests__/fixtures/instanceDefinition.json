@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "jtyf.instance-definition.v1",
+  "configurationRevision": "7",
+  "identity": { "sceneId": "101", "instanceType": "Model", "instanceId": "42" },
+  "resource": { "resourceId": "2115735432249536513" },
+  "pages": {
+    "base": {
+      "name": "冷却泵A",
+      "properties": [
+        { "fieldId": "rated-temperature", "label": "额定温度", "type": "number", "unit": "Cel", "nullable": false, "value": 80 }
+      ]
+    },
+    "data": {
+      "bindings": [
+        { "bindingId": "sensor-main", "sourceId": "local-sample", "fields": [
+          { "fieldId": "temperature", "label": "温度", "type": "number", "unit": "Cel", "nullable": false, "staleAfterMs": 5000 }
+        ] },
+        { "bindingId": "sensor-backup", "sourceId": "local-backup", "fields": [
+          { "fieldId": "temperature", "label": "温度", "type": "number", "unit": "Cel", "nullable": true, "staleAfterMs": 5000 }
+        ] }
+      ]
+    },
+    "state": { "groups": [] },
+    "events": { "rules": [] }
+  },
+  "referenceExamples": [
+    { "owner": "self", "namespace": "base", "fieldId": "rated-temperature" },
+    { "owner": "self", "namespace": "data", "bindingId": "sensor-main", "fieldId": "temperature" }
+  ],
+  "vendorExtension": { "保留字段": [1, null, { "enabled": true }] }
+}

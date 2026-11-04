@@ -8,6 +8,7 @@ import type {
 import { attachDataBindingOverflow } from './dataBindingOverflow'
 import { isBuiltinSceneAssetId } from './editorBuiltinResourceRegistry'
 import { isProxy, toRaw } from 'vue'
+import { projectInstanceDefinition } from '@/scene-core/model/instanceDefinition'
 
 /**
  * 四包协议允许的 JSON 值。
@@ -604,9 +605,16 @@ const resolveWidgetLayerKey = (id: string, layerTree: readonly unknown[]): strin
   return undefined
 }
 
-const toThreeTarget = (object: SceneObject): SceneThreeDTargetPackage => {
+const toThreeTarget = (object: SceneObject, sceneId: string): SceneThreeDTargetPackage => {
   const resourceRefKeys = getPersistentObjectResourceRefKeys(object)
-  const metadata = sanitizeThreeTargetMetadata(object.metadata, object.id)
+  const definition = projectInstanceDefinition(object.metadata?.instanceDefinition, {
+    instanceId: object.id, sceneId, name: object.name,
+    resourceId: String(object.asset?.metadata?.assetId ?? object.asset?.id ?? '').trim(),
+  })
+  // 基础名称只取领域对象；配置副本随原三维载荷保存，不在依赖包另存一份。
+  const metadata = sanitizeThreeTargetMetadata(definition === undefined ? object.metadata : {
+    ...object.metadata, instanceDefinition: definition,
+  }, object.id)
   const billboard = sanitizeBillboard(object)
   return {
     instanceId: object.id,
@@ -1501,10 +1509,10 @@ export const createSceneFourPackageDocuments = (
       ),
       objects: scene.objects
         .filter((object) => object.type === 'model' || object.type === 'tileset')
-        .map(toThreeTarget),
+        .map((object) => toThreeTarget(object, scene.id)),
       components: scene.objects
         .filter((object) => object.type !== 'model' && object.type !== 'tileset')
-        .map(toThreeTarget),
+        .map((object) => toThreeTarget(object, scene.id)),
       layers: scene.layers.map(toLayer),
       streaming: cloneRecord(
         scene.streaming ?? { groups: [], chunks: [], chunkTargets: [] },

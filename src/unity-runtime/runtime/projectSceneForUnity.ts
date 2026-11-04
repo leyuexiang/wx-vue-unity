@@ -1,5 +1,6 @@
 import type { SceneDefinition as EditorScene, SceneObject as EditorObject } from '@/scene-platform'
 import type { SceneDefinition as UnityScene, SceneObject as UnityObject, SceneTransform as UnityTransform } from '@/scene-core'
+import { projectInstanceDefinition } from '@/scene-core/model/instanceDefinition'
 
 const primitiveNames: Record<string, string> = {
   BoxGeometry: 'cube', SphereGeometry: 'sphere', CapsuleGeometry: 'capsule',
@@ -75,7 +76,7 @@ export const fromUnityTransform = (value: UnityTransform, previous?: EditorObjec
   }
 }
 
-export const projectObjectForUnity = (object: EditorObject): UnityObject => {
+export const projectObjectForUnity = (object: EditorObject, sceneId?: string): UnityObject => {
   const transform = object.transform
   if (transform.kind === 'geo') {
     if (transform.altitudeMode !== 'absolute') throw new Error(`GIS 对象 ${object.name} 暂不支持贴地或相对地形高度，请使用绝对高度`)
@@ -94,6 +95,9 @@ export const projectObjectForUnity = (object: EditorObject): UnityObject => {
   }
   const pickable = object.metadata?.pickable
   const deviceId = object.metadata?.deviceId
+  const instanceDefinition = projectInstanceDefinition(object.metadata?.instanceDefinition, {
+    instanceId: object.id, resourceId: getUnityModelAssetId(object), name: object.name, sceneId,
+  })
   return {
     instanceId: object.id, objectType: object.type as UnityObject['objectType'], name: object.name,
     visible: object.visible, locked: object.locked,
@@ -109,6 +113,7 @@ export const projectObjectForUnity = (object: EditorObject): UnityObject => {
       ...(primitiveType ? { primitiveType } : {}),
       pickable: typeof pickable === 'boolean' ? pickable : true,
       ...(typeof deviceId === 'string' ? { deviceId } : {}),
+      ...(instanceDefinition === undefined ? {} : { instanceDefinition }),
     },
   }
 }
@@ -119,7 +124,7 @@ export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
   for (const object of renderObjects) {
     if ((scene.type === 'gis') !== (object.transform.kind === 'geo')) throw new Error(`对象 ${object.name} 的坐标类型与场景不一致`)
   }
-  const objects = renderObjects.map(projectObjectForUnity)
+  const objects = renderObjects.map((object) => projectObjectForUnity(object, scene.id))
   const resources = new Map<string, UnityScene['resources'][number]>()
   scene.objects.forEach((object) => {
     if (object.type !== 'model' || !object.asset) return
