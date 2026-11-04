@@ -43,6 +43,8 @@ export interface SceneViewportGridSettings {
 export type AssetKind =
   | 'glb'
   | 'gltf'
+  /** Unity托管模型由稳定资源编号定位，运行时负责鉴权读取当前修订。 */
+  | 'unity-model'
   | 'image'
   | 'texture'
   | 'material'

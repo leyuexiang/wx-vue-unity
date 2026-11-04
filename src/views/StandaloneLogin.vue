@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { loginStandalone } from '@/auth/standalone'
 import type { PlatformType } from '@/auth/authTypes'
+import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
 
 defineProps<{ message?: string }>()
 const emit = defineEmits<{ authenticated: [] }>()
@@ -17,11 +18,11 @@ watch(platformType, () => {
   errorMessage.value = ''
 })
 
-/** 沿用参考运营端的手机号密码登录字段；互斥提交，密码在请求完成后立即从表单清空。 */
+/** 本项目后端允许用户名，参考服务使用手机号；提交结束后立即清空口令。 */
 async function submit(): Promise<void> {
   if (submitting.value) return
-  if (!/^1[3-9]\d{9}$/.test(phonenumber.value.trim()) || !password.value) {
-    errorMessage.value = '请输入有效手机号和密码'
+  if (!(DIM3D_ADMIN_API ? Boolean(phonenumber.value.trim()) : /^1[3-9]\d{9}$/.test(phonenumber.value.trim())) || !password.value) {
+    errorMessage.value = DIM3D_ADMIN_API ? '请输入账号和密码' : '请输入有效手机号和密码'
     return
   }
   submitting.value = true
@@ -49,8 +50,8 @@ async function submit(): Promise<void> {
         <el-radio-button value="operation">运营端</el-radio-button>
         <el-radio-button value="tenant">租户端</el-radio-button>
       </el-radio-group>
-      <label for="standalone-phone">手机号</label>
-      <el-input id="standalone-phone" v-model="phonenumber" autocomplete="username" inputmode="tel" maxlength="11" placeholder="请输入手机号" :disabled="submitting" />
+      <label for="standalone-phone">{{ DIM3D_ADMIN_API ? '账号' : '手机号' }}</label>
+      <el-input id="standalone-phone" v-model="phonenumber" autocomplete="username" :inputmode="DIM3D_ADMIN_API ? 'text' : 'tel'" :maxlength="DIM3D_ADMIN_API ? 30 : 11" :placeholder="DIM3D_ADMIN_API ? '请输入账号' : '请输入手机号'" :disabled="submitting" />
       <label for="standalone-password">密码</label>
       <el-input id="standalone-password" v-model="password" type="password" autocomplete="current-password" show-password placeholder="请输入密码" :disabled="submitting" />
       <p v-if="errorMessage || message" class="standalone-login__error" role="alert">{{ errorMessage || message }}</p>

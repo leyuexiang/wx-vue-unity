@@ -150,6 +150,7 @@ const isValidFirstPersonConfig = (value: unknown): value is FirstPersonConfig =>
  * 只按“资产形态”分流，不按 Cesium/Three 运行时实现拆成两套资源结构。
  */
 const SUPPORTED_ASSET_KINDS = new Set<AssetKind>([
+  'unity-model',
   'glb',
   'gltf',
   'image',

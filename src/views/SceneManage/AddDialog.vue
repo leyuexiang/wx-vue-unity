@@ -201,7 +201,10 @@ const rules = reactive<FormRules<RuleForm>>({
     { required: true, message: '请输入名称', trigger: 'blur' },
     { min: 1, max: 50, message: '名称长度在 1 到 50 个字符之间', trigger: 'blur' },
   ],
-  category: [{ required: true, message: '请选择场景分类', trigger: 'change' }],
+  // 后端允许未分类；尚未配置分类字典时不能让空下拉框阻止新增场景。
+  category: [{ validator: (_rule, value, callback) => {
+    callback(props.sceneCategoryOptions.length > 0 && !value ? new Error('请选择场景分类') : undefined)
+  }, trigger: 'change' }],
   sceneType: [{ required: true, message: '请选择场景类型', trigger: 'change' }],
 })
 

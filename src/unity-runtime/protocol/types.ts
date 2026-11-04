@@ -32,6 +32,13 @@ export interface UnityTransformDto {
 export interface UnitySessionInitializePayload {
   client: typeof UNITY_EDITOR_CLIENT
   supportedProtocolVersions: readonly [typeof UNITY_EDITOR_PROTOCOL_VERSION]
+  /** 资源服务真实鉴权上下文，令 Unity 按 resourceId 查询当前发布并下载。 */
+  resourceAuth?: {
+    apiBaseUrl: string
+    tenantId: string
+    accessToken: string
+    downloadOrigins: readonly string[]
+  }
 }
 
 export interface UnitySessionInitializeResponse {

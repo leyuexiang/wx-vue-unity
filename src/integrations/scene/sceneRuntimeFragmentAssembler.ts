@@ -325,6 +325,7 @@ const toTransform = (value: unknown, sceneType: SceneType): SceneObject['transfo
 }
 
 const SUPPORTED_ASSET_KINDS = new Set<AssetRef['kind']>([
+  'unity-model',
   'glb',
   'gltf',
   'image',
@@ -347,11 +348,15 @@ const toAssetRef = (
     getString(record.resourceKey) ?? getString(record.assetId) ?? getString(record.id)
   const assetId = getString(record.assetId) ?? resourceKey
   if (!resourceKey || !assetId) return undefined
+  // Unity模型不读取历史文件地址；用稳定编号生成会话内定位符，由Unity解析当前修订。
+  const unityLocator = record.kind === 'unity-model' && /^[1-9]\d{0,18}$/.test(assetId)
+    ? `unity-resource://${assetId}` : undefined
   /**
    * 当前会话重新解析出的地址优先级最高；保存包中的地址只用于兼容尚未迁移的历史快照。
    * resourceKey 与 assetId 允许不同，因此两个稳定编号都参与命中，不能让历史过期地址覆盖新结果。
    */
   const url =
+    unityLocator ??
     getString(resolvedAssetUrls[resourceKey]) ??
     getString(resolvedAssetUrls[assetId]) ??
     getString(record.url) ??

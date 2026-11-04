@@ -9,9 +9,11 @@ const normalizeServerUrl = (value: unknown) =>
  * 未配置时降级为同源相对地址，避免在源码中固化某一台服务器并方便网关反向代理部署。
  */
 export const DIM3D_SERVER_URL = normalizeServerUrl(import.meta.env.VITE_DIM3D_SERVER_URL)
+/** 本项目后端按租户请求头鉴权，参考服务仍保留原平台路径协议。 */
+export const DIM3D_ADMIN_API = import.meta.env.VITE_DIM3D_API_MODE === 'admin'
 
 /** 模型、图标、字典、上传、对象存储和资源详情共用的 `/api` 根路径。 */
-export const DIM3D_API_PREFIX = `${DIM3D_SERVER_URL}/api`
+export const DIM3D_API_PREFIX = `${DIM3D_SERVER_URL}/${DIM3D_ADMIN_API ? 'admin-api' : 'api'}`
 
 /**
  * 三维接口的基础前缀。

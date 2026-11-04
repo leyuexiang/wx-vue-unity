@@ -334,6 +334,8 @@ function parseAuthEnvelope(value: unknown, maxAgeMs: number): AuthEnvelope | nul
   const age = now - envelope.createdAt
   if (age < 0 || age > maxAgeMs) return null
   const context = envelope.context
+  // 老宿主可以不提供租户，已提供的身份归属必须在页签交接时保持有效。
+  if (context?.tenantId !== undefined && (typeof context.tenantId !== 'string' || !/^[1-9]\d{0,18}$/.test(context.tenantId))) return null
   if (
     !context ||
     typeof context.accessToken !== 'string' ||

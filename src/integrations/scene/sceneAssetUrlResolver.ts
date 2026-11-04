@@ -9,7 +9,7 @@ const ASSET_RESOLVE_CONCURRENCY = 8
 
 /**
  * 当前已确认真实读取契约的资源类型。
- * 其它 GIS、效果或体数据资源必须由各自运行时处理，不能误送模型或对象存储接口。
+ * Unity托管模型按编号由Unity鉴权读取，不查询旧文件地址；其它GIS、效果或体数据也由各自运行时处理。
  */
 const RESOLVABLE_ASSET_KINDS = new Set(['glb', 'gltf', 'image'])
 

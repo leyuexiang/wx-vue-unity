@@ -19,6 +19,8 @@ export type IframeAuthMessageType =
  * 刷新后重新握手；独立场景页签由 tabAuthHandoff 管理会话副本，并保留实际过期时间。
  */
 export interface AuthContext {
+  /** 本项目后端登录时确认的租户，随令牌一起传给业务与资源API。 */
+  readonly tenantId?: string
   readonly accessToken: string
   readonly clientId: string
   readonly permissions: readonly string[]

@@ -32,6 +32,8 @@ export class MemoryAuthContext implements AuthContextStore {
   }
 
   set(context: AuthContext): Readonly<AuthContext> {
+    // 租户随令牌跨页签传递，拒绝损坏身份，避免向后端提交隐式或不规范租户。
+    if (context.tenantId !== undefined && !/^[1-9]\d{0,18}$/.test(context.tenantId)) throw new Error('登录租户编号无效')
     // 复制数组并冻结快照，防止调用方通过原始数组修改权限或角色，影响后续请求判断。
     const snapshot: AuthContext = {
       accessToken: context.accessToken,
@@ -39,6 +41,7 @@ export class MemoryAuthContext implements AuthContextStore {
       permissions: Object.freeze([...context.permissions]),
       roles: Object.freeze([...context.roles]),
       platformType: context.platformType,
+      ...(context.tenantId === undefined ? {} : { tenantId: context.tenantId }),
       ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }),
       ...(context.traceId === undefined ? {} : { traceId: context.traceId }),
     }

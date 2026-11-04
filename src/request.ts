@@ -347,6 +347,9 @@ request.interceptors.request.use((url, options) => {
       ...(runtimeAuthContext && !configuredClientId
         ? { ClientId: runtimeAuthContext.clientId }
         : {}),
+      ...(runtimeAuthContext?.tenantId && shouldUseRuntimeAuth &&
+        !(preserveConfiguredHeaders && hasHeader(options.headers, 'tenant-id'))
+        ? { 'tenant-id': runtimeAuthContext.tenantId } : {}),
     }
   }
 

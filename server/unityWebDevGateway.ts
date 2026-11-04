@@ -10,14 +10,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 const host = '127.0.0.1'
 const port = Number(process.env.UNITY_WEB_DEV_PORT || 5191)
 const pageOrigin = process.env.UNITY_WEB_DEV_PAGE_ORIGIN || 'http://localhost:5180'
-const backend = new URL(process.env.UNITY_WEB_DEV_BACKEND || 'http://192.168.10.200:30080')
+const backend = new URL(process.env.UNITY_WEB_DEV_BACKEND || 'http://192.168.10.148:12522')
+// 默认与148本项目管理API一致，旧参考部署可显式配置reference。
+const adminApi = process.env.UNITY_WEB_DEV_API_MODE !== 'reference'
 const playerRoot = path.resolve(required('UNITY_WEB_DEV_PLAYER_DIR'))
 const artRoot = path.resolve(required('UNITY_WEB_DEV_ART_DIR'))
 const descriptor = readFileSync(required('UNITY_WEB_DEV_DESCRIPTOR_FILE'))
 const descriptorSha256 = `sha256:${createHash('sha256').update(descriptor).digest('hex')}`
 const tls = { key: readFileSync(required('UNITY_WEB_DEV_TLS_KEY')), cert: readFileSync(required('UNITY_WEB_DEV_TLS_CERT')) }
 const origin = `https://localhost:${port}`
-const sessions = new Map<string, { token: string; clientId: string; expiresAt: number }>()
+const sessions = new Map<string, { token: string; clientId: string; tenantId?: string; expiresAt: number }>()
 
 function required(name: string): string {
   const value = process.env[name]
@@ -35,7 +37,7 @@ function cors(req: IncomingMessage, res: ServerResponse): boolean {
   if (requestOrigin && requestOrigin !== pageOrigin) { reply(res, 403, { error: 'Origin denied' }); return false }
   res.setHeader('Access-Control-Allow-Origin', pageOrigin)
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, ClientId, X-Unity-Platform, Content-Type')
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, ClientId, X-Unity-Platform, Content-Type, tenant-id')
   res.setHeader('Vary', 'Origin')
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return false }
   return true
@@ -65,13 +67,14 @@ function serveFile(root: string, relative: string, res: ServerResponse): void {
   createReadStream(file).pipe(res)
 }
 
-async function profile(token: string, clientId: string, platform: string): Promise<string> {
-  const endpoint = platform === 'tenant' ? '/api/tenant/profile/getInfo' : '/api/system/user/getInfo'
+async function profile(token: string, clientId: string, platform: string, tenantId?: string): Promise<string> {
+  const endpoint = adminApi ? '/admin-api/system/auth/get-permission-info' :
+    platform === 'tenant' ? '/api/tenant/profile/getInfo' : '/api/system/user/getInfo'
   const response = await fetch(new URL(endpoint, backend), {
-    headers: { Authorization: token, ClientId: clientId }, signal: AbortSignal.timeout(10000),
+    headers: { Authorization: token, ClientId: clientId, ...(tenantId ? { 'tenant-id': tenantId } : {}) }, signal: AbortSignal.timeout(10000),
   })
-  const body = await response.json() as { code?: number; data?: { user?: { userId?: string | number } } }
-  const userId = body?.data?.user?.userId
+  const body = await response.json() as { code?: number; data?: { user?: { userId?: string | number; id?: string | number } } }
+  const userId = adminApi ? body?.data?.user?.id : body?.data?.user?.userId
   if (!response.ok || body.code !== 200 || (typeof userId !== 'string' && typeof userId !== 'number') || !String(userId).trim()) {
     throw new Error('Profile rejected')
   }
@@ -82,10 +85,14 @@ async function bootstrap(req: IncomingMessage, res: ServerResponse): Promise<voi
   const token = req.headers.authorization
   const clientId = req.headers.clientid
   const platform = req.headers['x-unity-platform']
+  const tenantId = req.headers['tenant-id']
   if (typeof token !== 'string' || !/^Bearer\s+\S+$/i.test(token) || typeof clientId !== 'string' || !clientId.trim() ||
       (platform !== 'operation' && platform !== 'tenant')) { reply(res, 401, { error: 'Login required' }); return }
+  if (adminApi && (typeof tenantId !== 'string' || !/^[1-9]\d{0,18}$/.test(tenantId))) {
+    reply(res, 401, { error: 'Tenant required' }); return
+  }
   let userId: string
-  try { userId = await profile(token, clientId, platform) }
+  try { userId = await profile(token, clientId, platform, typeof tenantId === 'string' ? tenantId : undefined) }
   catch { reply(res, 401, { error: 'Login expired or profile unavailable' }); return }
   const files = [
     ['loaderUrl', ['.loader.js']], ['dataUrl', ['.data.br', '.data']],
@@ -101,7 +108,7 @@ async function bootstrap(req: IncomingMessage, res: ServerResponse): Promise<voi
   build.streamingAssetsUrl = `${origin}/unity-web/StreamingAssets`
   for (const [key, value] of sessions) if (value.expiresAt <= Date.now()) sessions.delete(key)
   const session = randomUUID()
-  sessions.set(session, { token, clientId, expiresAt: Date.now() + 60 * 60 * 1000 })
+  sessions.set(session, { token, clientId, ...(typeof tenantId === 'string' ? { tenantId } : {}), expiresAt: Date.now() + 60 * 60 * 1000 })
   reply(res, 200, {
     build: { ...build, threadsRequired: true },
     art: { projectId: process.env.UNITY_WEB_DEV_PROJECT_ID || '1', descriptorBase64: descriptor.toString('base64'),
@@ -115,11 +122,12 @@ function proxyBusiness(req: IncomingMessage, res: ServerResponse, pathname: stri
   const match = /^\/session\/([0-9a-f-]{36})(\/.*)$/.exec(pathname)
   const session = match && sessions.get(match[1])
   if (!match || !session || session.expiresAt <= Date.now()) { reply(res, 401, { error: 'Session expired' }); return }
-  const target = new URL(`/api${match[2]}`, backend)
+  const target = new URL(`/${adminApi ? 'admin-api' : 'api'}${match[2]}`, backend)
   target.search = search
   const upstream = httpRequest(target, {
     method: req.method, headers: {
       ...req.headers, host: target.host, authorization: session.token, clientid: session.clientId,
+      ...(session.tenantId ? { 'tenant-id': session.tenantId } : {}),
     }, timeout: 30000,
   }, response => {
     res.writeHead(response.statusCode || 502, response.headers)

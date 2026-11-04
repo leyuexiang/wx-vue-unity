@@ -59,6 +59,9 @@ export function resolvePlatformApiUrl(url: string, platformType: PlatformType): 
   }
   if (isAbsolute && !allowedAbsoluteOrigins.has(parsed.origin)) return url
 
+  // 本项目管理API使用统一路径，租户隔离由服务端校验tenant-id与令牌归属。
+  if (import.meta.env.VITE_DIM3D_API_MODE === 'admin' && parsed.pathname.startsWith('/admin-api/')) return url
+
   let pathname = parsed.pathname
   for (const root of getFirstPartyRoots()) {
     pathname = insertPlatformSegment(pathname, root, platformType)

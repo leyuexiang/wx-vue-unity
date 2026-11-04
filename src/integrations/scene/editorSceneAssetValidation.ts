@@ -18,7 +18,7 @@ export interface EditorSceneAssetValidationResult {
   message: string
 }
 
-const MODEL_ASSET_KINDS = new Set<AssetKind>(['glb', 'gltf'])
+const MODEL_ASSET_KINDS = new Set<AssetKind>(['glb', 'gltf', 'unity-model'])
 const IMAGE_ASSET_KINDS = new Set<AssetKind>(['image'])
 // 按钮允许没有背景图，但已选择的图片沿用市场资源完整性校验。
 const IMAGE_WIDGET_KEY_NAMES = new Set(['VImage', 'VImageCarousel', 'VQuiz', 'VButton'])
@@ -73,6 +73,14 @@ const validateObjectAsset = (
 ) => {
   const targetName = getObjectTargetName(object)
   const asset = object.asset
+
+  // 托管模型只有稳定编号和内部定位符；实际可读性由Unity资源服务鉴权加载确认。
+  if (object.type === 'model' && asset?.kind === 'unity-model') {
+    const resourceId = String(asset.metadata?.assetId ?? asset.id)
+    if (/^[1-9]\d{0,18}$/.test(resourceId) && asset.url === `unity-resource://${resourceId}`) return
+    pushIssue(issues, { scope: 'object', targetId: object.id, targetName, resourceKind })
+    return
+  }
 
   if (!asset) {
     pushIssue(issues, {

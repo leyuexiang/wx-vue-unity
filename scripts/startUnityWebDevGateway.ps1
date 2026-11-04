@@ -21,8 +21,9 @@ $env:UNITY_WEB_DEV_ART_DIR = $releaseRoot
 $env:UNITY_WEB_DEV_DESCRIPTOR_FILE = $descriptor
 $env:UNITY_WEB_DEV_TLS_KEY = $key
 $env:UNITY_WEB_DEV_TLS_CERT = $cert
-$env:UNITY_WEB_DEV_PAGE_ORIGIN = 'http://localhost:5180'
-$env:UNITY_WEB_DEV_BACKEND = 'http://192.168.10.200:30080'
+# 本地页面与148身份服务保持同一套联调配置，避免登录身份被送往旧服务。
+$env:UNITY_WEB_DEV_PAGE_ORIGIN = 'http://127.0.0.1:18065'
+$env:UNITY_WEB_DEV_BACKEND = 'http://192.168.10.148:12522'
 $env:UNITY_WEB_DEV_PROJECT_ID = '1'
 $env:UNITY_WEB_DEV_PROJECT_NAME = '9tyf'
 

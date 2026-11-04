@@ -12,6 +12,8 @@ import {
   type UnitySceneSnapshotDto,
 } from '@/unity-runtime/protocol/types'
 import type { UnityCloudRuntime, UnityRuntimeEventMap } from './UnityCloudRuntime'
+import { authContext } from '@/auth/authContext'
+import { normalizeAccessToken } from '@/auth/accessToken'
 
 const randomId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
@@ -35,6 +37,7 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
         {
           client: UNITY_EDITOR_CLIENT,
           supportedProtocolVersions: [UNITY_EDITOR_PROTOCOL_VERSION],
+          ...this.resourceAuth(),
         },
       )
       if (!response.success || !response.payload) throw new Error(response.error?.message ?? 'Unity 能力协商失败')
@@ -54,6 +57,32 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
       }
       throw error
     }
+  }
+
+  /** 将当前登录态传给 Unity，避免资源请求退回匿名或旧的固定地址。 */
+  private resourceAuth(): Pick<UnitySessionInitializePayload, 'resourceAuth'> {
+    const context = authContext.get()
+    const apiOrigin = String(import.meta.env.VITE_UNITY_RESOURCE_API_ORIGIN || '').trim()
+    const downloads = String(import.meta.env.VITE_UNITY_RESOURCE_DOWNLOAD_ORIGINS || '').trim()
+    if (!apiOrigin && !downloads) return {}
+    if (!context || !authContext.hasValidContext()) throw new Error('资源服务需要有效登录身份')
+    const tenantId = context.tenantId
+    const accessToken = normalizeAccessToken(context.accessToken)
+    if (!tenantId || !/^[1-9]\d{0,18}$/.test(tenantId) || !accessToken || /\s/.test(accessToken)) throw new Error('资源认证缺少有效租户或令牌')
+    // 资源客户端只接受HTTPS根来源，业务/api路径和存储/amm路径不能作为资源服务地址。
+    const origin = (value: string) => {
+      const url = new URL(value)
+      if (url.protocol !== 'https:' || url.pathname !== '/' || url.username || url.password || url.search || url.hash) throw new Error('资源服务必须配置HTTPS根来源')
+      return url.origin
+    }
+    const downloadOrigins = [...new Set(downloads.split(',').map(value => value.trim()).filter(Boolean).map(origin))]
+    if (!downloadOrigins.length) throw new Error('缺少资源下载来源')
+    return { resourceAuth: {
+      apiBaseUrl: origin(apiOrigin),
+      tenantId,
+      accessToken,
+      downloadOrigins,
+    } }
   }
 
   async disconnect(): Promise<void> {

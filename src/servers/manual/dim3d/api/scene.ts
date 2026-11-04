@@ -3,7 +3,7 @@ import { authContext } from '@/auth/authContext'
 import { resolvePlatformApiUrl } from '@/auth/platformApiPathResolver'
 import { isEmbeddedMode } from '@/auth/runtime'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_OPERATION_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_OPERATION_API_PREFIX } from './constants'
 import type { Dim3dTemplateType } from './template'
 
 /** 新场景分页查询参数，字段与 /dim3d/scene/page 契约保持一致。 */
@@ -335,15 +335,28 @@ export const getDim3dSceneAuthorizedTenants = (id: string) =>
  * 用于区分同一用户同时打开的多个编辑页签；场景编号仍按字符串传递，避免 int64 精度丢失。
  */
 export const lockDim3dScene = (id: string, clientKey: string) =>
-  sceneRequest(`/dim3d/scene/lock/${encodeURIComponent(id)}`, 'POST', {
+  (sceneRequest(`/dim3d/scene/lock/${encodeURIComponent(id)}`, 'POST', {
     params: { clientKey },
-  }) as Promise<Dim3dSceneLockResponse>
+  }) as Promise<Dim3dSceneLockResponse>).then((response) => {
+    // 148返回locked=true表示本次持锁成功；页面历史契约的false表示未被他人占用。
+    // 仅在成功响应同时提供真实锁令牌时转换，拒绝和未知响应不能冒充持锁成功。
+    if (DIM3D_ADMIN_API && response.code === 200 && response.data?.locked === true && response.data.lockToken) {
+      return { ...response, data: { ...response.data, locked: false } }
+    }
+    return response
+  })
 
 /** 编辑期间续期场景锁，服务端按接口契约将锁 TTL 延长 20 分钟。 */
 export const heartbeatDim3dScene = (id: string, body: Dim3dSceneHeartbeatForm) =>
-  sceneRequest(`/dim3d/scene/heartbeat/${encodeURIComponent(id)}`, 'POST', {
+  (sceneRequest(`/dim3d/scene/heartbeat/${encodeURIComponent(id)}`, 'POST', {
     data: body,
-  }) as Promise<Dim3dSceneLockResponse>
+  }) as Promise<Dim3dSceneLockResponse>).then((response) => {
+    // 管理接口的成功续约由true和到期时间共同确认，适配为页面的“未被他人占用”。
+    if (DIM3D_ADMIN_API && response.code === 200 && response.data?.locked === true && response.data.expireTime) {
+      return { ...response, data: { ...response.data, locked: false } }
+    }
+    return response
+  })
 
 /** 离开编辑器时释放当前页签持有的场景锁；clientKey 必须与加锁时保持一致。 */
 export const unlockDim3dScene = (id: string, clientKey: string) =>
@@ -373,6 +386,8 @@ export const unlockDim3dSceneOnUnload = (id: string, clientKey: string) => {
     ? {
         Authorization: `Bearer ${context.accessToken}`,
         ClientId: context.clientId,
+        // 卸载请求绕过通用拦截器，仍须携带本次认证的租户身份才能释放148的编辑租约。
+        ...(context.tenantId ? { 'tenant-id': context.tenantId } : {}),
       }
     : getDim3dHeaders()
   try {

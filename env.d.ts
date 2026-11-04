@@ -2,6 +2,13 @@
 /// <reference types="unplugin-icons/types/vue" />
 
 interface ImportMetaEnv {
+  readonly VITE_DEV_SERVER_PORT?: string
+  /** 本项目后端使用admin，参考服务留空。 */
+  readonly VITE_DIM3D_API_MODE?: string
+  readonly VITE_AUTH_OPERATION_TENANT_ID?: string
+  readonly VITE_AUTH_TENANT_ID?: string
+  readonly VITE_UNITY_RESOURCE_API_ORIGIN?: string
+  readonly VITE_UNITY_RESOURCE_DOWNLOAD_ORIGINS?: string
   /** 旧运营应用编号兼容项；新部署分别配置运营端和租户端，服务器根仍统一。 */
   readonly VITE_AUTH_CLIENT_ID?: string
   /** 独立运营登录的公开应用编号。 */

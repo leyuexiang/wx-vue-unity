@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_API_PREFIX } from './constants'
 import type { Dim3dTemplateType } from './template'
 
 /**
@@ -21,6 +21,20 @@ export interface Dim3dDictionaryResponse {
   code?: number
   msg?: string
   data?: Dim3dModelCategoryItem[] | null
+}
+
+/** 148管理接口使用精简字典列表；只合并并发读取，避免跨登录身份长期缓存。 */
+let adminDictionaryRequest: Promise<Dim3dDictionaryResponse> | undefined
+const getDictionary = (type: string, options?: Record<string, unknown>) => {
+  if (!adminDictionaryRequest) {
+    adminDictionaryRequest = request<{ code?: number; msg?: string; data?: Array<{ dictType?: string; label?: string; value?: string }> }>(
+      `${DIM3D_API_PREFIX}/system/dict-data/simple-list`,
+      { method: 'GET', headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true, ...options },
+    ).then((response) => ({ ...response, data: response.data?.map((item) => ({
+      dictType: item.dictType, dictLabel: item.label, dictValue: item.value,
+    })) })).finally(() => { adminDictionaryRequest = undefined })
+  }
+  return adminDictionaryRequest.then((response) => ({ ...response, data: response.data?.filter((item) => item.dictType === type) }))
 }
 
 /**
@@ -90,6 +104,7 @@ export function createDim3dDictionaryOptions(items: Dim3dDictionaryItem[] = []) 
  * 字典的 dictValue 作为模型接口的分类编码，dictLabel 作为页面展示名称，禁止回退到临时字典接口。
  */
 export function getDim3dModelCategoryDictionary(options?: Record<string, unknown>) {
+  if (DIM3D_ADMIN_API) return getDictionary('dim3d_model_category', options)
   return request<Dim3dDictionaryResponse>(
     `${DIM3D_API_PREFIX}/system/dict/data/type/dim3d_model_category`,
     {
@@ -152,6 +167,7 @@ export function getDim3dTemplateCategoryDictionary(
 
 /** 读取场景分类字典；dictValue 用于场景分页和新增/编辑提交，dictLabel 用于页面展示。 */
 export function getDim3dSceneCategoryDictionary(options?: Record<string, unknown>) {
+  if (DIM3D_ADMIN_API) return getDictionary('dim3d_scene_category', options)
   return request<Dim3dDictionaryResponse>(
     `${DIM3D_API_PREFIX}/system/dict/data/type/dim3d_scene_category`,
     {
@@ -167,6 +183,7 @@ export function getDim3dSceneCategoryDictionary(options?: Record<string, unknown
 
 /** 读取场景发布访问模式字典；发布接口直接提交字典 dictValue，不再维护本地枚举映射。 */
 export function getDim3dAccessModeDictionary(options?: Record<string, unknown>) {
+  if (DIM3D_ADMIN_API) return getDictionary('dim3d_access_mode', options)
   return request<Dim3dDictionaryResponse>(
     `${DIM3D_API_PREFIX}/system/dict/data/type/dim3d_access_mode`,
     {

@@ -74,9 +74,11 @@ export class WebUnityTransport implements UnityTransport {
     const token = authContext.getAccessToken()
     const clientId = authContext.getClientId()
     const platform = authContext.getPlatformType()
+    const tenantId = authContext.get()?.tenantId
     const response = await fetch(this.bootstrapUrl, {
       credentials: 'same-origin', cache: 'no-store',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(clientId ? { ClientId: clientId } : {}),
+        ...(tenantId ? { 'tenant-id': tenantId } : {}),
         ...(platform ? { 'X-Unity-Platform': platform } : {}) },
     })
     if (!response.ok) throw new Error(`Unity Web 部署配置读取失败：${response.status}`)

@@ -1,6 +1,7 @@
 import { authContext } from './authContext'
 import { normalizeAccessToken } from './accessToken'
 import { DIM3D_SERVER_URL as server } from '@/servers/manual/dim3d/api/constants'
+import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
 import type { PlatformType } from './authTypes'
 
 /** 第二版会话明确绑定登录平台；不恢复缺失平台的旧版本，避免把租户身份默认为运营端。 */
@@ -16,6 +17,7 @@ const platformEndpoints = {
 interface ApiResult<T> { code: number; msg: string; data: T }
 /** 登录令牌使用参考运营端字段；有效期统一为秒，转换为毫秒仅在会话层完成。 */
 export interface StandaloneTokens {
+  tenantId?: string
   access_token: string
   client_id: string
   /** 参考服务可能返回 null；空值表示未声明期限，不能当作零秒或格式错误。 */
@@ -44,6 +46,8 @@ export interface StandaloneProfile {
 }
 interface Session {
   server: string
+  /** 同一服务器切换认证协议时，旧令牌与响应格式不能跨协议恢复。 */
+  apiMode?: 'admin' | 'reference'
   /** 来自本次成功登录所用的端点；恢复、续期及页签交接均保留同一平台。 */
   platformType: PlatformType
   tokens: StandaloneTokens
@@ -57,11 +61,11 @@ let refreshTask: { version: number; promise: Promise<boolean> } | null = null
 let sessionVersion = 0
 
 /** 认证端点固定公共路径，不经过平台插段、通用令牌注入和业务 401 重试。 */
-async function call<T>(path: string, body?: unknown, tokens?: StandaloneTokens): Promise<T> {
+async function call<T>(path: string, body?: unknown, tokens?: StandaloneTokens, tenantId?: string): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 30_000)
   try {
-    const response = await fetch(`${server}/api${path}`, {
+    const response = await fetch(`${server}/${DIM3D_ADMIN_API ? 'admin-api' : 'api'}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
       signal: controller.signal,
       cache: 'no-store',
@@ -69,6 +73,7 @@ async function call<T>(path: string, body?: unknown, tokens?: StandaloneTokens):
       headers: {
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...(tokens ? { Authorization: `Bearer ${normalizeAccessToken(tokens.access_token)}`, ClientId: tokens.client_id } : {}),
+        ...((tokens?.tenantId || tenantId) ? { 'tenant-id': tokens?.tenantId || tenantId! } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
@@ -101,6 +106,15 @@ function validateProfile(profile: StandaloneProfile): void {
 
 /** 在网络边界适配真实租户名称字段；不猜测用户编号、不补权限，登录和页面恢复共用此入口。 */
 async function loadProfile(tokens: StandaloneTokens, platformType: PlatformType): Promise<StandaloneProfile> {
+  if (DIM3D_ADMIN_API) {
+    const response = await call<{ user: { id: string | number; nickname: string; avatar?: string; deptId?: string | number }; permissions: string[]; roles: string[] }>(
+      '/system/auth/get-permission-info', undefined, tokens)
+    const profile: StandaloneProfile = { user: { userId: response.user?.id, nickName: response.user?.nickname,
+      ...(response.user?.avatar == null ? {} : { avatar: response.user.avatar }),
+      ...(response.user?.deptId == null ? {} : { deptId: response.user.deptId }) }, permissions: response.permissions, roles: response.roles }
+    validateProfile(profile)
+    return profile
+  }
   const response = await call<StandaloneProfileResponse>(platformEndpoints[platformType].profile, undefined, tokens)
   const user = response?.user
   if (!user || typeof user !== 'object') throw new Error('用户权限响应格式错误')
@@ -129,6 +143,7 @@ function applySession(session: Session): void {
     accessToken: normalizeAccessToken(session.tokens.access_token), clientId: session.tokens.client_id,
     permissions: session.profile.permissions, roles: session.profile.roles, platformType: session.platformType,
     expiresAt: session.expiresAt,
+    ...(session.tokens.tenantId ? { tenantId: session.tokens.tenantId } : {}),
   })
   try { sessionStorage.setItem(sessionKey, JSON.stringify(session)) } catch { /* 存储受限时仅保持内存会话。 */ }
 }
@@ -139,17 +154,29 @@ export async function loginStandalone(phonenumber: string, password: string, pla
   const configuredClientId = platformType === 'tenant' ? import.meta.env.VITE_AUTH_TENANT_CLIENT_ID :
     import.meta.env.VITE_AUTH_OPERATION_CLIENT_ID || import.meta.env.VITE_AUTH_CLIENT_ID
   const clientId = String(configuredClientId || '').trim()
-  if (!clientId) throw new Error(`未配置${platformType === 'tenant' ? '租户端' : '运营端'}登录应用编号`)
+  if (!DIM3D_ADMIN_API && !clientId) throw new Error(`未配置${platformType === 'tenant' ? '租户端' : '运营端'}登录应用编号`)
   const version = ++sessionVersion
   const issuedAt = Date.now()
   const endpoints = platformEndpoints[platformType]
-  const tokens = await call<StandaloneTokens>(endpoints.login, { clientId, accountType: 2, phonenumber: phonenumber.trim(), password, grantType: 'password' })
+  let tokens: StandaloneTokens
+  if (DIM3D_ADMIN_API) {
+    const tenantId = String(platformType === 'tenant' ? import.meta.env.VITE_AUTH_TENANT_ID || '' : import.meta.env.VITE_AUTH_OPERATION_TENANT_ID || '').trim()
+    if (!/^[1-9]\d{0,18}$/.test(tenantId)) throw new Error('未配置有效登录租户编号')
+    // 账号字段遵循本项目真实登录合同，租户由显式部署配置选择，服务端继续校验账号归属。
+    const result = await call<{ accessToken: string; expiresTime: string | number }>(
+      '/system/auth/login', { username: phonenumber.trim(), password }, undefined, tenantId)
+    const expiresAt = typeof result.expiresTime === 'number' ? result.expiresTime : Date.parse(result.expiresTime)
+    if (!Number.isFinite(expiresAt) || expiresAt <= issuedAt) throw new Error('登录有效期格式错误')
+    tokens = { access_token: result.accessToken, client_id: 'admin-api', tenantId, expire_in: (expiresAt - issuedAt) / 1000 }
+  } else {
+    tokens = await call<StandaloneTokens>(endpoints.login, { clientId, accountType: 2, phonenumber: phonenumber.trim(), password, grantType: 'password' })
+  }
   validateTokens(tokens)
   // 先取得真实权限再发布会话，避免用户信息失败后页面短暂携带未验证的管理员身份。
   const profile = await loadProfile(tokens, platformType)
   if (version !== sessionVersion) throw new Error('登录操作已取消')
   const now = issuedAt
-  applySession({ server, platformType, tokens, profile,
+  applySession({ server, apiMode: DIM3D_ADMIN_API ? 'admin' : 'reference', platformType, tokens, profile,
     // 显式使用空值判断，防止 null 经数值运算变成零而把刚登录的会话立即判为过期。
     expiresAt: tokens.expire_in == null ? undefined : now + tokens.expire_in * 1000,
     refreshExpiresAt: tokens.refresh_expire_in == null ? undefined : now + tokens.refresh_expire_in * 1000 })
@@ -165,11 +192,16 @@ export async function restoreStandalone(): Promise<StandaloneProfile | null> {
     const stored = sessionStorage.getItem(sessionKey)
     if (!stored) return null
     session = JSON.parse(stored) as Session
-    if (session.server !== server || (session.platformType !== 'operation' && session.platformType !== 'tenant')) {
+    if (session.server !== server || (session.apiMode ?? 'reference') !== (DIM3D_ADMIN_API ? 'admin' : 'reference') ||
+      (session.platformType !== 'operation' && session.platformType !== 'tenant')) {
       clearStandalone()
       return null
     }
     validateTokens(session.tokens)
+    if (DIM3D_ADMIN_API && session.tokens.tenantId !== String(session.platformType === 'tenant' ? import.meta.env.VITE_AUTH_TENANT_ID || '' : import.meta.env.VITE_AUTH_OPERATION_TENANT_ID || '').trim()) {
+      clearStandalone()
+      return null
+    }
     validateProfile(session.profile)
     for (const value of [session.expiresAt, session.refreshExpiresAt]) {
       if (value !== undefined && !Number.isFinite(value)) throw new Error('会话有效期格式错误')
@@ -202,7 +234,7 @@ export function refreshStandalone(): Promise<boolean> {
   const version = sessionVersion
   if (refreshTask?.version === version) return refreshTask.promise
   const session = activeSession
-  if (import.meta.env.VITE_AUTH_REFRESH_ENABLED !== 'true' || !session?.tokens.refresh_token ||
+  if (DIM3D_ADMIN_API || import.meta.env.VITE_AUTH_REFRESH_ENABLED !== 'true' || !session?.tokens.refresh_token ||
     (session.refreshExpiresAt !== undefined && session.refreshExpiresAt <= Date.now())) return Promise.resolve(false)
   const task = (async () => {
     try {
@@ -242,5 +274,5 @@ export function clearStandalone(): void {
 export async function logoutStandalone(): Promise<void> {
   const tokens = activeSession?.tokens
   clearStandalone()
-  if (tokens) await call<null>('/auth/logout', {}, tokens)
+  if (tokens) await call<null>(DIM3D_ADMIN_API ? '/system/auth/logout' : '/auth/logout', {}, tokens)
 }

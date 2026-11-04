@@ -49,7 +49,8 @@ export default defineConfig(({ mode, command }) => {
   optimizeDeps: { include: ['element-plus', 'element-plus/es', 'lodash-es', ...componentStyles] },
   server: {
     host: '0.0.0.0',
-    port: 5180,
+    // 本机联调使用资源服务已允许的页面来源，端口可由部署环境显式指定。
+    port: Number(env.VITE_DEV_SERVER_PORT || 5180),
     strictPort: true,
     headers: {
       'Cache-Control': 'no-store',
