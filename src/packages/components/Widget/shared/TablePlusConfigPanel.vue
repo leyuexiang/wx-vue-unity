@@ -120,7 +120,7 @@
 
         <template v-if="linkConfig">
           <setting-item-box name="固定基础地址" :alone="true">
-            <ScenePropertyInput v-model="linkConfig.baseUrl" placeholder="https://view.zy.com/2d" />
+            <ScenePropertyInput v-model="linkConfig.baseUrl" placeholder="请输入页面地址或站内路径" />
           </setting-item-box>
 
           <setting-item-box name="行地址字段" :alone="true">
@@ -243,7 +243,8 @@ const paginationLinkColumn =
 
 if (paginationLinkColumn && !paginationLinkColumn.link) {
   paginationLinkColumn.link = {
-    baseUrl: 'https://view.zy.com/2d',
+    // 旧场景缺失目标时等待用户配置，已有链接继续保留原值。
+    baseUrl: '',
     params: [{ name: 'id', valueKey: 'drawingId' }],
     text: '点击查看',
     target: '_blank',

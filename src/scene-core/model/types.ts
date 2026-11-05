@@ -1,3 +1,5 @@
+import type { SceneStreamingConfig } from '@/scene-platform/core/types'
+
 export type SceneType = 'local3d' | 'gis'
 export type SceneObjectType = 'model' | 'image' | 'primitive' | 'light' | 'camera' | 'group'
 
@@ -33,6 +35,8 @@ export interface SceneObject {
   objectType: SceneObjectType
   name: string
   parentInstanceId?: string
+  /** 由领域order投影，旧协议缺失时按稳定编号排序。 */
+  siblingOrder?: number
   visible: boolean
   locked: boolean
   transform: SceneTransform
@@ -62,6 +66,8 @@ export interface SceneDefinition {
   resources: SceneResource[]
   settings: Record<string, unknown>
   geospatial?: UnityGeospatialScene
+  /** 只转交场景既有流式定义，不在Unity协议层另存一份可编辑策略。 */
+  streaming?: SceneStreamingConfig
   twoD: {
     canvas: Record<string, unknown>
     components: unknown[]

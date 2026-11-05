@@ -9,6 +9,7 @@ export type SceneVisibilityUpdateSkipReason =
   | 'missing-object-id'
   | 'missing-object'
   | 'unchanged-visible'
+  | 'locked-object'
 
 export type SceneVisibilityUpdateResult =
   | {
@@ -22,7 +23,7 @@ export type SceneVisibilityUpdateResult =
     }
 
 export interface ApplySceneObjectVisibilityOptions {
-  commandBus?: CommandBus | null
+  commandBus?: Pick<CommandBus, 'execute'> | null
   store?: SceneStore | null
   objectId?: string | null
   visible: boolean
@@ -57,6 +58,8 @@ export const applySceneObjectVisibilityToStore = ({
   if (object.visible === visible) {
     return { status: 'skipped', reason: 'unchanged-visible' }
   }
+  // 直接写存储的兼容入口也遵守同一编辑约束，不能绕过父链锁定。
+  if (store.isObjectEffectivelyLocked(objectId)) return { status: 'skipped', reason: 'locked-object' }
 
   if (commandBus) {
     commandBus.execute(createUpdateObjectVisibilityCommand(objectId, visible))

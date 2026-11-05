@@ -44,10 +44,19 @@ interface ResolvedModelResource extends FileModel {
 interface ResolvedModelFileAsset {
   id: string
   url: string
-  version: string
+  version?: string
+  managed?: true
 }
 
 const normalizeText = (value: unknown) => String(value ?? '').trim()
+
+/** 后端编号允许有符号 64 位正整数，拒绝已被 JSON 数值精度截断的关联。 */
+const resolveManagedModelAsset = (value: unknown): ResolvedModelFileAsset | null => {
+  if (typeof value !== 'string' && !(typeof value === 'number' && Number.isSafeInteger(value))) return null
+  const id = String(value)
+  if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) return null
+  return { id, url: `unity-resource://${id}`, managed: true }
+}
 
 /**
  * 系统资源和我的资源面板会分别调用分组加载函数；模块级 Promise 保证分类字典只请求一次。
@@ -71,7 +80,7 @@ const loadModelCategoryLabelMap = async () => {
 }
 
 /**
- * 一次解析模型文件编号、加载地址和版本，避免拖拽后再次查询资源服务。
+ * 受控目录直接使用关联编号，签发与格式选择交给 Unity。旧目录继续解析文件编号和地址。
  *
  * modelFileId优先读取分页结果，缺失时只补查一次模型详情。页面列表偶尔会直接返回完整地址，但仍
  * 必须先取得modelFileId；否则植被请求只能拿到模型业务编号，无法冻结实际GLB文件身份。
@@ -79,12 +88,17 @@ const loadModelCategoryLabelMap = async () => {
 const resolveModelFileAsset = async (
   model: Dim3dModelPageVo,
 ): Promise<ResolvedModelFileAsset | null> => {
+  if (model.resourceId != null) return resolveManagedModelAsset(model.resourceId)
   let modelFileId = normalizeText(model.modelFileId)
   if (!modelFileId) {
     const modelId = normalizeText(model.id)
     if (!modelId) return null
     const detail = await getDim3dModelInfo(modelId, { suppressNotFoundNotification: true })
     if (detail?.code !== 200) return null
+    // 分页尚未返回关联时，以同一条目录的详情为准；坏关联不能降级到旧文件。
+    if (detail.data?.resourceId != null) {
+      return normalizeText(detail.data.id) === modelId ? resolveManagedModelAsset(detail.data.resourceId) : null
+    }
     modelFileId = normalizeText(detail.data?.modelFileId)
   }
   if (!modelFileId) return null
@@ -131,7 +145,9 @@ const toModelItem = async (
   if (!resourceId || !modelFileAsset) return null
 
   const filePath = modelFileAsset.url
-  const fileType = getFileExtension(filePath).toLowerCase() as MODEL_ENUM
+  const extension = modelFileAsset.managed ? '' : getFileExtension(filePath).toLowerCase() as MODEL_ENUM
+  const fileType = modelFileAsset.managed ? MODEL_ENUM.UNITY_MODEL
+    : extension && extension !== MODEL_ENUM.UNITY_MODEL && Object.values(MODEL_ENUM).includes(extension) ? extension : MODEL_ENUM.GLB
   const coverId = normalizeText(model.coverImageId)
   let coverPromise = coverCache.get(coverId)
   if (!coverPromise) {
@@ -145,10 +161,10 @@ const toModelItem = async (
     modelType: DRAG_MODEL_ENUM.CustomModel,
     icon: coverUrl,
     filePath,
-    fileType: Object.values(MODEL_ENUM).includes(fileType) ? fileType : MODEL_ENUM.GLB,
+    fileType,
     resourceId,
-    // 业务记录编号继续用于卡片和分类；resourceAsset必须使用真实模型文件编号参与发布快照。
-    resourceAsset: modelFileAsset,
+    // 目录编号用于卡片和分类，依赖使用受管关联编号或旧模型文件编号。
+    resourceAsset: { id: modelFileAsset.id, url: filePath, ...(modelFileAsset.version ? { version: modelFileAsset.version } : {}) },
   }
 }
 
@@ -180,7 +196,7 @@ export async function loadDim3dModelGroups(
   resourceBelong: Dim3dResourceBelong,
 ): Promise<ModelResourceGroup[]> {
   const [response, categoryLabels] = await Promise.all([
-    pageDim3dModel({ resourceBelong, pageNum: 1, pageSize: 9999 }),
+    pageDim3dModel({ resourceBelong, status: 'ONLINE', pageNum: 1, pageSize: 9999 }),
     // 字典失败不阻断模型资源加载；没有中文映射时按已有 categoryName 或“未分类”降级。
     loadModelCategoryLabelMap().catch(() => new Map<string, string>()),
   ])

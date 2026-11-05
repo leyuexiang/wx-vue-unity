@@ -12,6 +12,7 @@ import {
   type SceneObject,
   type SceneStore,
 } from '@/scene-platform'
+import { assertOriginalObjectLayerDeletionAllowed } from './twoDPackagePreservation'
 
 export const EDITOR_DEFAULT_OBJECT_LAYER_ID = 'editor-object-layer-default'
 export const EDITOR_DEFAULT_OBJECT_LAYER_NAME = '默认图层'
@@ -35,6 +36,7 @@ export type EditorSceneLayerSkipReason =
   | 'missing-layer-id'
   | 'missing-layer'
   | 'unchanged'
+  | 'locked-object'
 
 export type EditorSceneLayerUpdateResult =
   | {
@@ -148,8 +150,7 @@ export const buildEditorSceneObjectLayerGroups = (
 /**
  * 补齐编辑器对象图层并把无归属对象挂到默认对象图层。
  *
- * 当前平台 Store 尚未开放图层命令，编辑器线不能越界修改核心接口；
- * 因此图层列表只写 SceneDefinition.layers 的可序列化字段，对象归属仍通过 upsertObject 触发 Store 事件。
+ * 旧草稿的兼容归属仍同步到运行端和结构面板，但不单独视为用户编辑。
  */
 export const ensureEditorSceneObjectLayersInStore = (
   store?: SceneStore | null,
@@ -160,16 +161,17 @@ export const ensureEditorSceneObjectLayersInStore = (
   if (!scene) return { status: 'skipped', reason: 'missing-scene' }
 
   let objectLayers = getSortedObjectLayers(scene.layers)
-  let fallbackLayer = objectLayers[0]
+  let fallbackLayer = objectLayers.find(isEditorManagedDefaultObjectLayer)
   let layerCreated = false
 
   if (!fallbackLayer) {
-    if (scene.objects.length === 0) return { status: 'skipped', reason: 'unchanged' }
+    // 有用户图层时，未归组节点应留在根列表，不能自动移进任意分组。
+    if (scene.objects.length === 0 || objectLayers.length) return { status: 'skipped', reason: 'unchanged' }
 
     const nextOrder =
       scene.layers.reduce((maxOrder, layer) => Math.max(maxOrder, layer.order), -1) + 1
     fallbackLayer = createDefaultObjectLayer(scene.layers, nextOrder)
-    store.upsertLayer(fallbackLayer)
+    store.upsertLayer(fallbackLayer, 'loadNormalization')
     objectLayers = [fallbackLayer]
     layerCreated = true
   }
@@ -187,7 +189,7 @@ export const ensureEditorSceneObjectLayersInStore = (
     store.upsertObject({
       ...object,
       layerId: fallbackLayer.id,
-    })
+    }, 'loadNormalization')
     changedObjectIds.push(object.id)
   })
 
@@ -283,8 +285,6 @@ export const setEditorSceneObjectLayerVisible = ({
   if (!store) return { status: 'skipped', reason: 'missing-store' }
   if (!layerId) return { status: 'skipped', reason: 'missing-layer-id' }
 
-  ensureEditorSceneObjectLayersInStore(store)
-
   const scene = store.getScene()
   const layer = getSortedObjectLayers(scene.layers).find((item) => item.id === layerId)
   if (!layer) return { status: 'skipped', reason: 'missing-layer' }
@@ -312,8 +312,6 @@ export const reorderEditorSceneObjectLayers = (
   movedLayerId?: string,
 ): EditorSceneLayerUpdateResult => {
   if (!store) return { status: 'skipped', reason: 'missing-store' }
-
-  ensureEditorSceneObjectLayersInStore(store)
 
   const scene = store.getScene()
   const objectLayers = getSortedObjectLayers(scene.layers)
@@ -365,6 +363,8 @@ export const reorderEditorSceneObjectLayers = (
 
 const createObjectLayerId = (store: SceneStore) => {
   const usedIds = new Set(store.getLayers().map((layer) => layer.id))
+  // 已删除原图层的编号仍用于保存，不能在同一会话复用。
+  for (const id of store.captureSaveEdits().layers.keys()) usedIds.add(id)
   let sequence = 1
   let id = `editor-object-group-${sequence}`
   while (usedIds.has(id)) {
@@ -445,6 +445,7 @@ export const setEditorSceneObjectLocked = ({
   const object = store.getObject(objectId)
   if (!object || !commandBus) return { status: 'skipped', reason: 'unchanged' }
   if (object.locked === locked) return { status: 'skipped', reason: 'unchanged' }
+  if (store.getObjectLockState(objectId)?.inheritedLocked) return { status: 'skipped', reason: 'locked-object' }
   commandBus.execute(createUpdateObjectLockCommand(objectId, locked))
   return { status: 'applied', layerId: object.layerId, changedObjectIds: [objectId] }
 }
@@ -463,6 +464,9 @@ export const deleteEditorSceneObjectLayer = ({
   if (!layerId) return { status: 'skipped', reason: 'missing-layer-id' }
   if (!store.getLayer(layerId)) return { status: 'skipped', reason: 'missing-layer' }
   if (!commandBus) return { status: 'skipped', reason: 'unchanged' }
+  assertOriginalObjectLayerDeletionAllowed(
+    store.getScene().id, layerId, new Set(store.getObjects().map((object) => object.id)), store.getDeletedObjectIds(),
+  )
   const changedObjectIds = store
     .getObjects()
     .filter((item) => item.layerId === layerId)
@@ -550,13 +554,14 @@ export const resolveEditorSceneObjectEffectiveState = (
   objectId: string,
 ) => {
   const object = store?.getObject(objectId)
-  const layer = object?.layerId ? store?.getLayer(object.layerId) : null
+  const lock = store?.getObjectLockState(objectId)
+  const visibility = store?.getObjectVisibilityState(objectId)
   return {
     ownLocked: object?.locked === true,
-    inheritedLocked: layer?.locked === true,
-    effectiveLocked: object ? object.locked || layer?.locked === true : false,
+    inheritedLocked: lock?.inheritedLocked ?? false,
+    effectiveLocked: lock?.effectiveLocked ?? false,
     ownVisible: object?.visible !== false,
-    inheritedVisible: layer?.visible !== false,
-    effectiveVisible: object ? object.visible && layer?.visible !== false : false,
+    inheritedVisible: visibility?.inheritedVisible ?? true,
+    effectiveVisible: visibility?.effectiveVisible ?? false,
   }
 }

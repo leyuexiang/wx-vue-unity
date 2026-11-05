@@ -12,6 +12,26 @@ const payload = (dependencies: object): SceneFourPackagePayload => ({
 afterEach(() => releaseOriginalScenePackages(sceneId))
 
 describe('二维编辑的三维无损保存保护', () => {
+  it('Unity 已接管的实例变换能保存重开，同时保留原始实例和未知扩展', () => {
+    const before = payload({ resources: [{ resourceKey: 'grass', owners: [{ domain: 'threeD', instanceId: '三维模型' }] }] })
+    before.threeDJson = JSON.stringify({ objects: [
+      { instanceId: '三维模型', unknownFutureField: true, transform: { kind: 'local', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] } },
+      { instanceId: '未接管模型', unknownFutureField: true },
+    ], customRenderer: { version: 9 } })
+    retainOriginalScenePackages(sceneId, before)
+    const transform = { kind: 'local', position: [2, 0.5, 3], rotation: [0, 0.5, 0], scale: [1.5, 2, 1.25] }
+    const generated = { ...before, threeDJson: JSON.stringify({ objects: [
+      { instanceId: '三维模型', transform }, { instanceId: '未接管模型', transform },
+    ] }) }
+    const saved = preserveUneditedThreeDDomain(sceneId, generated, new Set(['三维模型']))
+    expect(JSON.parse(saved.threeDJson)).toEqual({ objects: [
+      { instanceId: '三维模型', unknownFutureField: true, transform },
+      { instanceId: '未接管模型', unknownFutureField: true },
+    ], customRenderer: { version: 9 } })
+    expect(JSON.parse(saved.dependenciesJson).resources).toEqual(JSON.parse(before.dependenciesJson).resources)
+    expect(preserveUneditedThreeDDomain(sceneId, generated).threeDJson).toBe(before.threeDJson)
+  })
+
   it('三维原文和未知扩展字段不受二维修改影响', () => {
     const before = payload({ futureDependency: { keep: true }, behaviors: [{ owner: { domain: 'threeD', instanceId: '三维模型' }, privateData: 42 }] })
     retainOriginalScenePackages(sceneId, before)

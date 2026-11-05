@@ -35,6 +35,8 @@ export interface Dim3dModelPageVo {
   isPaidName?: string
   priceYuan?: number
   coverImageId?: string
+  /** 受控发布事务维护的稳定编号，列表和详情均可返回；旧目录没有关联。 */
+  resourceId?: string | number | null
   /** 模型文件资源编号；编辑器拖拽时用它查询资源服务的真实文件路径。 */
   modelFileId?: string
   /** 部分网关会在详情或资源扩展字段中直接返回可预览路径，作为兼容字段接收。 */

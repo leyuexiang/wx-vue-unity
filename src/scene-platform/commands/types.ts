@@ -2,12 +2,18 @@ import type { SceneStore } from '../store/sceneStore'
 
 export interface SceneCommand {
   name: string
+  /** 仅写外部编辑仓库的命令可本地确认，且必须提供完整补偿。其他命令默认确认运行投影。 */
+  confirmationScope?: 'local' | 'runtime'
+  /** 捕获当前存储的专用恢复入口，存在时替代反向执行；原无参数闭包可继续使用。 */
+  captureRollback?: (store: SceneStore) => (() => void) | undefined
+  /** 连续编辑显式提供会话标识，独立提交无需设置。已有滑块可沿用字段合并键。 */
+  mergeSession?: symbol | string
   execute: (store: SceneStore) => void
   undo: (store: SceneStore) => void
   /**
    * 尝试把后续命令合并到当前命令。
    *
-   * 用于高频编辑场景，例如拖拽过程中同一对象连续 Transform 更新只保留一条撤销记录。
+   * 总线先检查会话边界；命令再核对目标并保留首笔基线和末笔结果。
    * 该方法只允许修改命令自身的历史快照，不应直接操作 Store。
    */
   mergeWith?: (nextCommand: SceneCommand) => boolean

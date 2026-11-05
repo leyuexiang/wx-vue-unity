@@ -1,3 +1,4 @@
+import { editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
 import { useSceneWidgetStore } from '@/stores/sceneEditStore'
 import type { WidgetCanvasConfig } from '@/types/threeScene'
 import { createSceneStageCommand } from './sceneStageCommand'
@@ -37,6 +38,10 @@ export const getSceneStageSizeState = () => {
 export const commitSceneStageSizeChange = (
   draftSize: Partial<WidgetCanvasConfig>,
 ): WidgetCanvasConfig => {
+  const commandBus = getActiveSceneViewportHost()?.getCommandBus()
+  if (editorSceneOperation.value || commandBus?.getIsPending()) {
+    throw new Error('场景正在处理其他操作，请完成后再调整舞台')
+  }
   const widgetStore = useSceneWidgetStore()
   const oldSize = widgetStore.getWidgetCanvasConfig()
   const nextSize = normalizeSceneStageSize(draftSize, oldSize)
@@ -46,12 +51,18 @@ export const commitSceneStageSizeChange = (
   }
 
   widgetStore.setWidgetCanvasSizeFromConfig(nextSize)
-  const commandBus = getActiveSceneViewportHost()?.getCommandBus()
   if (commandBus) {
     const command = createSceneStageCommand(oldSize, nextSize, {
       applyWidgetCanvasSize: (size) => widgetStore.setWidgetCanvasSizeFromConfig(size),
+      captureWidgetCanvasSize: () => widgetStore.getWidgetCanvasConfig(),
     })
-    commandBus.recordExecuted(createAlreadyAppliedSceneCommand(command, (apply) => apply()))
+    try {
+      commandBus.recordExecuted(createAlreadyAppliedSceneCommand(command, (apply) => apply()))
+    } catch (error) {
+      // 登记失败时舞台仍应与历史一致。
+      widgetStore.setWidgetCanvasSizeFromConfig(oldSize)
+      throw error
+    }
   }
 
   return nextSize

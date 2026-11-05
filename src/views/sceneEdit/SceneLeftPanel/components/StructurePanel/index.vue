@@ -72,6 +72,33 @@
         </button>
       </div>
 
+      <div v-if="activeStructureCategory !== 'widget' && copyableSelection.length" class="px-3 pb-2">
+        <el-button size="small" plain :disabled="Boolean(editorSceneOperation)" @click="copySelectedSceneObjects">
+          复制所选节点（{{ copyableSelection.length }}）
+        </el-button>
+        <el-button v-if="selectedSceneObjectIds.size > 1" size="small" type="danger" plain :disabled="Boolean(editorSceneOperation)" @click="deleteSelectedSceneObjects">
+          删除所选节点（{{ selectedSceneObjectIds.size }}）
+        </el-button>
+      </div>
+
+      <div v-if="activeStructureCategory !== 'widget' && hierarchySelection.length" class="px-3 pb-2 flex gap-2 items-center">
+        <el-select
+          aria-label="父节点"
+          :empty-values="[null, undefined]"
+          :model-value="selectedHierarchyParent"
+          :placeholder="hierarchySelection.length > 1 ? '为所选节点更换父级' : '选择父节点'"
+          :disabled="Boolean(editorSceneOperation)"
+          @change="(value: string) => editSelectedHierarchy(value || undefined)"
+        >
+          <el-option label="场景根节点" value="" />
+          <el-option v-for="node in hierarchyParents" :key="node.id" :label="node.name" :value="node.id" />
+        </el-select>
+        <template v-if="selectedHierarchyNode">
+          <button type="button" title="在同级中上移" aria-label="在同级中上移" :disabled="Boolean(editorSceneOperation)" @click="editSelectedHierarchy(selectedHierarchyNode.parentInstanceId, -1)">↑</button>
+          <button type="button" title="在同级中下移" aria-label="在同级中下移" :disabled="Boolean(editorSceneOperation)" @click="editSelectedHierarchy(selectedHierarchyNode.parentInstanceId, 1)">↓</button>
+        </template>
+      </div>
+
       <el-scrollbar class="scene-edit-structure-panel-scroll">
         <div
           class="scene-edit-structure-panel__body px-3 pb-3"
@@ -82,7 +109,7 @@
           <div
             v-if="activeStructureCategory !== 'widget'"
             class="scene-edit-structure-group scene-edit-structure-group--scene-objects"
-            title="选择模型以编辑其三维属性"
+            title="选择节点以编辑属性，按住 Ctrl 或 Command 多选"
           >
             <draggable
               item-key="id"
@@ -98,11 +125,12 @@
                 <div
                   data-structure-item="true"
                   :class="['scene-edit-structure-item', { 'is-active': item.isActive }]"
-                  @click.stop="selectItem(item)"
+                  @click.stop="selectItem(item, $event)"
                   @dblclick.stop="focusItem(item)"
                 >
                   <div class="scene-edit-structure-item__name">
                     {{ item.name }}
+                    <small v-if="getHierarchyParentName(item.id)" class="opacity-70"> · {{ getHierarchyParentName(item.id) }}</small>
                   </div>
                   <div class="flex gap-2 scene-edit-structure-actions">
                     <button
@@ -136,7 +164,7 @@
                       class="scene-edit-structure-action-button is-danger"
                       :disabled="isModelLocked(item)"
                       :title="
-                        isModelLocked(item) ? '锁定状态不可删除' : `删除${activeSceneObjectLabel}`
+                        isModelLocked(item) ? '锁定状态不可删除' : `删除${activeSceneObjectLabel}及其子节点`
                       "
                       @click.stop="deleteMesh(item.raw)"
                     >
@@ -235,11 +263,12 @@
                         <div
                           data-structure-item="true"
                           :class="['scene-edit-structure-item', { 'is-active': item.isActive }]"
-                          @click.stop="selectItem(item)"
+                          @click.stop="selectItem(item, $event)"
                           @dblclick.stop="focusItem(item)"
                         >
                           <div class="scene-edit-structure-item__name">
                             {{ item.name }}
+                    <small v-if="getHierarchyParentName(item.id)" class="opacity-70"> · {{ getHierarchyParentName(item.id) }}</small>
                           </div>
                           <div class="flex gap-2 scene-edit-structure-actions">
                             <button
@@ -281,7 +310,7 @@
                               :title="
                                 element.locked || isModelLocked(item)
                                   ? '锁定状态不可删除'
-                                  : `删除${activeSceneObjectLabel}`
+                                  : `删除${activeSceneObjectLabel}及其子节点`
                               "
                               @click.stop="deleteMesh(item.raw)"
                             >
@@ -580,6 +609,12 @@ const {
   clearSelectionFromBlank,
   selectItem,
   focusItem,
+  selectedHierarchyNode,
+  selectedHierarchyParent,
+  hierarchySelection,
+  hierarchyParents,
+  getHierarchyParentName,
+  editSelectedHierarchy,
   selectWidgetFromNode,
   selectWidgetChildFromNode,
   selectGroup,
@@ -616,6 +651,11 @@ const {
   isModelLocked,
   updateMeshPickup,
   deleteMesh,
+  selectedSceneObjectIds,
+  deleteSelectedSceneObjects,
+  copyableSelection,
+  copySelectedSceneObjects,
+  editorSceneOperation,
   deleteWidget,
   updateWidgetVisible,
 } = useStructurePanel()

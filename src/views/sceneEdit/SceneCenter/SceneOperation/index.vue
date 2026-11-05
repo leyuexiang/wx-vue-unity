@@ -49,12 +49,17 @@
       </div>
     </div>
 
+    <button v-if="editorSceneRecovery" type="button" :title="editorSceneRecovery.message"
+      @click="editorSceneRecovery.retry()">重试恢复</button>
     <!-- 保存和预览已收敛到顶栏；这里仅保留设计稿定义的编辑辅助与历史操作。 -->
     <el-divider direction="vertical" />
     <div class="scene-edit-operation__group">
       <div class="scene-edit-operation__rail">
         <el-tooltip content="撤销" placement="bottom" popper-class="scene-edit-popover">
-          <span
+          <button
+            type="button"
+            aria-label="撤销"
+            :disabled="isUndoDisabled"
             :class="['scene-edit-icon-button', { 'is-disabled': isUndoDisabled }]"
             @click="handleUndo"
           >
@@ -63,10 +68,13 @@
               :style="createIconStyle(undoIcon)"
               aria-hidden="true"
             ></span>
-          </span>
+          </button>
         </el-tooltip>
         <el-tooltip content="重做" placement="bottom" popper-class="scene-edit-popover">
-          <span
+          <button
+            type="button"
+            aria-label="重做"
+            :disabled="isRedoDisabled"
             :class="['scene-edit-icon-button', { 'is-disabled': isRedoDisabled }]"
             @click="handleRedo"
           >
@@ -75,7 +83,7 @@
               :style="createIconStyle(redoIcon)"
               aria-hidden="true"
             ></span>
-          </span>
+          </button>
         </el-tooltip>
         <el-tooltip content="重置场景" placement="bottom" popper-class="scene-edit-popover">
           <span class="scene-edit-icon-button" @click="handleRefreshScene">
@@ -104,20 +112,19 @@ import { MITT_ON_KEY_ENUM } from '@/enums'
 import { transformTypeList, measureTypeList } from './config'
 import { useRoute } from 'vue-router'
 import { appLogger } from '@/utils/logger'
-import { beginEditorSceneOperation, editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
+import { beginEditorSceneOperation, editorSceneOperation, editorSceneRecovery } from '@/integrations/scene/editorSceneOperationGate'
 import { saveActiveEditorSceneDefinition } from '@/integrations/scene/editorSceneSaveAdapter'
 import type {
   EditorDim3dSceneSaveBookmark,
   EditorDim3dSceneSaveContext,
 } from '@/integrations/scene/editorDim3dSceneSaveService'
-import { subscribeActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
+import { getActiveSceneViewportHost, subscribeActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
 import { createEditorSceneSaveStateTracker } from '@/integrations/scene/editorSceneSaveState'
 import {
   clearEditorHistory,
   getEditorUndoRedoState,
-  redoEditorHistory,
-  undoEditorHistory,
+  dispatchEditorHistory,
 } from '@/integrations/scene/editorSceneUndoRedoAdapter'
 import {
   canUseEditorSceneMeasure,
@@ -203,10 +210,7 @@ const subscribeScenePlatformStore = (nextStore: SceneStore | null) => {
 
   if (!nextStore) return
 
-  /**
-   * CommandBus 本身不暴露订阅接口；当前所有平台命令都会改写 Store。
-   * 顶部按钮用 Store 事件作为刷新信号，读取 CommandBus 栈大小来更新禁用态。
-   */
+  /** Store订阅负责选择和变换工具，历史步数由独立历史订阅刷新。 */
   stopScenePlatformStoreSubscription = nextStore.subscribe(syncTransformTypeAfterSceneStoreEvent)
 }
 
@@ -329,30 +333,22 @@ const handleMeasureDistanceType = (type: MEASURE_ENUM) => {
   store.sceneApi?.measureDistanceModules?.startMeasure(type)
 }
 
-const handleUndo = () => {
-  if (isUndoDisabled.value) return
-  const applied = undoEditorHistory({
-    commandBus: scenePlatformCommandBus.value,
-  })
-  if (!applied) return
-  refreshScenePlatformHistoryRevision()
-  $eventBus?.emit(MITT_ON_KEY_ENUM.HISTORY_APPLIED, true)
-}
-
-const handleRedo = () => {
-  if (isRedoDisabled.value) return
-  const applied = redoEditorHistory({
-    commandBus: scenePlatformCommandBus.value,
-  })
-  if (!applied) return
-  refreshScenePlatformHistoryRevision()
-  $eventBus?.emit(MITT_ON_KEY_ENUM.HISTORY_APPLIED, true)
-}
+/** 工具栏只转发意图，状态、门禁和完成时机均由统一调度入口处理。 */
+const replayHistory = (direction: 'undo' | 'redo') => dispatchEditorHistory(direction, {
+  commandBus: scenePlatformCommandBus.value,
+  onApplied: () => $eventBus?.emit(MITT_ON_KEY_ENUM.HISTORY_APPLIED, true),
+  onError: (error) => ElMessage.error(error instanceof Error ? error.message : '历史回放失败，请检查场景状态'),
+})
+const handleUndo = () => replayHistory('undo')
+const handleRedo = () => replayHistory('redo')
 
 const handleSaveSceneConfig = async () => {
-  if (sceneSaveState.value.saving || editorSceneOperation.value) return
+  const host = getActiveSceneViewportHost()
+  if (!host || sceneSaveState.value.saving || editorSceneOperation.value) return
   const release = beginEditorSceneOperation('save')
   editorSceneSaveStateTracker.beginSave()
+  // 同编号草稿重新加载也会清除 saving，旧回执不能影响新会话。
+  const isCurrentSave = () => getActiveSceneViewportHost() === host && sceneSaveState.value.saving
 
   try {
     /**
@@ -363,21 +359,21 @@ const handleSaveSceneConfig = async () => {
       sceneApi: store.sceneApi,
       saveContext: props.saveContext,
     })
+    if (!isCurrentSave()) return
     if (!result.backendBookmark) {
       throw new Error('场景保存接口未返回后端保存书签。')
     }
-    editorSceneSaveStateTracker.markSaved()
+    const savedState = editorSceneSaveStateTracker.markSaved()
     /**
-     * 保存成功后，当前场景快照就是新的撤销基线。
-     * 清空平台 CommandBus。旧 renderScene.historyModules 是无状态兼容门面，不再存在第二套历史栈。
+     * 保存期间若产生新编辑，保留历史，避免把未保存的操作从撤销栈移除。
+     * 已完全保存时仍沿用现有清栈策略，保存检查点改造另行接入。
      */
-    clearEditorHistory({
-      commandBus: scenePlatformCommandBus.value,
-    })
+    if (!savedState.dirty) clearEditorHistory({ commandBus: host.getCommandBus() })
     refreshScenePlatformHistoryRevision()
     emit('saveSucceeded', result.backendBookmark)
     ElMessage.success('场景保存成功')
   } catch (error) {
+    if (!isCurrentSave()) return
     const saveFailureState = editorSceneSaveStateTracker.markFailed(error)
     /**
      * G008 要求保存失败不能清空脏状态。
@@ -430,7 +426,7 @@ onMounted(() => {
     const nextStore = host?.getStore() ?? null
     scenePlatformStore.value = nextStore
     subscribeScenePlatformStore(nextStore)
-    editorSceneSaveStateTracker.bindStore(nextStore)
+    editorSceneSaveStateTracker.bindStore(nextStore, host?.getCommandBus())
   })
 })
 

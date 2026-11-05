@@ -1,4 +1,4 @@
-import type { PickWorldPoint, SceneDefinition, SceneLayer, SceneObject, ScreenPoint, ViewportHost } from '@/scene-platform'
+import type { FrameTarget, PickWorldPoint, SceneDefinition, SceneLayer, SceneObject, ScreenPoint, ViewportHost } from '@/scene-platform'
 import { createUpdateObjectTransformCommand } from '@/scene-platform'
 import { BaseSceneRuntime } from '@/scene-platform/runtime/baseSceneRuntime'
 import type { UnityTransport } from '../connection/UnityTransport'
@@ -36,6 +36,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   private operations = Promise.resolve()
   private readonly programmaticUpdates = new Set<string>()
   private readonly missingModelAssetIds = new Set<string>()
+  // 缺失模型的子节点也暂缓表现，逻辑记录继续留在完整草稿。
+  private deferredDescendants = new Set<string>()
   /** 只用于把画布逻辑像素换成相机视口比例，不在 Runtime 保存临时拖放事件。 */
   private renderContainer: HTMLElement | null = null
   /** 三维事件订阅与场景同寿命；卸载时清空，避免旧编辑页继续执行动作。 */
@@ -157,10 +159,14 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     await super.upsertObject(object)
     this.reportDeferredObjects()
     if (!this.unity || !this.scene) return
-    if (this.isDeferredInUnity(object) && !existedInUnity) return
     await this.operations
     // SceneStore also holds deferred objects. A type change can enter or leave the Unity projection.
-    const representationChanged = previous !== undefined && (previous.type !== object.type || getUnityModelAssetId(previous) !== getUnityModelAssetId(object))
+    // 层级和同级顺序由完整快照提交，避免单对象更新留下旧父级。
+    const representationChanged = previous !== undefined && (
+      previous.type !== object.type || getUnityModelAssetId(previous) !== getUnityModelAssetId(object)
+      || previous.parentInstanceId !== object.parentInstanceId || previous.order !== object.order
+    )
+    if (this.isDeferredInUnity(object) && !existedInUnity && !representationChanged) return
     if (!existedInUnity || this.isDeferredInUnity(object) || representationChanged) {
       await this.loadUnityDraft(this.scene)
       this.reportDeferredObjects()
@@ -273,6 +279,12 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     })
   }
 
+  /** 结构树使用统一聚焦入口，必须转交引擎，不能沿用基类的空实现。 */
+  override async frame(target?: FrameTarget): Promise<void> {
+    if (!target || !('objectId' in target)) return
+    if (!await this.moveCameraToObject(target.objectId)) throw new Error('当前 Unity 对象无法聚焦')
+  }
+
   /** 相机聚焦由 Unity 使用当前场景坐标体系完成，前端不推算局部坐标或地理位置。 */
   moveCameraToObject(
     objectId: string,
@@ -337,19 +349,44 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   }
 
   private isDeferredInUnity(object: SceneObject): boolean {
-    return isUnityDeferredObject(object) || (object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
+    return this.deferredDescendants.has(object.id) || isUnityDeferredObject(object) || (object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
   }
 
   private async loadUnityDraft(scene: SceneDefinition): Promise<void> {
     if (!this.unity) throw new Error('Unity 运行时尚未连接')
     const draft = projectSceneForUnity(scene)
+    const childrenByParent = new Map<string, string[]>()
+    for (const object of draft.objects) {
+      if (!object.parentInstanceId) continue
+      const siblings = childrenByParent.get(object.parentInstanceId)
+      if (siblings) siblings.push(object.instanceId)
+      else childrenByParent.set(object.parentInstanceId, [object.instanceId])
+    }
     // Only an explicit catalog miss can degrade a model. Network, integrity and other load errors remain fatal.
     // Every retry removes at least one resource from this transient projection, bounding the loop by resource count.
     while (true) {
       const resources = draft.resources.filter((resource) => !this.missingModelAssetIds.has(resource.assetId))
       const resourceKeys = new Set(resources.map((resource) => resource.resourceKey))
-      const objects = draft.objects.filter((object) => object.objectType !== 'model' || object.resourceRefKeys.every((key) => resourceKeys.has(key)))
-      try { await this.unity.loadScene({ ...draft, objects, resources }); return }
+      const missingRoots = draft.objects.filter((object) =>
+        object.objectType === 'model' && object.resourceRefKeys.some((key) => !resourceKeys.has(key)),
+      ).map((object) => object.instanceId)
+      const omitted = new Set(missingRoots)
+      const descendants = new Set<string>()
+      // 缺父节点时不能把局部变换直接用在场景根，按子树暂缓提交。
+      for (let i = 0; i < missingRoots.length; i++) {
+        for (const child of childrenByParent.get(missingRoots[i]!) ?? []) {
+          descendants.add(child)
+          if (omitted.has(child)) continue
+          omitted.add(child)
+          missingRoots.push(child)
+        }
+      }
+      const objects = omitted.size ? draft.objects.filter((object) => !omitted.has(object.instanceId)) : draft.objects
+      try {
+        await this.unity.loadScene({ ...draft, objects, resources })
+        this.deferredDescendants = descendants
+        return
+      }
       catch (error) {
         const match = error instanceof Error ? /^当前美术版本不存在资源键[:：]\s*(\S+)\s*$/u.exec(error.message) : null
         const missing = match ? resources.find((resource) => resource.assetId === match[1] || `model/${resource.assetId}` === match[1]) : undefined
@@ -372,6 +409,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.unity = null
     this.transport = null
     this.missingModelAssetIds.clear()
+    this.deferredDescendants.clear()
     this.objectInteractionListeners.clear()
     this.video?.remove()
     this.video = null

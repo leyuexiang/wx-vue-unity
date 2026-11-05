@@ -1,5 +1,6 @@
 import type { SceneDefinition, SceneRepository, SceneRuntime } from '@/scene-platform'
 import { getActiveSceneViewportHost } from './editorScenePlatformHost'
+import { isUnityDeferredObject } from '@/unity-runtime/runtime/projectSceneForUnity'
 import type { LegacyScenePanelStateProvider } from './editorSceneSettingsAdapter'
 import type { SceneAsyncConfig } from '@/types/threeScene'
 import type { WidgetSceneFragment } from './widgetRuntime/widgetSceneFragment'
@@ -164,6 +165,12 @@ export const saveEditorSceneDefinition = async (
   // 旧场景未转换为正式四包时禁止覆盖；第一阶段不从旧引擎实例重建三维数据。
   if (options.legacySaveOptions || 'legacySceneConfig' in options) throw new Error('旧格式场景需先转换为完整四包')
 
+  // 与场景快照同时固定编辑范围，等待采集时的新命令属于下一次保存。
+  const editableHierarchyIds = sceneWasReadFromHost && activeHost?.getRuntime().id.startsWith('unity-')
+    ? new Set(activeHost.getStore().getHierarchyEditedIds()) : undefined
+  const deletedObjectIds = sceneWasReadFromHost && activeHost
+    ? new Set(activeHost.getStore().getDeletedObjectIds()) : undefined
+  const saveEdits = sceneWasReadFromHost ? activeHost?.getStore().captureSaveEdits() : undefined
   const sceneToSave = await captureEditorSceneDefinitionFromBase(baseSceneSaveSource, options)
 
   if (options.repository) {
@@ -181,7 +188,16 @@ export const saveEditorSceneDefinition = async (
   const backendBookmark = await saveEditorSceneToDim3d(
     sceneToSave,
     options.saveContext,
-    options.dim3dSaveOptions,
+    {
+      ...options.dim3dSaveOptions,
+      ...(editableHierarchyIds?.size ? { editableHierarchyIds } : {}),
+      ...(deletedObjectIds?.size ? { deletedObjectIds } : {}),
+      ...(saveEdits ? { saveEdits } : {}),
+      // 仅当前 Unity 会话已接管的对象开放变换保存，按对象编号匹配原始四包。
+      ...(sceneWasReadFromHost && activeHost?.getRuntime().id.startsWith('unity-') ? {
+        editableTransformIds: new Set(sceneToSave.objects.filter(object => !isUnityDeferredObject(object)).map(object => object.id)),
+      } : {}),
+    },
   )
 
   return {

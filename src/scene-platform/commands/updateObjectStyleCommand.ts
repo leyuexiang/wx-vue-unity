@@ -1,5 +1,6 @@
 import type { SceneObject } from '../core/types'
 import type { SceneCommand } from './types'
+import { captureSceneObjectUpdateRollback } from './sceneObjectRollback'
 
 /**
  * 对象样式增量。
@@ -22,19 +23,22 @@ const isUpdateObjectStyleCommand = (command: SceneCommand): command is UpdateObj
 /**
  * 创建对象样式更新命令。
  *
- * 命令只写入 SceneStore，RuntimeBridge 根据样式脏标记把变更增量同步到具体引擎。连续修改
- * 同一对象时合并为一条撤销记录，避免切换复选框或连续输入产生冗余历史项。
+ * 命令只写入 SceneStore，RuntimeBridge 根据样式脏标记同步到具体引擎。只有调用方显式
+ * 提供相同字段的编辑会话时，才合并同一对象的历史记录。
  */
 export function createUpdateObjectStyleCommand(
   objectId: string,
   patch: UpdateObjectStylePatch,
+  mergeSession?: symbol,
 ): SceneCommand {
   let previousObject: SceneObject | null = null
   let nextPatch = patch
 
   const command: UpdateObjectStyleCommand = {
     name: 'UpdateObjectStyle',
+    captureRollback: (store) => captureSceneObjectUpdateRollback(store, objectId),
     objectId,
+    mergeSession,
     getPatch: () => nextPatch,
     execute: (store) => {
       if (!previousObject) previousObject = store.getObject(objectId)

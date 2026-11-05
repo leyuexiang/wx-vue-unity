@@ -8,6 +8,7 @@ import {
 } from '@/scene-platform'
 import { projectObjectForUnity } from '@/unity-runtime/runtime/projectSceneForUnity'
 import type { EditorCreationModel } from './editorCreationRouter'
+import { runConfirmedEditorCommand } from './editorSceneCommandTransaction'
 import { appLogger } from '@/utils/logger'
 
 /**
@@ -70,22 +71,7 @@ export async function createEditorUnityObject(
   // 在写入历史前复用正式协议投影校验，不支持的几何体不能产生空壳对象或撤销记录。
   projectObjectForUnity(object)
   const command = createCreateObjectCommand(object)
-  const previousSelection = store.getSelectedObjectId()
-  const commandBus = host.getCommandBus()
-  commandBus.execute(command)
-  try {
-    await host.getBridge().flush()
-    if (!context.isActive()) return null
-    store.setSelectedObjectId(object.id)
-    await host.getBridge().flush()
-    return context.isActive() ? object.id : null
-  } catch (error) {
-    // 只补偿本次栈顶创建；失败命令不进入重做栈，清理同步失败也必须保留原始加载错误。
-    if (context.isActive() && commandBus.cancelLatest(command)) {
-      store.setSelectedObjectId(previousSelection)
-      try { await host.getBridge().flush() }
-      catch { /* 运行时已通过状态提示报告同步失败，向调用方继续抛出首次加载错误。 */ }
-    }
-    throw error
-  }
+  const applied = await runConfirmedEditorCommand(host, 'execute', command, context.isActive,
+    () => store.setSelectedObjectId(object.id))
+  return applied && context.isActive() ? object.id : null
 }

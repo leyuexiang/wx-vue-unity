@@ -2,6 +2,8 @@
 /// <reference types="unplugin-icons/types/vue" />
 
 interface ImportMetaEnv {
+  /** GIS 切片服务根地址，省略时使用同源 /gis-source。 */
+  readonly VITE_GIS_SOURCE_URL?: string
   readonly VITE_DEV_SERVER_PORT?: string
   /** 本项目后端使用admin，参考服务留空。 */
   readonly VITE_DIM3D_API_MODE?: string

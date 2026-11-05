@@ -539,6 +539,8 @@ export interface SceneObject {
   name: string
   /** 对象类型，只表达业务类别，不绑定具体渲染引擎实现 */
   type: SceneObjectType
+  /** 业务父实例编号；缺失表示根节点，独立于图层及空间区块。 */
+  parentInstanceId?: string
   /** 仅 light 对象使用；不包含 Cesium/Three 实例。 */
   light?: SceneLightConfig
   /** 仅 camera 对象使用；第一人称相机以该配置区分旧相机对象。 */

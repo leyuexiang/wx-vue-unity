@@ -672,6 +672,10 @@ const toSceneObject = (
       )
     : undefined
 
+  // 显式锁定优先；缺少该字段的旧四包仍沿可拾取/旧别名推导初始自身值。
+  const legacyPickable = typeof metadata?.pickable === 'boolean' ? metadata.pickable
+    : typeof metadata?.pickup === 'boolean' ? metadata.pickup : undefined
+
   return {
     id,
     name: getString(target.name) ?? id,
@@ -680,8 +684,10 @@ const toSceneObject = (
       target.visible ?? target.initialOwnVisible ?? target.initialEffectiveVisible,
       true,
     ),
-    locked: getBoolean(target.locked, false),
+    locked: getBoolean(target.locked, legacyPickable === false),
     ...(layerId ? { layerId } : {}),
+    // 恢复业务父级，避免四包往返后节点被静默提升到根级。
+    ...(getString(target.parentInstanceId) ? { parentInstanceId: getString(target.parentInstanceId)! } : {}),
     order: Math.max(0, Math.floor(getNumber(target.sortNo ?? target.order, 0))),
     transform: toTransform(target.transform, sceneType),
     /**

@@ -52,6 +52,27 @@ describe('missing models in a Unity art release', () => {
     expect(unity.loadScene).toHaveBeenCalledTimes(3)
   })
 
+  it('保留缺失父模型的子树数据，资源恢复后一起提交', async () => {
+    const { scene, unity } = createFixture()
+    const runtime = new UnityEditorSceneRuntime('local3d', { mode: 'webgpu', getHost: () => null, onStatus: vi.fn() })
+    Object.assign(runtime, { unity })
+    const local = createSceneDefinition({ id: 'local', name: '本地场景', type: 'local3d',
+      coordinateSystem: { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true },
+      objects: scene.objects.map((object) => ({ ...object,
+        ...(object.id === 'box' ? { parentInstanceId: 'missing' } : {}),
+        transform: { kind: 'local', position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
+      })),
+    })
+    await runtime.loadScene(local)
+    expect(unity.loadScene.mock.calls[1]![0].objects.map((object) => object.instanceId)).toEqual(['published'])
+    expect(runtime.hasObject('box')).toBe(true)
+    runtime.setSelectedObject('box')
+    expect(unity.setSelection).toHaveBeenLastCalledWith(null)
+    const parent = local.objects[0]!
+    await runtime.upsertObject({ ...parent, asset: { ...parent.asset!, metadata: { assetId: '1' } } })
+    expect(unity.loadScene.mock.calls[2]![0].objects.find((object) => object.instanceId === 'box')?.parentInstanceId).toBe('missing')
+  })
+
   it('accepts the canonical model/ prefix emitted by a resource catalog', async () => {
     const { runtime, scene, unity } = createFixture()
     unity.loadScene.mockImplementation(async (draft) => {

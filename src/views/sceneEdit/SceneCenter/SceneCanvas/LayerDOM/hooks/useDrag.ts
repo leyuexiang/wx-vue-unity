@@ -1,3 +1,4 @@
+import { getWidgetPointerSession } from '@/integrations/scene/widgetRuntime/widgetPointerSession'
 import { throttle } from 'lodash-es'
 import { getAspectLockedRect, getWidgetAspectRatio } from '@/utils/widgetAspectRatio'
 import { DragType } from '../type'
@@ -10,6 +11,7 @@ import {
 import { useSceneWidgetStore, type WidgetConfig } from '@/stores/sceneEditStore'
 
 interface DragGuideOptions {
+  onCancel?: () => void
   onGuidesChange?: (guides: AlignmentGuide[]) => void
 }
 
@@ -74,6 +76,8 @@ export const useMove = (
   dragElement: WidgetConfig,
   options: DragGuideOptions = {},
 ) => {
+  // 主键按下和松开配对，右键菜单等交互不创建拖拽事务。
+  if (e.button !== 0) return
   e.stopPropagation()
   e.preventDefault()
   const sceneWidgetStore = useSceneWidgetStore()
@@ -129,6 +133,8 @@ export const useMove = (
     w: dragElement.component.attr.w,
     h: dragElement.component.attr.h,
   }
+  const pointer = getWidgetPointerSession()
+  if (!pointer) return
   const oldSnapshot = sceneWidgetStore.createWidgetHistorySnapshot(movingSelectionIds)
   const alignmentContext = createAlignmentContext(sceneWidgetStore, movingSelectionIds)
 
@@ -140,6 +146,7 @@ export const useMove = (
   }
 
   const handleDragMove = throttle((e: MouseEvent) => {
+    if (!pointer.isActive()) return
     /**
      * 外层画布可能已经被 CSS 缩放。
      * 这里必须把屏幕像素位移换算成逻辑画布位移，才能保证部件保存的 l/t 不被显示缩放污染。
@@ -175,24 +182,14 @@ export const useMove = (
     options.onGuidesChange?.(alignedPosition.guides)
   }, 16)
 
-  const handleDragEnd = () => {
-    /**
-     * 鼠标松开时先冲刷节流队列，再记录历史。
-     * 这样最后一帧位移不会因为 throttle 的尾调用延迟而漏进撤销重做快照。
-     */
-    handleDragMove.flush()
-    window.removeEventListener('mousemove', handleDragMove)
-    window.removeEventListener('mouseup', handleDragEnd)
-    options.onGuidesChange?.([])
-    sceneWidgetStore.recordWidgetHistorySnapshot(
-      '移动部件',
-      oldSnapshot,
-      sceneWidgetStore.createWidgetHistorySnapshot(movingSelectionIds),
-    )
-  }
-
-  window.addEventListener('mousemove', handleDragMove)
-  window.addEventListener('mouseup', handleDragEnd)
+  pointer.attach({
+    move: handleDragMove,
+    commit: () => sceneWidgetStore.recordWidgetHistorySnapshot(
+      '移动部件', oldSnapshot, sceneWidgetStore.createWidgetHistorySnapshot(movingSelectionIds),
+    ),
+    rollback: () => sceneWidgetStore.applyWidgetHistorySnapshot(oldSnapshot),
+    cleanup: () => options.onGuidesChange?.([]),
+  })
 }
 
 /**
@@ -206,9 +203,12 @@ export const useGroupMove = (
   onEnd?: () => void,
   alignmentOptions?: GroupMoveAlignmentOptions,
 ) => {
+  if (e.button !== 0) return
   e.stopPropagation()
   e.preventDefault()
   const sceneWidgetStore = useSceneWidgetStore()
+  const pointer = getWidgetPointerSession()
+  if (!pointer) return
   const alignmentContext = alignmentOptions
     ? {
         ...createAlignmentContext(sceneWidgetStore, alignmentOptions.excludedWidgetIds),
@@ -225,6 +225,7 @@ export const useGroupMove = (
   }
 
   const handleDragMove = throttle((e: MouseEvent) => {
+    if (!pointer.isActive()) return
     /**
      * 分组移动只向外抛出逻辑增量。
      * 外层 store 继续批量修改组内成员坐标，避免拖动期间触发运行时配置重建。
@@ -255,24 +256,23 @@ export const useGroupMove = (
     origin.lastDeltaY = nextDeltaY
   }, 16)
 
-  const handleDragEnd = () => {
-    handleDragMove.flush()
-    window.removeEventListener('mousemove', handleDragMove)
-    window.removeEventListener('mouseup', handleDragEnd)
-    alignmentOptions?.onGuidesChange?.([])
-    onEnd?.()
-  }
-
-  window.addEventListener('mousemove', handleDragMove)
-  window.addEventListener('mouseup', handleDragEnd)
+  pointer.attach({
+    move: handleDragMove,
+    commit: () => onEnd?.(),
+    rollback: () => alignmentOptions?.onCancel?.(),
+    cleanup: () => alignmentOptions?.onGuidesChange?.([]),
+  })
 }
 
 export const useResize = (e: MouseEvent, dragElement: WidgetConfig, type: DragType) => {
+  if (e.button !== 0) return
   e.stopPropagation()
   e.preventDefault()
   const sceneWidgetStore = useSceneWidgetStore()
   /** 与移动保持相同的写入口守卫，阻止锁定组件通过控制点修改尺寸。 */
   if (sceneWidgetStore.isWidgetLocked(dragElement.id)) return
+  const pointer = getWidgetPointerSession()
+  if (!pointer) return
   const oldSnapshot = sceneWidgetStore.createWidgetHistorySnapshot([dragElement.id])
 
   const start = { clientX: e.clientX, clientY: e.clientY }
@@ -335,6 +335,7 @@ export const useResize = (e: MouseEvent, dragElement: WidgetConfig, type: DragTy
   }
 
   const useResizeMove = throttle((e: MouseEvent) => {
+    if (!pointer.isActive()) return
     /**
      * 拉伸同样只写逻辑尺寸。
      * 这样缩放画布后拖动控制点，组件宽高变化仍与视觉拖动距离一致。
@@ -349,17 +350,11 @@ export const useResize = (e: MouseEvent, dragElement: WidgetConfig, type: DragTy
     resizeStrategies[type](dragElement, { x: diffX, y: diffY })
   }, 16)
 
-  const handleResizeEnd = () => {
-    useResizeMove.flush()
-    window.removeEventListener('mousemove', useResizeMove)
-    window.removeEventListener('mouseup', handleResizeEnd)
-    sceneWidgetStore.recordWidgetHistorySnapshot(
-      '调整部件尺寸',
-      oldSnapshot,
-      sceneWidgetStore.createWidgetHistorySnapshot([dragElement.id]),
-    )
-  }
-
-  window.addEventListener('mousemove', useResizeMove)
-  window.addEventListener('mouseup', handleResizeEnd)
+  pointer.attach({
+    move: useResizeMove,
+    commit: () => sceneWidgetStore.recordWidgetHistorySnapshot(
+      '调整部件尺寸', oldSnapshot, sceneWidgetStore.createWidgetHistorySnapshot([dragElement.id]),
+    ),
+    rollback: () => sceneWidgetStore.applyWidgetHistorySnapshot(oldSnapshot),
+  })
 }

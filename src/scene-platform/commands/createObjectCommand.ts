@@ -1,5 +1,6 @@
 import type { SceneObject } from '../core/types'
 import type { SceneCommand } from './types'
+import { captureSceneObjectMembershipRollback } from './sceneObjectRollback'
 
 /**
  * 创建对象命令。
@@ -13,7 +14,14 @@ export function createCreateObjectCommand(object: SceneObject): SceneCommand {
 
   return {
     name: 'CreateObject',
+    captureRollback: (store) => captureSceneObjectMembershipRollback(store, new Set([object.id]), [object]),
     execute: (store) => {
+      // 创建也可能覆盖同编号对象或指定业务父级，均不能绕过已有锁定。
+      if (store.isObjectEffectivelyLocked(object.id) ||
+          (object.parentInstanceId && store.isObjectEffectivelyLocked(object.parentInstanceId)) ||
+          (object.layerId && store.getLayer(object.layerId)?.locked)) {
+        throw new Error('节点、父级或目标图层已锁定，无法创建或覆盖')
+      }
       if (object.type === 'camera' && object.firstPerson) {
         const existing = store.getObjects().find(
           (candidate) =>

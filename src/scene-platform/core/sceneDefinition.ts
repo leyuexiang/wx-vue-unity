@@ -531,8 +531,8 @@ function applySceneObjectCompatibilityDefaults(object: unknown): SceneObjectDraf
 
   const sceneObject = object as SceneObjectDraft
   /**
-   * `metadata.pickup` 是早期创建快照的误命名字段。解析边界一次性迁移到 `pickable`，并同步
-   * locked，确保 Runtime、对象树和旧 TransformControls 以后只需读取同一领域语义。
+   * `metadata.pickup` 是早期创建快照的误命名字段，解析边界一次性迁移到 `pickable`。
+   * 显式自身锁定与可拾取配置相互独立；仅缺少锁定字段的旧档沿用反向推导。
    */
   const metadata = isRecordLike(sceneObject.metadata) ? { ...sceneObject.metadata } : {}
   const pickable =
@@ -558,7 +558,7 @@ function applySceneObjectCompatibilityDefaults(object: unknown): SceneObjectDraf
   return {
     ...sceneObject,
     visible: sceneObject.visible ?? true,
-    locked: typeof pickable === 'boolean' ? !pickable : (sceneObject.locked ?? false),
+    locked: sceneObject.locked ?? (typeof pickable === 'boolean' ? !pickable : false),
     metadata,
     /**
      * 配置存在时立即归一化；旧 GIS 看板缺少配置时补齐默认值。
@@ -585,7 +585,8 @@ function createCompatibleSceneObjects(
      * 创建与解析边界统一补齐同组顺序。显式 order 原样保留并推进计数器；缺失时按输入顺序生成，
      * 使新建场景、导入场景和序列化恢复最终都进入同一份稳定字段协议。
      */
-    const layerKey = normalized.layerId || '__root__'
+    // 有父节点时顺序属于兄弟集合，图层只管理根节点的排序。
+    const layerKey = normalized.parentInstanceId ? 'parent:' + normalized.parentInstanceId : 'layer:' + (normalized.layerId || '__root__')
     const nextOrder = nextOrderByLayer.get(layerKey) ?? 0
     const order =
       Number.isInteger(normalized.order) && normalized.order! >= 0 ? normalized.order! : nextOrder
@@ -1915,7 +1916,8 @@ export function validateSceneDefinition(scene: SceneDefinitionDraft): SceneValid
       }
     }
 
-    if (Number.isInteger(object.order) && object.order! >= 0) {
+    // 业务兄弟允许同值，使用实例编号打破平局。旧根级图层继续要求唯一顺序。
+    if (!object.parentInstanceId && Number.isInteger(object.order) && object.order! >= 0) {
       const layerKey = isNonEmptyString(object.layerId) ? object.layerId : '__root__'
       const orders = objectOrdersByLayer.get(layerKey) ?? []
       orders.push(object.order!)

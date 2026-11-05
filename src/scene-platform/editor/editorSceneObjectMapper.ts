@@ -449,6 +449,16 @@ const mapAsset = (objectId: string, model: EditorSceneObjectModel): SceneObject[
   ) {
     const resourceAsset = getResourceMarketAssetRef(model)
 
+    if (model.fileType === MODEL_ENUM.UNITY_MODEL) {
+      // 仅稳定编号进入场景依赖，地址在重新打开时按现有 Unity 托管规则重建。
+      const id = resourceAsset?.id
+      if (!id || !/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n ||
+        resourceAsset.url !== `unity-resource://${id}`) {
+        throw new Error('受控模型缺少有效的稳定资源编号，请刷新资源列表后重试')
+      }
+      return { id, kind: 'unity-model', url: resourceAsset.url }
+    }
+
     /** 内置模型只允许通过注册表声明资源身份，禁止继续由对象编号生成假文件编号。 */
     if (!resourceAsset) {
       return {
@@ -789,7 +799,7 @@ export function mapEditorCreationToSceneObject(
     name: runtimeSnapshot?.name || model.name || '未命名对象',
     type: mapObjectType(model.modelType),
     visible: runtimeSnapshot?.visible ?? true,
-    /** 可拾取状态和 locked 是同一领域事实的正反表达，创建快照优先采用真实运行时结果。 */
+    /** 旧创建入口没有独立锁定来源，初始值沿原可拾取快照推导；领域保存后两者独立。 */
     locked: runtimeSnapshot?.pickable === false,
     /** 新对象尚未确定最终同组位置，命令写入 Store 后会按实际插入位置连续重编号。 */
     order: 0,

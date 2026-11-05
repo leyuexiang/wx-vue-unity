@@ -1,5 +1,6 @@
 import type { SceneLayer, SceneObject } from '../core/types'
 import type { SceneCommand } from './types'
+import { captureSceneObjectMembershipRollback, captureSceneObjectUpdateRollback } from './sceneObjectRollback'
 
 export type ObjectLayerPatch = Partial<Pick<SceneLayer, 'name' | 'visible' | 'locked' | 'order'>>
 
@@ -129,6 +130,18 @@ export function createDeleteObjectLayerCommand(layerId: string): SceneCommand {
   let previousMembers: SceneObject[] = []
   return {
     name: 'DeleteObjectLayer',
+    captureRollback: (store) => {
+      const currentLayer = store.getLayer(layerId)
+      const index = store.getLayers().findIndex((layer) => layer.id === layerId)
+      const ids = new Set([...store.getObjectIdsInLayer(layerId), ...previousMembers.map((object) => object.id)])
+      const restoreObjects = captureSceneObjectMembershipRollback(store, ids, previousMembers)
+      return () => {
+        // 恢复图层归属属于失败补偿，不重新执行删除命令的编辑门禁。
+        if (currentLayer) store.insertLayerAt(currentLayer, index)
+        restoreObjects()
+        if (!currentLayer && store.getLayer(layerId)) store.removeLayer(layerId)
+      }
+    },
     execute: (store) => {
       const layer = store.getLayer(layerId)
       if (!layer || layer.type !== 'object') throw new Error(`Object layer not found: ${layerId}`)
@@ -177,6 +190,10 @@ export function createMoveObjectToLayerCommand(
   let previousObjectIndex = -1
   return {
     name: 'MoveObjectToLayer',
+    captureRollback: (store) => captureSceneObjectMembershipRollback(store, new Set([objectId]), [
+      ...(previousObject ? [previousObject] : []),
+      { parentInstanceId: store.getObject(objectId)?.parentInstanceId, layerId: layerId || undefined },
+    ]),
     execute: (store) => {
       const current = store.getObject(objectId)
       if (!current) throw new Error(`Object not found: ${objectId}`)
@@ -216,6 +233,7 @@ export function createUpdateObjectNameCommand(objectId: string, name: string): S
   const nextName = name.trim()
   return {
     name: 'UpdateObjectName',
+    captureRollback: (store) => captureSceneObjectUpdateRollback(store, objectId),
     execute: (store) => {
       if (!nextName) throw new Error('Object name cannot be empty')
       const current = store.getObject(objectId)
@@ -234,20 +252,25 @@ export function createUpdateObjectNameCommand(objectId: string, name: string): S
 
 /** 更新对象自身锁定；锁定只限制编辑能力，不覆盖独立的可拾取配置。 */
 export function createUpdateObjectLockCommand(objectId: string, locked: boolean): SceneCommand {
-  let previousObject: SceneObject | null = null
+  let previousLocked: boolean | undefined
   return {
     name: 'UpdateObjectLock',
+    captureRollback: (store) => captureSceneObjectUpdateRollback(store, objectId),
     execute: (store) => {
       const current = store.getObject(objectId)
       if (!current) throw new Error(`Object not found: ${objectId}`)
-      previousObject ??= current
+      // 自身锁定允许解除；继承锁定必须先由对应父级或图层解除。
+      if (store.getObjectLockState(objectId)?.inheritedLocked) throw new Error('节点受父级或图层锁定，无法修改自身锁定')
+      previousLocked ??= current.locked
       store.upsertObject({
         ...current,
         locked,
       })
     },
     undo: (store) => {
-      if (previousObject) store.upsertObject(previousObject)
+      // 回放和补偿只还原本字段，不覆盖期间更新的其他配置。
+      const current = store.getObject(objectId)
+      if (current && previousLocked !== undefined) store.upsertObject({ ...current, locked: previousLocked })
     },
   }
 }

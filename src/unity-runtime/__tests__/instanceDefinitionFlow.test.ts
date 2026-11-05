@@ -24,6 +24,17 @@ const scene = () => createSceneDefinition({
 })
 
 describe('实例配置随正式四包及Unity投影往返', () => {
+  it('本地节点父级和顺序随四包往返并投影到Unity', () => {
+    const original = scene()
+    original.objects[0]!.parentInstanceId = '43'
+    const packages = serializeSceneDefinitionToFourPackages(original)
+    const restored = assembleSceneDefinitionFromRuntimeFragments({ manifest: {
+      fragmentType: 'manifest', fragmentKey: '101', contentJson: JSON.stringify(packages),
+    }, options: { sceneId: '101', sceneType: 'local3d', resolvedAssetUrls: { [fixture.resource.resourceId]: '/memory-model.glb' } } })
+    expect(projectSceneForUnity(restored).objects.find((object) => object.instanceId === '42'))
+      .toMatchObject({ parentInstanceId: '43', siblingOrder: 0 })
+  })
+
   it('通过现有saveAll适配保存并恢复两个模型，保留未知配置且不改原草稿', async () => {
     const original = scene()
     const before = JSON.stringify(original)

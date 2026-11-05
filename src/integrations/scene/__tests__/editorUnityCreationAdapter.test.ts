@@ -2,19 +2,24 @@ import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import { DRAG_MODEL_ENUM, MODEL_ENUM } from '@/enums'
-import { createSceneDefinition, createViewportHost, type ViewportHost } from '@/scene-platform'
+import { createSceneDefinition, createViewportHost, createUpdateObjectTransformCommand, type ViewportHost } from '@/scene-platform'
 import type { SceneDefinition as UnityScene } from '@/scene-core'
 import type { FileModel } from '@/types/threeScene'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
+import { createMoveSceneNodeCommand } from '@/scene-platform/commands/moveSceneNodeCommand'
+import { assembleSceneDefinitionFromRuntimeFragments } from '../sceneRuntimeFragmentAssembler'
 import { serializeSceneDefinitionToFourPackages } from '../sceneFourPackage'
 import { createEditorUnityObject } from '../editorUnityCreationAdapter'
 import { preserveUneditedThreeDDomain, releaseOriginalScenePackages, retainOriginalScenePackages } from '../twoDPackagePreservation'
 import { saveEditorSceneToDim3d } from '../editorDim3dSceneSaveService'
+import { saveEditorSceneDefinition } from '../editorSceneSaveAdapter'
+import { setActiveSceneViewportHost, clearActiveSceneViewportHost } from '../editorScenePlatformHost'
 
 /** 只替换播放器边界，实际执行对象映射、命令历史、桥接、双端投影和保存序列化。 */
 const hosts: ViewportHost[] = []
 const sceneId = '2089645792212000769'
 afterEach(() => {
+  clearActiveSceneViewportHost()
   hosts.splice(0).forEach((host) => host.dispose())
   releaseOriginalScenePackages(sceneId)
 })
@@ -107,6 +112,108 @@ describe('模型拖拽到双端运行时', () => {
     const body = saveAll.mock.calls[0] as unknown as [Record<string, string>]
     expect(JSON.parse(body[0].threeDJson!).objects.map((item: { instanceId: string }) => item.instanceId)).toEqual([id])
     expect(JSON.parse(body[0].dependenciesJson!).resources[0].assetId).toBe('published-model')
+  })
+
+  it('已保存模型在 Unity 会话重新编辑后，正式保存入口提交当前变换', async () => {
+    const { host, create } = await setup()
+    const id = (await create())!
+    retainOriginalScenePackages(sceneId, serializeSceneDefinitionToFourPackages(host.getStore().getScene()))
+    const transform = { kind: 'local' as const, position: [2, 0.5, 3] as [number, number, number],
+      rotation: [0, 0.5, 0] as [number, number, number], scale: [1.5, 2, 1.25] as [number, number, number] }
+    host.getCommandBus().execute(createUpdateObjectTransformCommand(id, transform))
+    setActiveSceneViewportHost(host)
+    const saveAll = vi.fn(async () => ({ code: 200, data: { sceneId, conflict: false } }))
+    await saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null,
+      saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll, createRequestId: () => 'reopened-transform' },
+    })
+    const body = saveAll.mock.calls[0] as unknown as [Record<string, string>]
+    expect(JSON.parse(body[0].threeDJson!).objects[0]).toMatchObject({ instanceId: id, transform })
+  })
+
+  it('现有节点换父级、同级重排和撤销后可经正式保存入口重开', async () => {
+    const { host, unity, create } = await setup()
+    const parent = (await create())!
+    const first = (await create())!
+    const second = (await create())!
+    const store = host.getStore()
+    const commands = host.getCommandBus()
+    const original = serializeSceneDefinitionToFourPackages(store.getScene())
+    const raw = JSON.parse(original.threeDJson)
+    raw.objects.find((node: { instanceId: string }) => node.instanceId === first).vendorField = { keep: true }
+    retainOriginalScenePackages(sceneId, { ...original, threeDJson: JSON.stringify(raw) })
+    const initial = store.getObject(first)!.transform
+    if (initial.kind !== 'local') throw new Error('需要本地坐标')
+    commands.execute(createUpdateObjectTransformCommand(parent, {
+      kind: 'local', position: [4, 0, 0], rotation: [0, 0, Math.PI / 2], scale: 2,
+    }))
+    commands.execute(createMoveSceneNodeCommand(store, first, parent)!)
+    commands.execute(createMoveSceneNodeCommand(store, second, parent)!)
+    await host.getBridge().flush()
+    const calls = unity.loadScene.mock.calls.length
+    commands.execute(createMoveSceneNodeCommand(store, second, parent, 0)!)
+    await host.getBridge().flush()
+    expect(unity.loadScene.mock.calls).toHaveLength(calls + 1)
+    expect(commands.undo()).toBe(true)
+    expect(store.getObject(first)?.order).toBe(0)
+    expect(commands.redo()).toBe(true)
+    expect(store.getObject(first)?.order).toBe(1)
+    expect(() => createMoveSceneNodeCommand(store, parent, first)).toThrow('后代')
+    const local = store.getObject(first)!.transform
+    if (local.kind !== 'local') throw new Error('需要本地坐标')
+    expect(4 - 2 * local.position[1]).toBeCloseTo(initial.position[0])
+    expect(2 * local.position[0]).toBeCloseTo(initial.position[1])
+    expect(local.rotation[2]).toBeCloseTo(initial.rotation[2] - Math.PI / 2)
+    setActiveSceneViewportHost(host)
+    const saveAll = vi.fn(async () => ({ code: 200, data: { sceneId, conflict: false } }))
+    await saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null,
+      saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll, createRequestId: () => 'reopened-hierarchy' },
+    })
+    const [saved] = saveAll.mock.calls[0] as unknown as [Record<string, string>]
+    expect(JSON.parse(saved.threeDJson!).objects.find((node: { instanceId: string }) => node.instanceId === first))
+      .toMatchObject({ parentInstanceId: parent, sortNo: 1, vendorField: { keep: true } })
+    const restored = assembleSceneDefinitionFromRuntimeFragments({ manifest: {
+      fragmentType: 'manifest', fragmentKey: sceneId, contentJson: JSON.stringify(saved),
+    }, options: { sceneId, sceneType: 'local3d', resolvedAssetUrls: { 'published-model': '/model.glb' } } })
+    expect(restored.objects.find((node) => node.id === first)).toMatchObject({ parentInstanceId: parent, order: 1, transform: JSON.parse(JSON.stringify(local)) })
+    expect(restored.objects.find((node) => node.id === second)).toMatchObject({ parentInstanceId: parent, order: 0 })
+    // 再以已保存的父子快照为基线，验证移到根时确实清除旧父级字段。
+    retainOriginalScenePackages(sceneId, {
+      sceneJson: saved.sceneJson!, threeDJson: saved.threeDJson!,
+      twoDJson: saved.twoDJson!, dependenciesJson: saved.dependenciesJson!,
+    })
+    commands.execute(createMoveSceneNodeCommand(store, first, undefined)!)
+    await host.getBridge().flush()
+    await saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null,
+      saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll, createRequestId: () => 'reopened-root' },
+    })
+    const [detached] = saveAll.mock.calls[1] as unknown as [Record<string, string>]
+    const detachedNode = JSON.parse(detached.threeDJson!).objects.find((node: { instanceId: string }) => node.instanceId === first)
+    expect(detachedNode).not.toHaveProperty('parentInstanceId')
+    expect(detachedNode.vendorField).toEqual({ keep: true })
+
+  })
+
+  it('换父级拒绝剪切、不可逆变换和锁定祖先', async () => {
+    const { host, create } = await setup()
+    const parent = (await create())!
+    const child = (await create())!
+    const store = host.getStore()
+    const original = store.getObject(parent)!
+    const transform = { kind: 'local' as const, position: [0, 0, 0] as [number, number, number],
+      rotation: [0, 0, Math.PI / 4] as [number, number, number], scale: [2, 1, 1] as [number, number, number] }
+    store.upsertObject({ ...original, transform })
+    expect(() => createMoveSceneNodeCommand(store, child, parent)).toThrow('剪切')
+    store.upsertObject({ ...original, transform: { ...transform, scale: [0, 1, 1] } })
+    expect(() => createMoveSceneNodeCommand(store, child, parent)).toThrow('无法求逆')
+    store.upsertObject({ ...original, locked: true })
+    expect(() => createMoveSceneNodeCommand(store, child, parent)).toThrow('锁定')
+    expect(store.getObject(child)?.parentInstanceId).toBeUndefined()
   })
 
   it('加载失败移除本次对象和历史，恢复原选择，且后续拖拽仍能成功', async () => {

@@ -1,17 +1,21 @@
 import type { FirstPersonConfig, SceneObject } from '../core/types'
 import type { SceneCommand } from './types'
 import type { SceneStore } from '../store/sceneStore'
+import { captureSceneObjectUpdateRollback } from './sceneObjectRollback'
 
-/** 更新第一人称控制器配置，连续输入会合并为一条撤销记录。 */
+/** 更新第一人称控制器配置，显式指定同一字段会话时合并连续输入。 */
 export function createUpdateFirstPersonCommand(
   objectId: string,
   patch: Partial<FirstPersonConfig>,
+  mergeSession?: symbol,
 ): SceneCommand {
   let previousObject: SceneObject | null = null
   let nextPatch = { ...patch }
   const command = {
     name: 'UpdateFirstPerson',
+    captureRollback: (store: SceneStore) => captureSceneObjectUpdateRollback(store, objectId),
     objectId,
+    mergeSession,
     patch: nextPatch,
     execute: (store: SceneStore) => {
       previousObject ??= store.getObject(objectId)

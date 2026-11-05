@@ -36,6 +36,7 @@ export function createUpdateWeatherEffectCommand(
     name: 'UpdateWeatherEffect',
     effectId: options.effect.id,
     mergeKey: options.mergeKey,
+    mergeSession: options.mergeKey,
     getEffect: () => nextEffect,
     execute: (store) => {
       if (!previousEffect) {

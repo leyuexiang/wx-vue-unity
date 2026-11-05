@@ -1,4 +1,5 @@
 import type { SceneObject, SceneResource, UnityGeospatialScene } from '@/scene-core'
+import type { SceneStreamingConfig } from '@/scene-platform/core/types'
 
 export const UNITY_EDITOR_PROTOCOL_VERSION = 1 as const
 export const UNITY_EDITOR_CLIENT = 'web-unity' as const
@@ -54,6 +55,7 @@ export interface UnitySceneSnapshotDto {
   objects: SceneObject[]
   resources: SceneResource[]
   geospatial?: UnityGeospatialScene
+  streaming?: SceneStreamingConfig
 }
 
 export interface UnityRequestEnvelope<T = unknown> {

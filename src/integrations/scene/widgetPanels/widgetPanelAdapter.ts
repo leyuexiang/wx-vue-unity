@@ -1,3 +1,4 @@
+import { getWidgetCommandPort } from '@/integrations/scene/widgetRuntime/ports'
 import { cloneDeep } from 'lodash-es'
 import type BaseWidgetConfig from '@/packages/components/BaseWidgetConfig'
 import { useSceneStore, useSceneWidgetStore, type WidgetConfig } from '@/stores/sceneEditStore'
@@ -26,6 +27,7 @@ import {
 
 type WidgetHistoryChangeOptions = {
   includeLayerTree?: boolean
+  mergeSession?: symbol
 }
 
 const EMPTY_WIDGET_CAPABILITIES: WidgetPanelCapabilities = {
@@ -269,6 +271,7 @@ export const createWidgetPanelHistorySnapshot = (
   ids: string[],
   options: WidgetHistoryChangeOptions = {},
 ) => {
+  getWidgetCommandPort().assertCanEdit?.()
   return getStore().createWidgetHistorySnapshot(ids, options)
 }
 

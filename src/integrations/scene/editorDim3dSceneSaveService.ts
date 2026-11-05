@@ -1,5 +1,6 @@
 import { preserveUneditedThreeDDomain } from './twoDPackagePreservation'
 import type { SceneDefinition } from '@/scene-platform'
+import type { SceneSaveEdits } from '@/scene-platform/core/sceneSaveEdits'
 import {
   createDim3dSceneSaveAllBody,
   saveAllDim3dScene,
@@ -31,6 +32,14 @@ export interface EditorDim3dSceneSaveBookmark {
 }
 
 export interface EditorDim3dSceneSaveServiceOptions {
+  /** 由实际运行端确定允许保存变换的实例，二维编辑仍保全原三维域。 */
+  editableTransformIds?: ReadonlySet<string>
+  /** 显式层级命令接管的实例，含受到兄弟顺序变化影响的节点。 */
+  editableHierarchyIds?: ReadonlySet<string>
+  /** 仅显式删除允许从原始四包移除实例。 */
+  deletedObjectIds?: ReadonlySet<string>
+  /** 只将实际编辑的图层和实例字段合入原四包。 */
+  saveEdits?: SceneSaveEdits
   /** 单元测试可注入接口替身；生产路径始终使用四包整体保存接口。 */
   saveAll?: (body: Dim3dSceneSaveAllBody) => Promise<Dim3dSceneSaveAllResponse>
   /** 单元测试可注入固定幂等键；生产路径每次点击保存生成一个新键。 */
@@ -123,7 +132,9 @@ export const saveEditorSceneToDim3d = async (
     ...(options.changeSummary?.trim() ? { changeSummary: options.changeSummary.trim() } : {}),
   })
   // 一次提交四包：合并当前二维与新建三维对象，同时保全尚未接入编辑的原三维域。
-  const protectedBody = { ...body, ...preserveUneditedThreeDDomain(sceneId, body) }
+  const protectedBody = { ...body, ...preserveUneditedThreeDDomain(
+    sceneId, body, options.editableTransformIds, options.editableHierarchyIds, options.deletedObjectIds, options.saveEdits,
+  ) }
   const response = await (options.saveAll ?? saveAllDim3dScene)(protectedBody)
   const result = assertSaveSucceeded(response, sceneId)
 

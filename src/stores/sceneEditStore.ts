@@ -216,6 +216,8 @@ export type WidgetSelectionSource = 'external' | 'structure'
 
 interface WidgetHistorySnapshotOptions {
   includeLayerTree?: boolean
+  /** 仅数字属性输入等可连续编辑的单部件字段传入。 */
+  mergeSession?: symbol
 }
 
 export const useSceneWidgetStore = defineStore('sceneWidgetStore', () => {
@@ -1069,14 +1071,16 @@ export const useSceneWidgetStore = defineStore('sceneWidgetStore', () => {
     name: string,
     oldSnapshot: WidgetHistorySnapshot,
     newSnapshot: WidgetHistorySnapshot,
+    mergeSession?: symbol,
   ) => {
     if (isApplyingWidgetHistory()) return
     if (!hasWidgetHistoryPersistentChange(oldSnapshot, newSnapshot)) return
 
     getWidgetCommandPort().executeWidgetCommand(
       new WidgetCommand(name, oldSnapshot, newSnapshot, {
+        createWidgetHistorySnapshot,
         applyWidgetHistorySnapshot,
-      }),
+      }, mergeSession),
     )
   }
 
@@ -1090,11 +1094,18 @@ export const useSceneWidgetStore = defineStore('sceneWidgetStore', () => {
       return mutate()
     }
 
+    getWidgetCommandPort().assertCanEdit?.()
     const oldSnapshot = createWidgetHistorySnapshot(ids, options)
-    const result = mutate()
-    const newSnapshot = createWidgetHistorySnapshot(ids, options)
-    recordWidgetHistorySnapshot(name, oldSnapshot, newSnapshot)
-    return result
+    try {
+      const result = mutate()
+      const newSnapshot = createWidgetHistorySnapshot(ids, options)
+      recordWidgetHistorySnapshot(name, oldSnapshot, newSnapshot, options.mergeSession)
+      return result
+    } catch (error) {
+      // 外部配置和平台Store不共享事务，首次编辑或登记失败也必须恢复受影响部件。
+      applyWidgetHistorySnapshot(oldSnapshot)
+      throw error
+    }
   }
 
   /**
@@ -1205,6 +1216,7 @@ export const useSceneWidgetStore = defineStore('sceneWidgetStore', () => {
     vector2: { clientX: number; clientY: number },
   ) => {
     // 拖入组件安装期间若整场景被替换或清空，迟到的创建结果不能污染新场景。
+    getWidgetCommandPort().assertCanEdit?.()
     const generation = widgetRestoreGeneration
     const { packageName, keyName } = modelData
     const widgetInstalled = await installWidget(packageName, keyName)
@@ -1212,6 +1224,7 @@ export const useSceneWidgetStore = defineStore('sceneWidgetStore', () => {
     const config = await loadConfig(packageName, keyName)
     if (!config || generation !== widgetRestoreGeneration) return null
 
+    getWidgetCommandPort().assertCanEdit?.()
     const component = new config.default()
 
     if (modelData.preset?.option) {
@@ -2126,6 +2139,8 @@ export const useSceneWidgetStore = defineStore('sceneWidgetStore', () => {
     createWidgetPreviewSnapshot,
     restoreWidgetPreviewSnapshot,
     createWidget,
+    /** 拖拽等延迟写入按恢复代次失效，防止同编号新场景被旧回调污染。 */
+    getWidgetRestoreGeneration: () => widgetRestoreGeneration,
     loadSavedWidgets,
     appendSavedWidgets,
 

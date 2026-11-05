@@ -2,7 +2,8 @@ import type { SceneDefinition, SceneLayer } from '@/scene-platform'
 import type { GisTileDataType, ListGisTileRes } from '@/servers/manual/gis/api'
 import { appLogger } from '@/utils/logger'
 
-export const EDITOR_GIS_SOURCE_HOST = 'http://192.168.10.110:58000/gis-source'
+// 部署地址由环境提供；默认走同源网关，避免固定内网主机及 HTTPS 页面的混合内容请求。
+export const EDITOR_GIS_SOURCE_HOST = (import.meta.env.VITE_GIS_SOURCE_URL?.trim() || '/gis-source').replace(/\/+$/, '')
 
 export interface EditorGisTileApi {
   /** 与 GIS 接口契约共用数据类型，避免适配器接受后端未定义的查询值。 */
@@ -106,10 +107,14 @@ const normalizeTilePathForMatching = (path: string): string =>
 const normalizeLayerUrlPathForMatching = (url?: string): string | null => {
   if (!url) return null
 
-  const withoutHost = url.startsWith(EDITOR_GIS_SOURCE_HOST)
-    ? url.slice(EDITOR_GIS_SOURCE_HOST.length)
-    : url
-  return normalizeTilePathForMatching(withoutHost)
+  // 旧场景可能保存另一个部署主机的完整地址，匹配只依赖路径和稳定 tileId。
+  try {
+    const path = new URL(url, 'https://gis.invalid').pathname
+    const prefix = new URL(EDITOR_GIS_SOURCE_HOST, 'https://gis.invalid').pathname.replace(/\/+$/, '')
+    return normalizeTilePathForMatching(path.startsWith(`${prefix}/`) ? path.slice(prefix.length) : path)
+  } catch {
+    return null
+  }
 }
 
 const isReadyTileDirectory = (tile: GisTileRecord): boolean => {
@@ -134,16 +139,12 @@ const isReadyTileDirectory = (tile: GisTileRecord): boolean => {
 const pickDefaultSatelliteTile = (tiles: readonly GisTileRecord[]): GisTileRecord | null =>
   tiles.find(isReadyTileDirectory) ?? null
 
-const resolveMaximumTileLevel = (tile: GisTileRecord): number => {
+const resolveMaximumTileLevel = (tile: GisTileRecord, configuredLimit?: unknown): number => {
   const rawMaximumLevel = toFiniteNumber(tile.level)
-  if (rawMaximumLevel === null) return DEFAULT_LOCAL_TILE_MAXIMUM_LEVEL
-
-  /**
-   * 当前后端的 level 表示数据最高层级，但真实目录可能尚未发布到该层。
-   * 已验证文昌市 12-17 层可访问，18-19 层不稳定，因此编辑器默认底图先保守封顶到 17。
-   * 这样能优先恢复可见地图，并避免首屏产生大量无效高层级请求。
-   */
-  return Math.max(0, Math.min(Math.floor(rawMaximumLevel), DEFAULT_LOCAL_TILE_MAXIMUM_LEVEL))
+  const dataLevel = Math.max(0, Math.floor(rawMaximumLevel ?? DEFAULT_LOCAL_TILE_MAXIMUM_LEVEL))
+  const limit = toFiniteNumber(configuredLimit)
+  // 数据集层级由接口声明，保留用户已保存的更低上限，不将单一样本的 17 级推广为业务规则。
+  return limit !== null && limit >= 0 ? Math.min(dataLevel, Math.floor(limit)) : dataLevel
 }
 
 const resolveMinimumTileLevel = (): number => {
@@ -201,7 +202,7 @@ export const createEditorGisLocalImageryLayerOptions = (
 
   if (!tile) return nextOptions
 
-  const maximumLevel = resolveMaximumTileLevel(tile)
+  const maximumLevel = resolveMaximumTileLevel(tile, previousOptions.maximumLevel)
   const rectangleDegrees = createTileRectangleDegrees(tile)
   nextOptions.tileSize = toFiniteNumber(tile.tileSize) ?? 256
   nextOptions.maximumLevel = maximumLevel

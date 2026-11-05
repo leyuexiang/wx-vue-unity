@@ -46,6 +46,8 @@ export interface WidgetRuntimePort {
  * 仓库不直接认识 CommandBus 或旧 historyModules，既保持二维领域逻辑独立，也确保所有操作共享顺序。
  */
 export interface WidgetCommandPort {
+  /** 在编辑态写入之前检查，回放和运行态恢复由端口自身放行。 */
+  assertCanEdit?: () => void
   executeWidgetCommand: (command: WidgetCommand) => void
   isApplyingWidgetHistory: () => boolean
 }

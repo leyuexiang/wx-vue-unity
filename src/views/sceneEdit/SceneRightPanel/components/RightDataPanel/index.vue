@@ -3,6 +3,7 @@
   <div
     class="scene-edit-property-content scene-edit-right-data-panel"
     data-scene-right-panel="true"
+    :inert="Boolean(editorSceneOperation) || undefined"
   >
     <template v-if="editableConfig && selectionKind !== 'none'">
       <!-- 成对翻页仍使用现有请求面板；此区域只保存分页参数和响应路径的适配关系。 -->
@@ -412,6 +413,7 @@
     :config="publicRequestDraft"
     :global-config="sceneRequestStore.sceneRequestGlobalConfig"
     :show-name-field="true"
+    defer-confirmation
     :name-value="publicRequestDraft.name"
     @update:name="publicRequestDraft.name = $event"
     @confirm-global="handleGlobalRequestConfigConfirm"
@@ -449,6 +451,7 @@ import ScenePropertyRichTextBlock from '@/components/ScenePropertyRichTextBlock/
 import { ArrowDown, Delete } from '@element-plus/icons-vue'
 import { computed } from 'vue'
 import type { CommandBus } from '@/scene-platform'
+import { editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
 import type {
   ScenePropertyMappingListItem,
   ScenePropertyMappingListVariant,

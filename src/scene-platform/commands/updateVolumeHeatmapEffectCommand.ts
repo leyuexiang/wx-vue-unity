@@ -46,6 +46,7 @@ export const createUpdateVolumeHeatmapEffectCommand = ({
     objectId,
     getTransform: () => nextTransform,
     mergeKey,
+    mergeSession: mergeKey,
     getEffect: () => nextEffect,
     execute: (store) => {
       if (previousEffect === null) {

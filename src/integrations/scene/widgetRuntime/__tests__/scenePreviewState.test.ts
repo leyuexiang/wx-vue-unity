@@ -215,6 +215,8 @@ describe('editor preview widget transaction', () => {
       () => null,
     )
     const enterPromise = previewHost.enterPreview()
+    // 进入流程先等待编辑模式切换，需等初始化Promise建立后再模拟中途退出。
+    await vi.waitFor(() => expect(sceneApi.scenePreviewModules.setScenePreview).toHaveBeenCalledTimes(1))
 
     setWidgetVisibilityByIds(['widget-1'], false)
     previewHost.exitPreview()

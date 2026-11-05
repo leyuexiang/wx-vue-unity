@@ -3,6 +3,7 @@ import type { WidgetCanvasConfig } from '@/types/threeScene'
 export interface SceneStageCommandContext {
   /** 应用纯舞台尺寸快照，调用方负责写入二维仓库并刷新视口。 */
   applyWidgetCanvasSize: (size: WidgetCanvasConfig) => void
+  captureWidgetCanvasSize?: () => WidgetCanvasConfig
 }
 
 /**
@@ -20,6 +21,10 @@ export const createSceneStageCommand = (
   const next = structuredClone(newSize)
   return {
     name: 'Update Scene Stage Size',
+    captureRollback: context.captureWidgetCanvasSize ? () => {
+      const size = structuredClone(context.captureWidgetCanvasSize!())
+      return () => context.applyWidgetCanvasSize(size)
+    } : undefined,
     undo: () => context.applyWidgetCanvasSize(previous),
     redo: () => context.applyWidgetCanvasSize(next),
   }

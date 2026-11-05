@@ -43,6 +43,5 @@ export const updateSceneMediaServer = (value: string) => {
   if (!host || host.getStore().getScene().settings.mediaServerId === value) return
   host.getCommandBus().execute(createUpdateSceneSettingsCommand({
     settings: { ...host.getStore().getScene().settings, mediaServerId: value },
-    mergeKey: 'scene-media-server',
   }))
 }

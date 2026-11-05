@@ -106,6 +106,7 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
       objects: scene.objects,
       resources: scene.resources,
       ...(scene.geospatial ? { geospatial: scene.geospatial } : {}),
+      ...(scene.streaming ? { streaming: scene.streaming } : {}),
     }
     const response = await this.send<UnitySceneSnapshotDto, unknown>('editor.v1.scene.loadDraft', snapshot)
     this.assertSuccess(response)

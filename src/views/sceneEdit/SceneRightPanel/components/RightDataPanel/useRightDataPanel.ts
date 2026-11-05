@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, onMounted, reactive, ref, useTemplateRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, useTemplateRef } from 'vue'
 import { debounce } from 'lodash-es'
 import { ElMessage } from 'element-plus'
 import type {
@@ -12,6 +12,7 @@ import type {
   PublicRequestReferenceConfig,
   RequestGlobalConfig,
 } from '@/types/data-config'
+import { getDataConfigRequests, syncDataConfigRequestMirror } from '@/types/data-config'
 import { CHART_AUTO_MEASURE_FIELD_LIMIT, isChartBindingRule } from '@/types/data-config'
 import {
   createEmptyRequestGlobalConfig,
@@ -42,6 +43,9 @@ import {
   getActiveSceneViewportHost,
   subscribeActiveSceneViewportHost,
 } from '@/integrations/scene/editorScenePlatformHost'
+import { editorSceneOperation, subscribeEditorSceneBeforeOperation } from '@/integrations/scene/editorSceneOperationGate'
+import { updateEditorSceneRequestGlobalConfig } from '@/integrations/scene/editorSceneGlobalStateAdapter'
+import { updateEditorScenePublicRequests, type PublicRequestBindingChange } from '@/integrations/scene/editorScenePublicRequestAdapter'
 import { resolveEditorSceneObjectIdFromLegacyEngineId } from '@/integrations/scene/editorSceneRuntimeObjectIdResolver'
 import {
   getEditorSceneObjectDataConfig,
@@ -197,6 +201,7 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
   const sceneRequestStore = useSceneRequestStore()
   const scenePlatformStore = ref<SceneStore | null>(null)
   const scenePlatformStoreRevision = ref(0)
+  let sceneLoadRevision = 0
 
   const editableConfig = ref<ComponentDataConfig | null>(null)
   /** 多请求列表与当前活动项。活动项沿用原有面板控件，切换时只替换该引用。 */
@@ -229,6 +234,7 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
   const fileInputRef = ref<HTMLInputElement | null>(null)
   const datasetDialogRef = useTemplateRef<InstanceType<typeof SetDatasetDialog>>('datasetDialogRef')
   const publicRequestDialogVisible = ref(false)
+  let publicRequestGlobalDraft: RequestGlobalConfig | undefined
   const ajaxConfigDialogVisible = ref(false)
   const filterEditorVisible = ref(false)
   const publicRequestDraft = reactive<PublicRequestConfig>(createEmptyPublicRequest())
@@ -437,7 +443,10 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
 
     if (!nextStore) return
 
-    stopScenePlatformStoreSubscription = nextStore.subscribe(refreshScenePlatformStoreRevision)
+    stopScenePlatformStoreSubscription = nextStore.subscribe((event) => {
+      if (event.type === 'sceneLoaded') sceneLoadRevision++
+      refreshScenePlatformStoreRevision()
+    })
   }
 
   const selectedWidget = computed(() => {
@@ -579,7 +588,9 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
   }
 
   const setCurrentTargetDataConfig = (dataConfig: ComponentDataConfig | null) => {
+    if (editorSceneOperation.value) return
     if (selectedWidget.value) {
+      if (getWidgetPanelLockState(selectedWidget.value.id).effectiveLocked) return
       setWidgetDataConfigById(selectedWidget.value.id, dataConfig)
       return
     }
@@ -588,12 +599,12 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
        * 已迁移对象只写 SceneStore。Three Runtime 会在 objectUpserted 后把 metadata.dataConfig
        * 镜像到旧 userData，页面不再直接调用旧数据配置接口。
        */
-      setEditorSceneObjectDataConfig({
-        store: scenePlatformStore.value,
-        commandBus: options.commandBus,
-        objectId: selectedSceneObject.value.id,
-        dataConfig,
-      })
+      const host = getActiveSceneViewportHost()
+      const store = toRaw(scenePlatformStore.value)
+      const objectId = selectedSceneObject.value.id
+      const commandBus = host && host.getStore() === store ? host.getCommandBus() : options.commandBus
+      if (!commandBus || !store || store.isObjectEffectivelyLocked(objectId)) return
+      setEditorSceneObjectDataConfig({ store, commandBus, objectId, dataConfig })
       return
     }
     if (selectedMesh.value) {
@@ -992,7 +1003,7 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
 
   const statusClass = (status: string) => createFieldStatusClass(status)
 
-  const persistConfig = () => {
+  const preparePersistedConfig = () => {
     if (!editableConfig.value || hydrating.value) return
     if (editableConfig.value.request.type === 'static' && staticJsonError.value) return
 
@@ -1028,13 +1039,31 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
       ElMessage.warning(`目标字段“${duplicateTargetFields.join('、')}”已被其它请求占用`)
       return
     }
-    const persistedConfig = buildRightDataPanelPersistedConfig(prepared, requestItems.value)
-    setCurrentTargetDataConfig(persistedConfig)
+    return buildRightDataPanelPersistedConfig(prepared, requestItems.value)
+  }
+  const persistConfig = () => {
+    const config = preparePersistedConfig()
+    if (config) setCurrentTargetDataConfig(config)
   }
 
-  const persistSoon = debounce(persistConfig, 300)
+  const draftOwner = () => ({
+    host: getActiveSceneViewportHost(),
+    sceneLoadRevision,
+    selection: selectionKey.value,
+    initialization: initializationRevision.value,
+  })
+  const isCurrentDraft = (owner: ReturnType<typeof draftOwner>) =>
+    owner.host === getActiveSceneViewportHost() && owner.sceneLoadRevision === sceneLoadRevision &&
+    owner.selection === selectionKey.value && owner.initialization === initializationRevision.value
 
-  const validateStaticJsonSoon = debounce(() => {
+  // 定时器只结算排程时的草稿，切换对象或同编号重载后不能拿新表单补写旧请求。
+  const pendingPersist = debounce((owner: ReturnType<typeof draftOwner>) => {
+    if (!editorSceneOperation.value && isCurrentDraft(owner)) persistConfig()
+  }, 300)
+  const persistSoon = () => pendingPersist(draftOwner())
+
+  const pendingStaticValidation = debounce((owner: ReturnType<typeof draftOwner>, requestId: string) => {
+    if (editorSceneOperation.value || !isCurrentDraft(owner) || activeRequestId.value !== requestId) return
     if (!editableConfig.value || editableConfig.value.request.type !== 'static') return
     const validation = validateRightDataPanelStaticPayload(
       staticJsonText.value,
@@ -1047,6 +1076,41 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
     }
     staticJsonError.value = validation.errorMessage
   }, 400)
+  const validateStaticJsonSoon = () => pendingStaticValidation(draftOwner(), activeRequestId.value)
+  let committingPublicRequest = false
+  const flushPendingConfig = () => {
+    if (committingPublicRequest) return
+    pendingStaticValidation.flush()
+    pendingPersist.flush()
+  }
+  const stopBeforeOperation = subscribeEditorSceneBeforeOperation(flushPendingConfig)
+
+  const commitPublicRequestChange = async (nextList: PublicRequestConfig[], publicRequestId: string | null) => {
+    if (editorSceneOperation.value || hydrating.value) return false
+    let binding: PublicRequestBindingChange | undefined
+    if (editableConfig.value?.request.type === 'public') {
+      const config = preparePersistedConfig()
+      if (!config) return false
+      const request = getDataConfigRequests(config).find(item => item.id === activeRequestId.value)
+      if (!request || request.request.type !== 'public') return false
+      request.request.config = { ...request.request.config, publicRequestId }
+      syncDataConfigRequestMirror(config)
+      if (selectedWidget.value) binding = { kind: 'widget', id: selectedWidget.value.id, dataConfig: config }
+      else if (selectedSceneObject.value) binding = { kind: 'sceneObject', id: selectedSceneObject.value.id, dataConfig: config }
+      else throw new Error('当前对象尚未接入场景草稿，无法联动公共接口')
+    }
+    // 当前请求的待提交字段随联合命令一起提交，避免门禁结算时再登记一条历史。
+    pendingStaticValidation.cancel()
+    pendingPersist.cancel()
+    committingPublicRequest = true
+    try {
+      return await updateEditorScenePublicRequests(
+        nextList, binding, publicRequestDialogVisible.value ? publicRequestGlobalDraft : undefined,
+      )
+    } finally {
+      committingPublicRequest = false
+    }
+  }
 
   const syncPreviewFromLatestRaw = () => {
     if (!editableConfig.value || latestRequestRaw.value === null) return
@@ -1347,7 +1411,12 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
   }
 
   const handleGlobalRequestConfigConfirm = (config: RequestGlobalConfig) => {
-    sceneRequestStore.setSceneRequestGlobalConfig(structuredClone(config))
+    if (publicRequestDialogVisible.value) {
+      // 公共接口弹窗的默认配置随列表和绑定一起提交。
+      publicRequestGlobalDraft = config
+      return
+    }
+    updateEditorSceneRequestGlobalConfig(config)
   }
 
   const handleAjaxConfigSend = () => {
@@ -1443,7 +1512,12 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
     publicRequestDraft,
     publicRequestDialogVisible,
     scenePublicRequestList: computed(() => sceneRequestStore.scenePublicRequestList),
-    setScenePublicRequestList: sceneRequestStore.setScenePublicRequestList,
+    commitPublicRequestChange,
+    capturePublicRequestTarget: () => {
+      const owner = draftOwner()
+      const requestId = activeRequestId.value
+      return () => isCurrentDraft(owner) && activeRequestId.value === requestId
+    },
     persistSoon,
     handleTestRequest,
     fileInputRef,
@@ -1555,10 +1629,10 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
   onBeforeUnmount(() => {
     // 切换到事件页签前提交待保存映射；必须先于清空平台仓库，避免延迟回调
     // 回退写入旧模型数据，导致事件仍从平台元数据读到请求1的旧配置。
-    validateStaticJsonSoon.flush()
-    persistSoon.flush()
-    validateStaticJsonSoon.cancel()
-    persistSoon.cancel()
+    stopBeforeOperation()
+    flushPendingConfig()
+    pendingStaticValidation.cancel()
+    pendingPersist.cancel()
     stopScenePlatformHostSubscription?.()
     stopScenePlatformHostSubscription = null
     stopScenePlatformStoreSubscription?.()

@@ -1,7 +1,9 @@
 import type { LegacyScenePanelStateProvider } from './editorSceneSettingsAdapter'
 import type { SceneDefinition } from '@/scene-platform'
+import type { SceneSaveEdits } from '@/scene-platform/core/sceneSaveEdits'
 import type { WidgetSceneFragment } from './widgetRuntime/widgetSceneFragment'
 import { captureEditorSceneDefinitionSnapshot } from './editorSceneSaveAdapter'
+import { getActiveSceneViewportHost } from './editorScenePlatformHost'
 import {
   createSceneFourPackageDocuments,
   parseSceneFourPackagePayload,
@@ -71,6 +73,9 @@ const normalizeRequiredCategory = (value: string | undefined) => value?.trim() |
 const createTemplateRequestBody = (
   scene: SceneDefinition,
   form: EditorDim3dSceneTemplateForm,
+  deletedObjectIds?: ReadonlySet<string>,
+  editedHierarchyIds?: ReadonlySet<string>,
+  saveEdits?: SceneSaveEdits,
 ): Dim3dSceneSnapshotTemplateBody => {
   const name = form.name.trim()
   if (!name) throw new Error('请输入模板名称')
@@ -85,6 +90,10 @@ const createTemplateRequestBody = (
   const sourcePackages = parseSceneFourPackagePayload(preserveUneditedThreeDDomain(
     scene.id,
     serializeSceneFourPackageDocuments(createSceneFourPackageDocuments(scene)),
+    undefined,
+    editedHierarchyIds,
+    deletedObjectIds,
+    saveEdits,
   ))
   /**
    * saveScope 不能只作为元数据交给后端：前端先生成模板工作副本并完成域、依赖和引用裁剪，
@@ -137,6 +146,10 @@ export const saveActiveEditorSceneAsTemplate = async (
   form: EditorDim3dSceneTemplateForm,
   options: SaveEditorSceneAsTemplateOptions = {},
 ) => {
+  const host = options.scene === undefined ? getActiveSceneViewportHost() : null
+  const deletedObjectIds = host ? new Set(host.getStore().getDeletedObjectIds()) : undefined
+  const editedHierarchyIds = host ? new Set(host.getStore().getHierarchyEditedIds()) : undefined
+  const saveEdits = host?.getStore().captureSaveEdits()
   const scene = await captureEditorSceneDefinitionSnapshot({
     scene: options.scene,
     sceneApi: options.sceneApi,
@@ -147,7 +160,7 @@ export const saveActiveEditorSceneAsTemplate = async (
       ? { sceneGlobalState: options.sceneGlobalState }
       : {}),
   })
-  const body = createTemplateRequestBody(scene, form)
+  const body = createTemplateRequestBody(scene, form, deletedObjectIds, editedHierarchyIds, saveEdits)
   const response = await (options.saveTemplate ?? saveDim3dSceneSnapshotAsTemplate)(body)
   return assertTemplateSaveSucceeded(response, form.saveScope)
 }

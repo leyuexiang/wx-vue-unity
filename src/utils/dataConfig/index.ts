@@ -168,6 +168,8 @@ type AdapterCacheEntry = {
 }
 
 const adapterCache = new Map<string, AdapterCacheEntry>()
+// 回放会用新部件快照替换组件，同编号的新对象不能命中旧配置。
+const widgetConfigCache = new WeakMap<BaseWidgetConfig, { version: number; value: ComponentDataConfig | null }>()
 
 const getWidgetSelectionKey = (widgetId: string) => `widget:${widgetId}`
 const getMeshSelectionKey = (uuid: string) => `mesh:${uuid}`
@@ -527,15 +529,16 @@ export const getWidgetDataConfig = (component: BaseWidgetConfig) => {
 export const getWidgetDataConfigById = (widgetId?: string | null): ComponentDataConfig | null => {
   if (!widgetId) return null
 
-  const selectionKey = getWidgetSelectionKey(widgetId)
-  const cached = adapterCache.get(selectionKey)
-  if (cached) return cloneDeep(cached.value)
-
-  const widget = useSceneWidgetStore().getWidgetById(widgetId)
+  const store = useSceneWidgetStore()
+  const widget = store.getWidgetById(widgetId)
   if (!widget) return null
 
+  const version = store.widgetRenderVersionMap?.[widgetId] ?? 0
+  const cached = widgetConfigCache.get(widget.component)
+  if (cached?.version === version) return cloneDeep(cached.value)
+
   const normalized = getWidgetDataConfig(widget.component)
-  adapterCache.set(selectionKey, { key: selectionKey, value: normalized })
+  widgetConfigCache.set(widget.component, { version, value: normalized })
   return cloneDeep(normalized)
 }
 
@@ -635,6 +638,11 @@ export const setSceneObjectDataConfigByUuid = (
 export const invalidateSelectedDataConfigCache = (key?: string | null) => {
   const targetKey = key || getSelectionKey()
   if (!targetKey) return
+  if (targetKey.startsWith('widget:')) {
+    const widget = useSceneWidgetStore().getWidgetById(targetKey.slice('widget:'.length))
+    if (widget) widgetConfigCache.delete(widget.component)
+    return
+  }
   adapterCache.delete(targetKey)
 }
 
@@ -998,7 +1006,7 @@ const syncChartStyleOptionAfterDataConfig = (component: BaseWidgetConfig) => {
  * - 图表：只保留样式模板，真实数据不反写到 `chartOption`，避免基础面板和样式 JSON 再暴露数据；
  * - 控件：同步完整运行时 option，确保 `value / options / visible` 与当前映射结果一致。
  */
-const syncWidgetOptionFromDataConfig = (component: BaseWidgetConfig) => {
+export const syncWidgetOptionFromDataConfig = (component: BaseWidgetConfig) => {
   if (!component.dataConfig) return
 
   if (component.info.packageName === 'Chart') {

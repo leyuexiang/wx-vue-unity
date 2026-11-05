@@ -16,6 +16,7 @@ const notifyActiveSceneViewportHostChange = () => {
  * 只能通过这个薄适配层拿到平台 Store。这里不创建 Store、不修改平台核心，只保存当前页面宿主引用。
  */
 export const setActiveSceneViewportHost = (host: ViewportHost) => {
+  if (activeSceneViewportHost !== host) activeSceneViewportHost?.getCommandBus().breakHistoryMerge()
   activeSceneViewportHost = host
   notifyActiveSceneViewportHostChange()
 }
@@ -39,6 +40,7 @@ export const refreshActiveSceneViewportHost = (host?: ViewportHost | null) => {
  */
 export const clearActiveSceneViewportHost = (host?: ViewportHost | null) => {
   if (host && activeSceneViewportHost !== host) return
+  activeSceneViewportHost?.getCommandBus().breakHistoryMerge()
   activeSceneViewportHost = null
   notifyActiveSceneViewportHostChange()
 }

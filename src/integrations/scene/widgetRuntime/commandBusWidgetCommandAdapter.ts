@@ -1,8 +1,11 @@
+import { editorSceneOperation } from '../editorSceneOperationGate'
 import type { CommandBus, SceneCommand } from '@/scene-platform'
-import type WidgetCommand from '@/integrations/scene/widgetRuntime/widgetCommand'
+import WidgetCommand from '@/integrations/scene/widgetRuntime/widgetCommand'
 import type { WidgetCommandPort } from './ports'
 
-type CommandBusGetter = () => Pick<CommandBus, 'recordExecuted'> | null | undefined
+type CommandBusGetter = () => (Pick<CommandBus, 'recordExecuted'> & Partial<Pick<CommandBus, 'getIsPending'>>) | null | undefined
+const sourceWidgetCommand = Symbol('二维部件快照')
+type WidgetSceneCommand = SceneCommand & { [sourceWidgetCommand]?: WidgetCommand }
 
 /**
  * 将“状态已经由二维仓库写入”的 WidgetCommand 包装成平台命令。
@@ -11,11 +14,17 @@ type CommandBusGetter = () => Pick<CommandBus, 'recordExecuted'> | null | undefi
  * 首次登记通过 CommandBus.recordExecuted 完成，不调用 execute，避免重复应用新快照和冗余渲染更新。
  */
 export const createAlreadyAppliedSceneCommand = (
-  widgetCommand: Pick<WidgetCommand, 'name' | 'redo' | 'undo'>,
+  widgetCommand: Pick<WidgetCommand, 'name' | 'redo' | 'undo'> & Partial<Pick<WidgetCommand, 'captureRollback'>>,
   runAsWidgetHistory: (apply: () => void) => void,
 ): SceneCommand => {
-  return {
+  const sceneCommand: WidgetSceneCommand = {
     name: widgetCommand.name,
+    // 当前适配入口只写二维部件或二维舞台尺寸，回放不需要确认三维投影。
+    confirmationScope: 'local',
+    captureRollback: widgetCommand.captureRollback ? () => {
+      const restore = widgetCommand.captureRollback?.()
+      return restore ? () => runAsWidgetHistory(restore) : undefined
+    } : undefined,
     execute: () => {
       runAsWidgetHistory(() => widgetCommand.redo())
     },
@@ -23,6 +32,15 @@ export const createAlreadyAppliedSceneCommand = (
       runAsWidgetHistory(() => widgetCommand.undo())
     },
   }
+  if (widgetCommand instanceof WidgetCommand && widgetCommand.mergeSession !== undefined) {
+    sceneCommand.mergeSession = widgetCommand.mergeSession
+    sceneCommand[sourceWidgetCommand] = widgetCommand
+    sceneCommand.mergeWith = (next: WidgetSceneCommand) => {
+      const snapshot = next[sourceWidgetCommand]
+      return snapshot !== undefined && widgetCommand.mergeWith(snapshot)
+    }
+  }
+  return sceneCommand
 }
 /**
  * 创建二维命令总线端口。
@@ -45,6 +63,13 @@ export const createCommandBusWidgetCommandPort = (
   }
 
   return {
+    assertCanEdit: () => {
+      if (applyingDepth) return
+      const operation = editorSceneOperation.value
+      if (getCommandBus()?.getIsPending?.() || (operation && operation !== 'createObject' && operation !== 'widgetEdit')) {
+        throw new Error('场景正在处理其他操作，请完成后再编辑部件')
+      }
+    },
     executeWidgetCommand: (command) => {
       getCommandBus()?.recordExecuted(
         createAlreadyAppliedSceneCommand(command, runAsWidgetHistory),

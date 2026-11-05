@@ -1,4 +1,4 @@
-import { cloneDeep } from 'lodash-es'
+import { cloneDeep, isEqual } from 'lodash-es'
 import type BaseWidgetConfig from '@/packages/components/BaseWidgetConfig'
 import type { WidgetLayerNode } from '@/types/threeScene'
 
@@ -25,6 +25,8 @@ export interface WidgetHistorySnapshot {
 export interface WidgetHistoryCommandContext {
   /** 把纯快照应用回二维仓库，命令本身不直接依赖状态管理实现。 */
   applyWidgetHistorySnapshot: (snapshot: WidgetHistorySnapshot) => void
+  /** 捕获真正受影响的配置、层级和选择，保留与命令无关的部件引用。 */
+  createWidgetHistorySnapshot?: (ids: string[], options: { includeLayerTree: boolean }) => WidgetHistorySnapshot
 }
 
 /**
@@ -36,8 +38,9 @@ export interface WidgetHistoryCommandContext {
  */
 export default class WidgetCommand {
   readonly name: string
+  readonly mergeSession?: symbol
   private readonly oldSnapshot: WidgetHistorySnapshot
-  private readonly newSnapshot: WidgetHistorySnapshot
+  private newSnapshot: WidgetHistorySnapshot
   private readonly context: WidgetHistoryCommandContext
 
   constructor(
@@ -45,11 +48,35 @@ export default class WidgetCommand {
     oldSnapshot: WidgetHistorySnapshot,
     newSnapshot: WidgetHistorySnapshot,
     context: WidgetHistoryCommandContext,
+    mergeSession?: symbol,
   ) {
     this.name = name
     this.oldSnapshot = cloneDeep(oldSnapshot)
     this.newSnapshot = cloneDeep(newSnapshot)
     this.context = context
+    this.mergeSession = mergeSession
+  }
+
+  /** 同一输入会话只合并单部件属性，且上一笔末态必须与下一笔基线一致。 */
+  mergeWith(next: WidgetCommand): boolean {
+    const current = this.newSnapshot
+    const before = next.oldSnapshot
+    if (this.mergeSession === undefined || this.mergeSession !== next.mergeSession ||
+        this.context.applyWidgetHistorySnapshot !== next.context.applyWidgetHistorySnapshot ||
+        current.widgetLayerTree || before.widgetLayerTree ||
+        current.widgetIds.length !== 1 || before.widgetIds.length !== 1 ||
+        current.widgetIds[0] !== before.widgetIds[0] || !isEqual(current.widgets, before.widgets)) return false
+    this.newSnapshot = next.newSnapshot
+    return true
+  }
+
+  captureRollback(): (() => void) | undefined {
+    if (!this.context.createWidgetHistorySnapshot) return undefined
+    const ids = [...new Set([...this.oldSnapshot.widgetIds, ...this.newSnapshot.widgetIds])]
+    const snapshot = this.context.createWidgetHistorySnapshot(ids, {
+      includeLayerTree: !!(this.oldSnapshot.widgetLayerTree || this.newSnapshot.widgetLayerTree),
+    })
+    return () => this.context.applyWidgetHistorySnapshot(snapshot)
   }
 
   undo(): void {

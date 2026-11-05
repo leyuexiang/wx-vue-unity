@@ -1,6 +1,7 @@
 import type { SceneObject, SceneStreamingConfig } from '../core/types'
 import { pruneSceneStreamingChunkObjectReferences } from '../core/sceneDefinition'
 import type { SceneCommand } from './types'
+import { captureSceneObjectMembershipRollback } from './sceneObjectRollback'
 
 /** 删除命令需要跨撤销周期保留区块配置；复制纯 JSON 快照，避免后续编辑原地修改历史。 */
 const cloneStreamingConfig = (
@@ -22,6 +23,7 @@ export function createDeleteObjectCommand(objectId: string): SceneCommand {
 
   return {
     name: 'DeleteObject',
+    captureRollback: (store) => captureSceneObjectMembershipRollback(store, new Set([objectId]), removed ? [removed.object] : []),
     execute: (store) => {
       if (store.isObjectEffectivelyLocked(objectId)) {
         throw new Error(`Locked object cannot be deleted: ${objectId}`)

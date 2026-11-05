@@ -72,7 +72,7 @@
             </button>
           </el-tooltip>
           <el-tooltip
-            :content="props.saveLoading ? '保存中' : '保存'"
+            :content="props.saveLoading ? '保存中' : props.saveDirty ? '保存未提交的改动' : '保存'"
             placement="bottom"
             :show-after="160"
             popper-class="scene-edit-popover"
@@ -275,6 +275,8 @@ const props = withDefaults(
     saveDisabled?: boolean
     /** 保存中的无障碍状态和提示文案，与真实接口 Promise 生命周期保持一致。 */
     saveLoading?: boolean
+    /** 已确认的编辑尚未写入服务端。 */
+    saveDirty?: boolean
     /** 由统一编辑器能力模型控制；租户端不挂载该入口，也不渲染任何同类可操作节点。 */
     showSaveAsTemplate?: boolean
     /** 文件入口与统一能力模型一致；会话未就绪或失锁时禁止选择和应用。 */

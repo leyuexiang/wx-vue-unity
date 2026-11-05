@@ -1,5 +1,6 @@
 import type { SceneObject } from '../core/types'
 import type { SceneCommand } from './types'
+import { captureSceneObjectUpdateRollback } from './sceneObjectRollback'
 
 export interface UpdateObjectExtensionsPatch {
   metadata?: Record<string, unknown>
@@ -45,20 +46,23 @@ const mergePatch = (
  * 创建对象可序列化扩展字段更新命令。
  *
  * 设备编号、可拾取和对象专属面板配置属于编辑器扩展数据，统一落在 `metadata`。
- * 命令以浅合并方式只更新本次字段，避免面板一次修改覆盖其它业务元数据；连续编辑同一对象
- * 会合并为一条历史记录，运行时从 Store 收到完整对象快照后再同步旧引擎兼容字段。对于
+ * 命令以浅合并方式只更新本次字段。仅显式提供同一字段的编辑会话时合并历史，运行时从 Store
+ * 收到完整对象快照后再同步旧引擎兼容字段。对于
  * 原先不在 SceneObject 内的旧配置，可选的 `undoMetadata` 会在撤销时补成持久化基线。
  */
 export function createUpdateObjectExtensionsCommand(
   objectId: string,
   patch: UpdateObjectExtensionsPatch,
+  mergeSession?: symbol,
 ): SceneCommand {
   let previousObject: SceneObject | null = null
   let nextPatch = patch
 
   const command: UpdateObjectExtensionsCommand = {
     name: 'UpdateObjectExtensions',
+    captureRollback: (store) => captureSceneObjectUpdateRollback(store, objectId),
     objectId,
+    mergeSession,
     getPatch: () => nextPatch,
     execute: (store) => {
       if (!previousObject) previousObject = store.getObject(objectId)

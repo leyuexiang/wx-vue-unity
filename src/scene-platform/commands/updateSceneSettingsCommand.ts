@@ -36,6 +36,7 @@ export function createUpdateSceneSettingsCommand(
   const command: UpdateSceneSettingsCommand = {
     name: 'UpdateSceneSettings',
     mergeKey: options.mergeKey,
+    mergeSession: options.mergeKey,
     getSettings: () => nextSettings,
     execute: (store) => {
       if (!previousSettings) previousSettings = store.getScene().settings

@@ -74,6 +74,8 @@ const props = defineProps<{
   showNameField?: boolean
   nameValue?: string
   saveBtnText?: string
+  /** 联合事务由父级确认成功后关闭弹窗并发送请求。 */
+  deferConfirmation?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -160,6 +162,7 @@ function handleSaveAndSend() {
   }
   emit('confirmGlobal', cloneDeep(globalDraft.value))
   emit('confirm', confirmedConfig, props.showNameField ? normalizedName : undefined)
+  if (props.deferConfirmation) return
   emit('sendRequest')
   emit('update:visible', false)
 }

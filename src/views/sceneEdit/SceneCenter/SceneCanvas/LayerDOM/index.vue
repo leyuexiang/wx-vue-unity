@@ -3,6 +3,7 @@
     ref="containerRef"
     class="absolute top-0 left-0 w-full h-full pointer-events-none outline-0"
     :tabindex="-1"
+    @mousedown.capture="captureWidgetEdit"
   >
     <div class="scene-edit-widget-viewport">
       <div class="scene-edit-widget-canvas" :style="widgetCanvasStyle">
@@ -135,6 +136,8 @@
 </template>
 
 <script setup lang="ts">
+import { editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
+import { getWidgetPointerSession, type WidgetPointerSession } from '@/integrations/scene/widgetRuntime/widgetPointerSession'
 import { throttle } from 'lodash-es'
 import { useGroupMove, useMove, useResize } from './hooks/useDrag'
 import type { AlignmentGuide, AlignmentRect, WidgetCanvasBounds } from './alignment'
@@ -212,6 +215,21 @@ provideRecordPaginationContext(recordPaginationContext)
  */
 const { orderedWidgets } = storeToRefs(sceneWidgetStore)
 const containerRef = ref<HTMLElement>()
+// 根容器预先取得交互会话，移动、缩放及菜单控件随后登记各自的恢复快照。
+let widgetPointerSession: WidgetPointerSession | undefined
+const captureWidgetEdit = (event: MouseEvent) => {
+  if (isPreview.value || event.button !== 0) return
+  // 数字输入可能在失焦时才提交，先交还焦点，再取得拖拽门禁。
+  const focused = document.activeElement
+  if (focused instanceof HTMLElement && focused.closest('[data-widget-base-editor]')) focused.blur()
+  const session = getWidgetPointerSession()
+  if (!session) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    return
+  }
+  widgetPointerSession = session
+}
 const alignmentGuides = ref<AlignmentGuide[]>([])
 const defaultWidgetRenderState = {
   option: {},
@@ -496,8 +514,9 @@ const setAlignmentGuides = (guides: AlignmentGuide[]) => {
 watch(
   () => isPreview.value,
   (newVal) => {
-    // 预览模式下，清空选中的元素
+    // 进入预览前结束旧拖拽，再清空选择，避免恢复快照重新选中部件。
     if (newVal) {
+      widgetPointerSession?.cancel()
       sceneWidgetStore.clearCurrentWidgetSelection()
     }
   },
@@ -511,6 +530,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  widgetPointerSession?.cancel()
+  widgetPointerSession = undefined
   resizeObserver.disconnect()
   containerRef.value?.removeEventListener('keydown', handleKeyDown)
   document.removeEventListener('mousedown', handleDocumentMouseDown, true)
@@ -579,6 +600,7 @@ const handleWidgetChildDrag = (item: WidgetConfig, payload: PageFrameChildDragPa
   const child = findPageFrameChild(item.component.option as PageFrameOption, payload.childId)
   if (!isPositionablePageFrameChild(child) || child.locked) return
 
+  const oldSnapshot = sceneWidgetStore.createWidgetHistorySnapshot([item.id])
   /** 页面框架内部几何使用局部坐标；显示到画布辅助层前转换为舞台坐标。 */
   const offsetChildGuidesToCanvas = (guides: AlignmentGuide[]) =>
     guides.map<AlignmentGuide>((guide) =>
@@ -612,8 +634,12 @@ const handleWidgetChildDrag = (item: WidgetConfig, payload: PageFrameChildDragPa
     () => {
       // 拖拽过程直接修改当前响应式配置；松开后才失效缓存，避免每一帧重建页面框架实例。
       sceneWidgetStore.bumpWidgetRenderVersion(item.id)
+      sceneWidgetStore.recordWidgetHistorySnapshot(
+        '移动页面框架内部部件', oldSnapshot, sceneWidgetStore.createWidgetHistorySnapshot([item.id]),
+      )
     },
     {
+      onCancel: () => sceneWidgetStore.applyWidgetHistorySnapshot(oldSnapshot),
       movingRect: payload.movingRect,
       excludedWidgetIds: [item.id],
       targets: payload.targets,
@@ -628,7 +654,7 @@ const handleWidgetChildDrag = (item: WidgetConfig, payload: PageFrameChildDragPa
  * 菜单内部使用统一 scale，拖动左/上控制点时同步修正 offset，保持对侧边缘不动。
  */
 const handleWidgetChildResize = (item: WidgetConfig, payload: PageFrameChildResizePayload) => {
-  if (isPreview.value || item.component.info.keyName !== 'VPageMenu') return
+  if (payload.event.button !== 0 || isPreview.value || item.component.info.keyName !== 'VPageMenu') return
   if (sceneWidgetStore.isWidgetLocked(item.id)) return
 
   const child = findPageFrameChild(item.component.option as PageFrameOption, payload.childId)
@@ -639,6 +665,8 @@ const handleWidgetChildResize = (item: WidgetConfig, payload: PageFrameChildResi
   const originOffsetY = child.offsetY
   const originWidth = Math.max(payload.movingRect.w, 1)
   const originHeight = Math.max(payload.movingRect.h, 1)
+  const pointer = getWidgetPointerSession()
+  if (!pointer) return
   const oldSnapshot = sceneWidgetStore.createWidgetHistorySnapshot([item.id])
   const hasLeft = payload.handle.includes('l')
   const hasRight = payload.handle.includes('r')
@@ -646,6 +674,7 @@ const handleWidgetChildResize = (item: WidgetConfig, payload: PageFrameChildResi
   const hasBottom = payload.handle.includes('b')
 
   const handleResizeMove = throttle((event: MouseEvent) => {
+    if (!pointer.isActive()) return
     const delta = sceneWidgetStore.screenDeltaToWidgetCanvasDelta(
       event.clientX - payload.event.clientX,
       event.clientY - payload.event.clientY,
@@ -681,21 +710,15 @@ const handleWidgetChildResize = (item: WidgetConfig, payload: PageFrameChildResi
     sceneWidgetStore.bumpWidgetRenderVersion(item.id)
   }, 16)
 
-  const handleResizeEnd = () => {
-    handleResizeMove.flush()
-    window.removeEventListener('mousemove', handleResizeMove)
-    window.removeEventListener('mouseup', handleResizeEnd)
-    sceneWidgetStore.recordWidgetHistorySnapshot(
-      '调整页面菜单尺寸',
-      oldSnapshot,
-      sceneWidgetStore.createWidgetHistorySnapshot([item.id]),
-    )
-  }
-
   payload.event.preventDefault()
   payload.event.stopPropagation()
-  window.addEventListener('mousemove', handleResizeMove)
-  window.addEventListener('mouseup', handleResizeEnd)
+  pointer.attach({
+    move: handleResizeMove,
+    commit: () => sceneWidgetStore.recordWidgetHistorySnapshot(
+      '调整页面菜单尺寸', oldSnapshot, sceneWidgetStore.createWidgetHistorySnapshot([item.id]),
+    ),
+    rollback: () => sceneWidgetStore.applyWidgetHistorySnapshot(oldSnapshot),
+  })
 }
 
 const handleWidgetMenuIconDrag = (item: WidgetConfig, payload: PageFrameMenuIconDragPayload) => {
@@ -727,6 +750,7 @@ const handleWidgetMenuIconDrag = (item: WidgetConfig, payload: PageFrameMenuIcon
       )
     },
     {
+      onCancel: () => sceneWidgetStore.applyWidgetHistorySnapshot(oldSnapshot),
       movingRect: payload.movingRect,
       excludedWidgetIds: [item.id],
       targets: payload.targets,
@@ -739,7 +763,7 @@ const handleWidgetMenuIconResize = (
   item: WidgetConfig,
   payload: PageFrameMenuIconResizePayload,
 ) => {
-  if (isPreview.value || item.component.info.keyName !== 'VPageMenu') return
+  if (payload.event.button !== 0 || isPreview.value || item.component.info.keyName !== 'VPageMenu') return
   if (sceneWidgetStore.isWidgetLocked(item.id)) return
 
   const child = findPageFrameChild(item.component.option as PageFrameOption, payload.childId)
@@ -749,6 +773,8 @@ const handleWidgetMenuIconResize = (
   const originScale = Math.max(child[scaleKey], PAGE_FRAME_MENU_SCALE_RANGE.min)
   const originWidth = Math.max(payload.movingRect.w, 1)
   const originHeight = Math.max(payload.movingRect.h, 1)
+  const pointer = getWidgetPointerSession()
+  if (!pointer) return
   const oldSnapshot = sceneWidgetStore.createWidgetHistorySnapshot([item.id])
   const hasLeft = payload.handle.includes('l')
   const hasRight = payload.handle.includes('r')
@@ -756,6 +782,7 @@ const handleWidgetMenuIconResize = (
   const hasBottom = payload.handle.includes('b')
 
   const handleResizeMove = throttle((event: MouseEvent) => {
+    if (!pointer.isActive()) return
     const delta = sceneWidgetStore.screenDeltaToWidgetCanvasDelta(
       event.clientX - payload.event.clientX,
       event.clientY - payload.event.clientY,
@@ -785,21 +812,15 @@ const handleWidgetMenuIconResize = (
     sceneWidgetStore.bumpWidgetRenderVersion(item.id)
   }, 16)
 
-  const handleResizeEnd = () => {
-    handleResizeMove.flush()
-    window.removeEventListener('mousemove', handleResizeMove)
-    window.removeEventListener('mouseup', handleResizeEnd)
-    sceneWidgetStore.recordWidgetHistorySnapshot(
-      '调整菜单图标尺寸',
-      oldSnapshot,
-      sceneWidgetStore.createWidgetHistorySnapshot([item.id]),
-    )
-  }
-
   payload.event.preventDefault()
   payload.event.stopPropagation()
-  window.addEventListener('mousemove', handleResizeMove)
-  window.addEventListener('mouseup', handleResizeEnd)
+  pointer.attach({
+    move: handleResizeMove,
+    commit: () => sceneWidgetStore.recordWidgetHistorySnapshot(
+      '调整菜单图标尺寸', oldSnapshot, sceneWidgetStore.createWidgetHistorySnapshot([item.id]),
+    ),
+    rollback: () => sceneWidgetStore.applyWidgetHistorySnapshot(oldSnapshot),
+  })
 }
 
 const handleSelect = (e: MouseEvent, item: WidgetConfig) => {
@@ -862,6 +883,7 @@ const handleGroupMouseDown = (e: MouseEvent) => {
       )
     },
     {
+      onCancel: () => sceneWidgetStore.applyWidgetHistorySnapshot(oldSnapshot),
       movingRect: { ...groupBounds, id: groupId },
       excludedWidgetIds: widgetIds,
       onGuidesChange: setAlignmentGuides,
@@ -984,6 +1006,7 @@ const widgetNudgeDirectionByKey: Record<string, WidgetNudgeDirection> = {
 }
 
 const handleKeyDown = (e: KeyboardEvent) => {
+  if (editorSceneOperation.value) return
   if (isPreview.value) return
   if (e.isComposing || isEditableKeyboardTarget(e.target)) return
 

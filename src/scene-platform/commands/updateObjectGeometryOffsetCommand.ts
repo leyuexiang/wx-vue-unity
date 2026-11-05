@@ -1,5 +1,6 @@
 import type { SceneObject } from '../core/types'
 import type { SceneCommand } from './types'
+import { captureSceneObjectUpdateRollback } from './sceneObjectRollback'
 
 /**
  * 局部三维模型的几何偏移。
@@ -40,20 +41,23 @@ const normalizeOffset = (offset: SceneObjectGeometryOffset): SceneObjectGeometry
 /**
  * 创建几何偏移更新命令。
  *
- * 每次写入只改 metadata.offset，保留设备编号、交互配置等其它编辑器元数据。连续编辑同一对象
- * 的 X/Y/Z 值会合并为一条撤销记录；撤销与重做恢复完整旧对象快照，再由 RuntimeBridge 同步
+ * 每次写入只改 metadata.offset，保留设备编号、交互配置等其它编辑器元数据。连续输入由
+ * 调用方按轴提供编辑会话；撤销与重做恢复快照，再由 RuntimeBridge 同步
  * 真实 Three 几何体，页面层不会直接接触 BufferGeometry（缓冲几何体）。
  */
 export function createUpdateObjectGeometryOffsetCommand(
   objectId: string,
   offset: SceneObjectGeometryOffset,
+  mergeSession?: symbol,
 ): SceneCommand {
   let previousObject: SceneObject | null = null
   let nextOffset = normalizeOffset(offset)
 
   const command: UpdateObjectGeometryOffsetCommand = {
     name: 'UpdateObjectGeometryOffset',
+    captureRollback: (store) => captureSceneObjectUpdateRollback(store, objectId),
     objectId,
+    mergeSession,
     getOffset: () => ({ ...nextOffset }),
     execute: (store) => {
       if (!previousObject) previousObject = store.getObject(objectId)

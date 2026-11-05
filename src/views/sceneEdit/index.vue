@@ -11,6 +11,7 @@
       v-model:inspector-panel="activeInspectorPanel"
       :save-disabled="sceneSaving || !!editorSceneOperation"
       :save-loading="sceneSaving"
+      :save-dirty="sceneOperationRef?.sceneSaveState.dirty"
       :show-save-as-template="editorCapabilities.saveAsTemplate"
       :show-import-scene-json="editorCapabilities.importSceneJson"
       :import-disabled="

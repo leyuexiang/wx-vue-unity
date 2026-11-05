@@ -77,6 +77,7 @@ function createVegetationMutationCommand(
   const command: VegetationMutationCommand = {
     name,
     mergeKey,
+    mergeSession: mergeKey,
     getNextVegetation: () => nextVegetation,
     execute: (store) => {
       if (!initialized) {

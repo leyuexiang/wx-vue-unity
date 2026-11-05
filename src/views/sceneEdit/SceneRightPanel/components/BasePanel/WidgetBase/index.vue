@@ -3,7 +3,12 @@
     <!-- 顶部页签已提供“基础”语义，这里去掉重复标题，保持面板更紧凑。 -->
     <setting-item-box name="名称" :alone="true">
       <setting-item>
-        <ScenePropertyInput v-model="labelModel" placeholder="名称" :disabled="locked" />
+        <ScenePropertyInput
+          v-model="labelDraft"
+          placeholder="名称"
+          :disabled="locked"
+          @change="commitLabel"
+        />
       </setting-item>
     </setting-item-box>
 
@@ -62,7 +67,7 @@
             :step="1"
             :controls="false"
             disabled-scientific
-            @update:model-value="updateSize('w', $event)"
+            @edit-input="(value, session) => updateSize('w', value, session)"
           />
         </setting-item>
         <setting-item name="高度">
@@ -73,7 +78,7 @@
             :step="1"
             :controls="false"
             disabled-scientific
-            @update:model-value="updateSize('h', $event)"
+            @edit-input="(value, session) => updateSize('h', value, session)"
           />
         </setting-item>
       </setting-item-box>
@@ -83,24 +88,24 @@
 
       <setting-item-box name="位置">
         <setting-item name="左">
-          <!-- 位置字段与尺寸字段保持同一纯输入框形态，数据仍直接写回 l/t。 -->
+          <!-- 位置和尺寸使用相同的数字输入框，由父面板统一提交。 -->
           <ScenePropertyNumberInput
-            v-model="data.l"
+            :model-value="data.l"
             placeholder="左"
             :step="1"
             :controls="false"
             disabled-scientific
-            @change="emitAttrChange"
+            @edit-input="(value, session) => updatePosition('l', value, session)"
           />
         </setting-item>
         <setting-item name="上">
           <ScenePropertyNumberInput
-            v-model="data.t"
+            :model-value="data.t"
             placeholder="上"
             :step="1"
             :controls="false"
             disabled-scientific
-            @change="emitAttrChange"
+            @edit-input="(value, session) => updatePosition('t', value, session)"
           />
         </setting-item>
       </setting-item-box>
@@ -117,7 +122,7 @@ import {
 } from '@/utils/widgetAspectRatio'
 import type BaseWidgetConfig from '@/packages/components/BaseWidgetConfig'
 import { getWidgetPanelCanvasConfig } from '@/integrations/scene/widgetPanels'
-import type { PropType } from 'vue'
+import { ref, watch, type PropType } from 'vue'
 import ScenePropertySwitch from '../../PropertyControls/ScenePropertySwitch/index.vue'
 import SceneWidgetAlignControl from '../../PropertyControls/SceneWidgetAlignControl/index.vue'
 
@@ -138,13 +143,13 @@ const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void
   (e: 'update:interactive', value: boolean): void
   (e: 'update:locked', value: boolean): void
-  (e: 'attr-change'): void
+  (e: 'attr-change', patch: Partial<BaseWidgetConfig['attr']>, session?: symbol): void
 }>()
 
-const labelModel = computed({
-  get: () => props.label,
-  set: (value: string) => emit('update:label', value),
-})
+// 文本在输入框内编辑，确认后再写仓库，避免每个字符占用一步历史。
+const labelDraft = ref<string | number>(props.label)
+watch(() => props.label, (label) => { labelDraft.value = label })
+const commitLabel = () => emit('update:label', String(labelDraft.value))
 
 /**
  * 部件显隐作为部件级通用属性，统一回写到 option.visible。
@@ -166,8 +171,10 @@ const interactiveModel = computed({
   set: (value: boolean) => emit('update:interactive', value),
 })
 
-const emitAttrChange = () => {
-  emit('attr-change')
+// 子控件只提交属性变更，由父面板在仓库写入前记录基线。
+const updatePosition = (axis: 'l' | 't', value: number | null | undefined, session?: symbol) => {
+  if (props.locked || typeof value !== 'number' || !Number.isFinite(value)) return
+  emit('attr-change', { [axis]: value }, session)
 }
 
 /** 锁状态由持久化属性派生，切换选中项、撤销和重新打开时无需额外同步。 */
@@ -178,15 +185,15 @@ const aspectLockLabel = computed(() =>
 
 const toggleAspectLock = () => {
   if (props.locked) return
-  toggleWidgetAspectRatio(props.data)
-  emitAttrChange()
+  const attr = { ...props.data }
+  toggleWidgetAspectRatio(attr)
+  emit('attr-change', { aspectRatio: attr.aspectRatio })
 }
 
 /** 两轴一次性提交；空值不写入，保留锁定比例的小数精度。 */
-const updateSize = (axis: 'w' | 'h', value: number | null | undefined) => {
+const updateSize = (axis: 'w' | 'h', value: number | null | undefined, session?: symbol) => {
   if (props.locked || typeof value !== 'number' || !Number.isFinite(value)) return
-  Object.assign(props.data, getWidgetSize(props.data, axis, value))
-  emitAttrChange()
+  emit('attr-change', getWidgetSize(props.data, axis, value), session)
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
@@ -200,41 +207,35 @@ const getCanvasSize = () => {
 }
 
 const alignLeft = () => {
-  props.data.l = 0
-  emitAttrChange()
+  updatePosition('l', 0)
 }
 
 const alignHorizontalCenter = () => {
   const canvas = getCanvasSize()
   if (!canvas) return
-  props.data.l = clamp((canvas.width - Number(props.data.w || 0)) / 2, 0, canvas.width)
-  emitAttrChange()
+  updatePosition('l', clamp((canvas.width - Number(props.data.w || 0)) / 2, 0, canvas.width))
 }
 
 const alignRight = () => {
   const canvas = getCanvasSize()
   if (!canvas) return
-  props.data.l = Math.max(canvas.width - Number(props.data.w || 0), 0)
-  emitAttrChange()
+  updatePosition('l', Math.max(canvas.width - Number(props.data.w || 0), 0))
 }
 
 const alignTop = () => {
-  props.data.t = 0
-  emitAttrChange()
+  updatePosition('t', 0)
 }
 
 const alignVerticalCenter = () => {
   const canvas = getCanvasSize()
   if (!canvas) return
-  props.data.t = clamp((canvas.height - Number(props.data.h || 0)) / 2, 0, canvas.height)
-  emitAttrChange()
+  updatePosition('t', clamp((canvas.height - Number(props.data.h || 0)) / 2, 0, canvas.height))
 }
 
 const alignBottom = () => {
   const canvas = getCanvasSize()
   if (!canvas) return
-  props.data.t = Math.max(canvas.height - Number(props.data.h || 0), 0)
-  emitAttrChange()
+  updatePosition('t', Math.max(canvas.height - Number(props.data.h || 0), 0))
 }
 
 type AlignAction = {

@@ -1,5 +1,5 @@
 import { ElMessage } from 'element-plus'
-import type { ComputedRef, Ref } from 'vue'
+import { nextTick, type ComputedRef, type Ref } from 'vue'
 import type {
   AjaxRequestConfig,
   ComponentDataConfig,
@@ -31,7 +31,8 @@ interface CreateRightDataPanelUiActionOptions {
   publicRequestDraft: PublicRequestConfig
   publicRequestDialogVisible: Ref<boolean>
   scenePublicRequestList: ComputedRef<PublicRequestConfig[]>
-  setScenePublicRequestList: (nextList: PublicRequestConfig[]) => void
+  commitPublicRequestChange: (nextList: PublicRequestConfig[], publicRequestId: string | null) => Promise<boolean>
+  capturePublicRequestTarget: () => (() => boolean)
   persistSoon: () => void
   handleTestRequest: () => Promise<void>
   fileInputRef: Ref<HTMLInputElement | null>
@@ -53,6 +54,7 @@ interface CreateRightDataPanelUiActionOptions {
 export const createRightDataPanelUiActions = (
   options: CreateRightDataPanelUiActionOptions,
 ) => {
+  let dialogTargetIsCurrent: (() => boolean) | undefined
   const handlePublicRequestSelect = (value: string | number | boolean | undefined) => {
     options.setPublicRequestConfig(createRightDataPanelPublicRequestReference(value))
     options.latestRequestRaw.value = null
@@ -60,6 +62,7 @@ export const createRightDataPanelUiActions = (
   }
 
   const openPublicRequestDialog = (target?: PublicRequestConfig | null) => {
+    dialogTargetIsCurrent = options.capturePublicRequestTarget()
     Object.assign(options.publicRequestDraft, createPublicRequestDraft(target))
     options.publicRequestDialogVisible.value = true
   }
@@ -68,10 +71,14 @@ export const createRightDataPanelUiActions = (
    * 名称与请求配置由弹窗同一次确认事件提交。
    * 显式名称参数用于区分“本次输入”与配置对象中可能残留的旧 name 字段。
    */
-  const handlePublicRequestConfigConfirm = (
+  const handlePublicRequestConfigConfirm = async (
     config: AjaxRequestConfig,
     confirmedName?: string,
   ) => {
+    if (!dialogTargetIsCurrent?.()) {
+      ElMessage.warning('编辑对象已切换，请重新打开公共接口配置')
+      return
+    }
     const result = commitPublicRequestDraft({
       currentList: options.scenePublicRequestList.value,
       draft: options.publicRequestDraft,
@@ -84,17 +91,16 @@ export const createRightDataPanelUiActions = (
       return
     }
 
-    Object.assign(options.publicRequestDraft, result.nextDraft)
-    options.setScenePublicRequestList(result.nextList)
-
-    if (result.nextSelectedPublicRequestId && options.editableConfig.value?.request.type === 'public') {
-      options.editableConfig.value.request.config = {
-        publicRequestId: result.nextSelectedPublicRequestId,
-      }
-      options.persistSoon()
+    try {
+      if (!await options.commitPublicRequestChange(result.nextList, result.nextSelectedPublicRequestId)) return
+      Object.assign(options.publicRequestDraft, result.nextDraft)
+      options.publicRequestDialogVisible.value = false
+      // 等待联合写入后的表单回读，再使用最新的请求和接口配置发送。
+      await nextTick()
+      void options.handleTestRequest()
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? error.message : '无法保存公共接口')
     }
-
-    options.publicRequestDialogVisible.value = false
   }
 
   const handlePublicRequestSend = () => {
@@ -102,7 +108,7 @@ export const createRightDataPanelUiActions = (
     void options.handleTestRequest()
   }
 
-  const deleteCurrentPublicRequest = () => {
+  const deleteCurrentPublicRequest = async () => {
     const result = deleteCurrentRightDataPanelPublicRequest({
       currentList: options.scenePublicRequestList.value,
       currentRequestId: options.currentPublicRequest.value?.id,
@@ -110,12 +116,10 @@ export const createRightDataPanelUiActions = (
     })
     if (!result) return
 
-    options.setScenePublicRequestList(result.nextList)
-    if (options.editableConfig.value?.request.type === 'public' && result.nextSelectedPublicRequestId === null) {
-      options.editableConfig.value.request.config = {
-        publicRequestId: result.nextSelectedPublicRequestId,
-      }
-      options.persistSoon()
+    try {
+      await options.commitPublicRequestChange(result.nextList, result.nextSelectedPublicRequestId)
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? error.message : '无法删除公共接口')
     }
   }
 

@@ -24,6 +24,7 @@ import { applyEditorDim3dTemplate, type ApplyEditorDim3dTemplateInput } from '@/
 import { releaseOriginalScenePackages, retainOriginalScenePackages } from '@/integrations/scene/twoDPackagePreservation'
 import { serializeSceneDefinitionToFourPackages } from '@/integrations/scene/sceneFourPackage'
 import { appLogger } from '@/utils/logger'
+import { dispatchEditorHistory } from '@/integrations/scene/editorSceneUndoRedoAdapter'
 import { beginEditorSceneOperation, editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
 import { isUnityRenderModeConfigured, unityRenderConfig, type UnityRenderMode } from '@/unity-runtime/renderMode'
@@ -168,6 +169,12 @@ const drop = async (event: DragEvent) => {
   }
 }
 
+const replayHistory = (direction: 'undo' | 'redo') => dispatchEditorHistory(direction, {
+  commandBus: host?.getCommandBus() ?? null,
+  onApplied: () => eventBus?.emit(MITT_ON_KEY_ENUM.HISTORY_APPLIED, true),
+  onError: (error) => ElMessage.error(error instanceof Error ? error.message : '历史回放失败，请检查场景状态'),
+})
+
 /** 文本输入不抢占快捷键；选中组件的编辑事务继续交给来源仓库记录唯一历史。 */
 const handleKey = (event: KeyboardEvent) => {
   // 门禁期间不允许快捷键穿插历史，否则创建失败补偿可能撤销到用户的其他操作。
@@ -175,8 +182,16 @@ const handleKey = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement | null
   if (target?.closest('input, textarea, select, [contenteditable="true"], .monaco-editor, .el-dialog, .el-drawer')) return
   const modifier = event.ctrlKey || event.metaKey
-  if (modifier && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? host.getCommandBus().redo() : host.getCommandBus().undo(); return }
-  if (modifier && event.key.toLowerCase() === 'y') { event.preventDefault(); host.getCommandBus().redo(); return }
+  if (modifier && event.key.toLowerCase() === 'z') {
+    event.preventDefault()
+    void replayHistory(event.shiftKey ? 'redo' : 'undo')
+    return
+  }
+  if (modifier && event.key.toLowerCase() === 'y') {
+    event.preventDefault()
+    void replayHistory('redo')
+    return
+  }
   const ids = widgetStore.currentWidgetsIds ?? []
   if ((event.key === 'Delete' || event.key === 'Backspace') && ids.length) { event.preventDefault(); widgetStore.deleteWidgets(ids) }
   if (modifier && event.key.toLowerCase() === 'd' && ids.length) { event.preventDefault(); widgetStore.duplicateWidgets(ids) }

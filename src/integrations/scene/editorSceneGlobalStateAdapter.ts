@@ -3,6 +3,9 @@ import type { PublicRequestConfig, RequestGlobalConfig } from '@/types/data-conf
 import { createEmptyRequestGlobalConfig } from '@/types/data-config'
 import { useSceneRequestStore } from '@/stores/sceneAuxiliaryStores'
 import { getActivePinia } from 'pinia'
+import { isEqual } from 'lodash-es'
+import { editorSceneOperation } from './editorSceneOperationGate'
+import { getActiveSceneViewportHost } from './editorScenePlatformHost'
 
 /**
  * 编辑器场景级请求状态的纯数据快照。
@@ -20,6 +23,34 @@ const cloneValue = <T>(value: T): T => {
   } catch {
     return JSON.parse(JSON.stringify(value)) as T
   }
+}
+
+/** 请求弹窗的编辑写入统一历史。场景加载仍直接恢复初始配置。 */
+export const updateEditorSceneRequestGlobalConfig = (config: RequestGlobalConfig): boolean => {
+  const commandBus = getActiveSceneViewportHost()?.getCommandBus()
+  if (!commandBus || editorSceneOperation.value || commandBus.getIsPending()) return false
+  const store = useSceneRequestStore()
+  const before = cloneValue(store.sceneRequestGlobalConfig)
+  const after = cloneValue(config)
+  if (isEqual(before, after)) return false
+  const apply = store.setSceneRequestGlobalConfig
+  try {
+    apply(after)
+    commandBus.recordExecuted({
+      name: '更新场景全局请求配置',
+      confirmationScope: 'local',
+      execute: () => apply(after),
+      undo: () => apply(before),
+      captureRollback: () => {
+        const current = cloneValue(store.sceneRequestGlobalConfig)
+        return () => apply(current)
+      },
+    })
+  } catch (error) {
+    apply(before)
+    throw error
+  }
+  return true
 }
 
 /** 读取当前编辑器请求仓库；没有活动 Pinia 时返回 null，便于纯领域单测和模板工具运行。 */

@@ -1,3 +1,4 @@
+import { buildSceneNodeIndex } from '@/scene-platform/core/sceneNodeIndex'
 import type {
   AssetRef,
   SceneDefinition,
@@ -619,6 +620,8 @@ const toThreeTarget = (object: SceneObject, sceneId: string): SceneThreeDTargetP
   return {
     instanceId: object.id,
     targetType: object.type,
+    // 父级为业务字段，不能从当前已加载引擎对象反推。
+    ...(object.parentInstanceId ? { parentInstanceId: object.parentInstanceId } : {}),
     name: object.name,
     visible: object.visible,
     locked: object.locked,
@@ -934,6 +937,8 @@ const createInstanceDeviceBindings = (
   domain: SceneDependencyOwner['domain'],
 ): ScenePackageJsonValue[] => {
   const deviceId = getString(config.deviceId)
+  // 三维设备面板写入空字符串表示明确解绑，不能从旧设备绑定对象补回原编号。
+  if (domain === 'threeD' && typeof config.deviceId === 'string' && !deviceId) return []
   const legacyBinding = getRecord(config.deviceBinding)
   if (!deviceId && !hasKeys(legacyBinding)) return []
   const bindingKey = getString(legacyBinding.bindingKey) ?? `${instanceId}:device`
@@ -1439,6 +1444,8 @@ const collectDependencies = (
 export const createSceneFourPackageDocuments = (
   scene: SceneDefinition,
 ): SceneFourPackageDocuments => {
+  // 保存前校验完整集合，未驻留实例同样参与父级及循环检查。
+  buildSceneNodeIndex(scene.objects)
   const layerTree = getArray(getWidgetSnapshot(scene).widgetLayerTree)
   const widgets = getArray(getWidgetSnapshot(scene).widgets)
   const twoDComponents: SceneTwoDComponentPackage[] = []

@@ -1,5 +1,5 @@
 <template>
-  <div v-if="object && draft && isSupportedObject" class="scene-edit-property-content">
+  <div v-if="object && draft && isSupportedObject" :key="object.id" ref="panel" class="scene-edit-property-content">
     <section class="scene-edit-property-section">
       <div class="scene-edit-property-section__header">通用</div>
       <div class="scene-edit-property-section__body">
@@ -58,7 +58,7 @@
               :precision="6"
               :disabled="!canEdit"
               @update:model-value="setAxis('geographicPosition', 0, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('geographicPosition', 0, value, session)"
             />
           </ScenePropertyRow>
           <ScenePropertyRow label="纬度" control-fill>
@@ -70,7 +70,7 @@
               :precision="6"
               :disabled="!canEdit"
               @update:model-value="setAxis('geographicPosition', 1, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('geographicPosition', 1, value, session)"
             />
           </ScenePropertyRow>
           <ScenePropertyRow label="海拔" control-fill>
@@ -80,7 +80,7 @@
               :precision="2"
               :disabled="!canEdit"
               @update:model-value="setAxis('geographicPosition', 2, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('geographicPosition', 2, value, session)"
             />
           </ScenePropertyRow>
         </template>
@@ -92,7 +92,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('position', 0, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('position', 0, value, session)"
             />
             <ScenePropertyNumberInput
               :model-value="draft.position[1]"
@@ -100,7 +100,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('position', 1, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('position', 1, value, session)"
             />
             <ScenePropertyNumberInput
               :model-value="draft.position[2]"
@@ -108,7 +108,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('position', 2, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('position', 2, value, session)"
             />
           </div>
         </ScenePropertyRow>
@@ -121,7 +121,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('rotation', 0, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('rotation', 0, value, session)"
             />
             <ScenePropertyNumberInput
               :model-value="draft.rotation[1]"
@@ -129,7 +129,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('rotation', 1, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('rotation', 1, value, session)"
             />
             <ScenePropertyNumberInput
               :model-value="draft.rotation[2]"
@@ -137,7 +137,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('rotation', 2, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('rotation', 2, value, session)"
             />
           </div>
         </ScenePropertyRow>
@@ -162,7 +162,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('scale', 0, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('scale', 0, value, session)"
             />
             <ScenePropertyNumberInput
               :model-value="draft.scale[1]"
@@ -170,7 +170,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('scale', 1, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('scale', 1, value, session)"
             />
             <ScenePropertyNumberInput
               :model-value="draft.scale[2]"
@@ -178,7 +178,7 @@
               :step="0.1"
               :disabled="!canEdit"
               @update:model-value="setAxis('scale', 2, $event)"
-              @change="commitTransform"
+              @edit-commit="(value, session) => commitAxis('scale', 2, value, session)"
             />
           </div>
         </ScenePropertyRow>
@@ -194,9 +194,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Lock, Unlock } from '@element-plus/icons-vue'
+import { editorSceneOperation, subscribeEditorSceneBeforeOperation } from '@/integrations/scene/editorSceneOperationGate'
 import type { CommandBus, SceneObject, SceneStore, SceneTransform } from '@/scene-platform'
 import {
   createUpdateObjectExtensionsCommand,
@@ -234,6 +235,14 @@ const props = defineProps<{
 
 const draft = ref<SceneObjectBaseDraft | null>(null)
 const scaleRatioLocked = ref(false)
+const panel = ref<HTMLElement | null>(null)
+
+// 快捷入口可能在数字框仍聚焦时触发保存或回放。沿用控件自身的失焦提交顺序。
+const stopBeforeOperation = subscribeEditorSceneBeforeOperation(() => {
+  const input = document.activeElement
+  if (input instanceof HTMLInputElement && !input.readOnly && panel.value?.contains(input)) input.blur()
+})
+onBeforeUnmount(stopBeforeOperation)
 
 /** SceneStore 本身不具备 Vue 响应性；父检查器只在对象或选择事件时递增版本号。 */
 const object = computed(() => {
@@ -245,7 +254,7 @@ const isSupportedObject = computed(() => object.value?.type === 'model' || objec
 const isEffectivelyLocked = computed(() =>
   Boolean(props.store && props.objectId && props.store.isObjectEffectivelyLocked(props.objectId)),
 )
-const canEdit = computed(() => Boolean(object.value && props.commandBus && !isEffectivelyLocked.value))
+const canEdit = computed(() => Boolean(object.value && props.commandBus && !isEffectivelyLocked.value && !editorSceneOperation.value))
 const assetLabel = computed(() =>
   object.value?.asset ? `${object.value.asset.kind} · ${object.value.asset.id}` : '',
 )
@@ -345,59 +354,49 @@ const setAxis = (field: AxisField, axis: 0 | 1 | 2, value: number | null | undef
   }
 }
 
-const isValidAxis = (values: AxisValues): values is [number, number, number] =>
-  values.every((value): value is number => typeof value === 'number' && Number.isFinite(value))
-
-/**
- * 位置和旋转值直接使用领域定义的米制坐标与弧度；GIS 分支只提交经纬高及航向/俯仰/横滚，
- * 由 RuntimeBridge 再转换为 Unity 四元数，避免把本地坐标误写到 WGS84 对象。
- */
-const commitTransform = () => {
-  const current = object.value
-  const values = draft.value
-  if (!canEdit.value || !current || !values) return
-  if (!isValidAxis(values.rotation) || !isValidAxis(values.scale)) {
+/** 只从本次输入更新一个字段，避免提交其它还在编辑或已被运行端刷新的草稿值。 */
+const commitAxis = (
+  field: AxisField,
+  axis: 0 | 1 | 2,
+  value: number | null | undefined,
+  mergeSession?: symbol,
+) => {
+  const current = props.objectId ? props.store?.getObject(props.objectId) : null
+  if (!canEdit.value || !current) return
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
     syncDraftFromObject(current)
     return
   }
-
+  const transform = current.transform
   let nextTransform: SceneTransform
-  if (current.transform.kind === 'geo') {
-    if (!isValidAxis(values.geographicPosition)) {
-      syncDraftFromObject(current)
-      return
-    }
-    const [longitude, latitude, height] = values.geographicPosition
-    if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+  if (field === 'scale') {
+    const scale: [number, number, number] = typeof transform.scale === 'number'
+      ? [transform.scale, transform.scale, transform.scale] : [...transform.scale]
+    if (scaleRatioLocked.value ? scale.every((item) => item === value) : scale[axis] === value) return
+    if (scaleRatioLocked.value) scale.fill(value)
+    else scale[axis] = value
+    nextTransform = { ...transform, scale }
+  } else if (transform.kind === 'geo') {
+    if (field === 'position') return
+    const key = field === 'rotation'
+      ? (['heading', 'pitch', 'roll'] as const)[axis]
+      : (['longitude', 'latitude', 'height'] as const)[axis]
+    if ((key === 'longitude' && Math.abs(value) > 180) || (key === 'latitude' && Math.abs(value) > 90)) {
       ElMessage.warning('经度范围为 -180 至 180，纬度范围为 -90 至 90')
       syncDraftFromObject(current)
       return
     }
-    nextTransform = {
-      ...current.transform,
-      longitude,
-      latitude,
-      height,
-      heading: values.rotation[0],
-      pitch: values.rotation[1],
-      roll: values.rotation[2],
-      scale: values.scale,
-    }
+    if (transform[key] === value) return
+    nextTransform = { ...transform, [key]: value }
   } else {
-    if (!isValidAxis(values.position)) {
-      syncDraftFromObject(current)
-      return
-    }
-    nextTransform = {
-      ...current.transform,
-      position: values.position,
-      rotation: values.rotation,
-      scale: values.scale,
-    }
+    if (field === 'geographicPosition' || transform[field][axis] === value) return
+    const values: [number, number, number] = [...transform[field]]
+    values[axis] = value
+    nextTransform = { ...transform, [field]: values }
   }
 
   try {
-    props.commandBus!.execute(createUpdateObjectTransformCommand(current.id, nextTransform))
+    props.commandBus!.execute(createUpdateObjectTransformCommand(current.id, nextTransform, mergeSession))
   } catch (error) {
     reportCommandFailure(error)
   }

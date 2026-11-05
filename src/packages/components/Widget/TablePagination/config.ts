@@ -96,7 +96,8 @@ export default class Config extends BaseConfig {
           title: '操作',
           key: 'action',
           link: {
-            baseUrl: 'https://view.zy.com/2d',
+            // 跳转目标由用户配置，新增组件不绑定示例公司的域名。
+            baseUrl: '',
             params: [{ name: 'id', valueKey: 'drawingId' }],
             text: '点击查看',
             target: '_blank',

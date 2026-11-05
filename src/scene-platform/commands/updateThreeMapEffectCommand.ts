@@ -34,6 +34,7 @@ export function createUpdateThreeMapEffectCommand({
     name: 'UpdateThreeMapEffect',
     objectId,
     mergeKey,
+    mergeSession: mergeKey,
     getEffect: () => nextEffect,
     execute: (store) => {
       const current = store.getObject(objectId)

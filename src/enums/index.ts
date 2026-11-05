@@ -20,6 +20,8 @@ export enum MITT_ON_KEY_ENUM {
  * 模型类型
  */
 export enum MODEL_ENUM {
+  /** 由 Unity 根据稳定资源编号选择加载器，卡片不依赖具体文件扩展名。 */
+  UNITY_MODEL = 'unity-model',
   GLTF = 'gltf',
   GLB = 'glb',
   OBJ = 'obj',

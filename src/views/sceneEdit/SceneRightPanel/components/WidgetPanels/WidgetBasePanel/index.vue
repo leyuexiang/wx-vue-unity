@@ -3,13 +3,19 @@
     滚动行为由 SceneRightPanel 的唯一属性滚动容器负责。
     二维组件基础面板只提供内容根节点，避免与外层重复计算视口高度、产生双滚动条或重复 12px 留白。
   -->
-  <div v-if="widgetComponent" class="scene-edit-property-content">
+  <div
+    v-if="widgetComponent"
+    class="scene-edit-property-content"
+    data-widget-base-editor
+    :inert="Boolean(editorSceneOperation) || undefined"
+  >
     <!-- Figma 对二维组件的首个分组统一命名为“通用”，用于承载名称、启用、尺寸、对齐与位置。 -->
     <section v-if="!widgetChildId" class="scene-edit-property-section">
       <div class="scene-edit-property-section__header">通用</div>
       <div class="scene-edit-property-section__body">
         <WidgetBase
           v-if="widgetComponent.attr"
+          :key="widgetId ?? undefined"
           :data="widgetComponent.attr"
           :label="
             ((widgetComponent.option as Record<string, unknown> | undefined)?.label as string) ?? ''
@@ -22,7 +28,7 @@
           @update:visible="updateWidgetVisible"
           @update:interactive="updateWidgetInteractive"
           @update:locked="updateWidgetLocked"
-          @attr-change="recordWidgetConfigChange"
+          @attr-change="updateWidgetAttr"
         />
       </div>
     </section>
@@ -32,9 +38,9 @@
     >
       <component
         :is="widgetConfigPanelComponent"
-        v-if="widgetConfigPanelComponent"
+        v-if="widgetConfigPanelComponent && (!usesNestedOption || nestedOption)"
         :key="widgetConfigPanelKey"
-        :option="widgetComponent.option"
+        :option="nestedOption?.draft ?? widgetComponent.option"
         :selected-child-id="widgetChildId || ''"
         @update:option="updateWidgetOption"
         @select-child="selectWidgetChild"
@@ -54,18 +60,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { debounce } from 'lodash-es'
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
+import { cloneDeep, isEqual } from 'lodash-es'
 import type { WidgetConfig } from '@/stores/sceneEditStore'
+import type { ViewportHost } from '@/scene-platform'
 import WidgetBase from '../../BasePanel/WidgetBase/index.vue'
 import WidgetGroupBase from '../../BasePanel/WidgetGroupBase/index.vue'
 import { COMPONENT_TYPE, getComponentName } from '@/utils/components'
-import type { WidgetHistorySnapshot } from '@/integrations/scene/widgetRuntime/widgetCommand'
+import { subscribeActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
+import { editorSceneOperation, subscribeEditorSceneBeforeOperation } from '@/integrations/scene/editorSceneOperationGate'
 import {
   bumpWidgetPanelRenderVersion,
-  createWidgetPanelHistorySnapshot,
+  getWidgetByPanelId,
   getWidgetPanelLockState,
-  recordWidgetPanelHistorySnapshot,
+  runWidgetPanelHistoryChange,
   resolveWidgetPanelSelection,
   setWidgetPanelLocked,
   setWidgetPanelChildSelection,
@@ -78,7 +86,7 @@ const widgetComponent = ref<WidgetConfig['component'] | null>(null)
 const widgetId = ref<string | null>(null)
 const widgetGroupId = ref<string | null>(null)
 const widgetChildId = ref<string | null>(null)
-const oldWidgetSnapshot = ref<WidgetHistorySnapshot | null>(null)
+
 let pendingWidgetRenderFrame = 0
 
 /**
@@ -93,14 +101,14 @@ const syncWidgetTarget = () => {
     widgetId.value = null
     widgetChildId.value = null
     widgetComponent.value = null
-    oldWidgetSnapshot.value = null
+    nestedOption.value = null
     return
   }
 
   widgetId.value = selection.kind === 'widget' ? selection.id : selection.frameId
   widgetChildId.value = selection.kind === 'widgetChild' ? selection.childId : null
   widgetComponent.value = selection.widget.component
-  resetWidgetHistorySnapshot()
+  syncNestedOption()
 
   /**
    * 旧场景或热更新前已创建的页面菜单可能仍命中旧画布缓存。
@@ -151,42 +159,77 @@ const scheduleWidgetRenderRefresh = () => {
   })
 }
 
-const createCurrentWidgetSnapshot = () => {
-  const selection = resolveWidgetPanelSelection()
-  const targetId =
-    selection.kind === 'widget'
-      ? selection.id
-      : selection.kind === 'widgetChild'
-        ? selection.frameId
-        : null
-  return targetId ? createWidgetPanelHistorySnapshot([targetId]) : null
+type WidgetComponent = WidgetConfig['component']
+type WidgetOption = WidgetComponent['option']
+const usesNestedOption = computed(() => {
+  const key = widgetComponent.value?.info.keyName
+  return key === 'VPageMenu' || key === 'VPagePagination'
+})
+
+const nestedOption = shallowRef<{
+  id: string
+  component: WidgetComponent
+  draft: WidgetOption
+  base: WidgetOption
+} | null>(null)
+
+// 旧菜单和分页器在子控件中直接修改嵌套对象。交给它们独立草稿，画布仍只读仓库数据。
+const syncNestedOption = () => {
+  const id = widgetId.value
+  const component = widgetComponent.value
+  if (!id || !component || !usesNestedOption.value) {
+    nestedOption.value = null
+    return
+  }
+  const previous = nestedOption.value
+  if (previous?.id === id && previous.component === component
+      && isEqual(previous.base, component.option)) return
+  nestedOption.value = {
+    id,
+    component,
+    draft: reactive(cloneDeep(component.option)),
+    base: cloneDeep(component.option),
+  }
+}
+
+const flushNestedOption = () => {
+  const current = nestedOption.value
+  if (!current || editorSceneOperation.value || isEqual(current.draft, current.base)) return
+  if (getWidgetByPanelId(current.id)?.component !== current.component
+      || !isEqual(current.base, current.component.option) || getWidgetPanelLockState(current.id).effectiveLocked) {
+    nestedOption.value = null
+    syncNestedOption()
+    return
+  }
+  // 同一个事件中的多处嵌套写入一起提交，选中切换后也按原部件编号结算。
+  const nextOption = cloneDeep(current.draft)
+  runWidgetPanelHistoryChange('更新部件配置', [current.id], () => {
+    current.component.option = nextOption
+    bumpWidgetPanelRenderVersion(current.id)
+  })
+  // 基线必须与仓库分离，画布可能直接修改仓库里的嵌套坐标。
+  current.base = cloneDeep(nextOption)
 }
 
 const selectWidgetChild = (childId: string) => {
   if (!widgetId.value) return
+  flushNestedOption()
   setWidgetPanelChildSelection(widgetId.value, childId)
 }
 
-const resetWidgetHistorySnapshot = () => {
-  oldWidgetSnapshot.value = createCurrentWidgetSnapshot()
+const editWidget = (name: string, mutate: (component: WidgetComponent) => void, mergeSession?: symbol) => {
+  const id = widgetId.value
+  const component = widgetComponent.value
+  if (!id || !component || editorSceneOperation.value || widgetLockState.value.effectiveLocked
+      || getWidgetByPanelId(id)?.component !== component) return
+  flushNestedOption()
+  runWidgetPanelHistoryChange(name, [id], () => mutate(component), { mergeSession })
 }
 
-/**
- * 基础面板修改属于二维部件持久化配置。
- * 这里按当前单选部件截取快照，既保证撤销/重做可恢复，又避免大场景里把所有部件塞进历史记录。
- */
-const recordWidgetConfigChange = debounce(() => {
-  const nextSnapshot = createCurrentWidgetSnapshot()
-  if (!nextSnapshot) return
-
-  if (!oldWidgetSnapshot.value) {
-    oldWidgetSnapshot.value = nextSnapshot
-    return
-  }
-
-  recordWidgetPanelHistorySnapshot('更新部件基础属性', oldWidgetSnapshot.value, nextSnapshot)
-  oldWidgetSnapshot.value = nextSnapshot
-}, 300)
+const updateWidgetAttr = (patch: Partial<WidgetComponent['attr']>, mergeSession?: symbol) => {
+  // 宽高联动仍属于触发它的单个输入会话，对齐等独立操作不传入标识。
+  editWidget('更新部件位置与尺寸', (component) => Object.assign(component.attr, patch), mergeSession)
+}
 
 const shouldRefreshWidgetRender = () => {
   if (!widgetComponent.value) return false
@@ -205,85 +248,82 @@ const shouldRefreshWidgetRender = () => {
 }
 
 const updateWidgetOption = (value: unknown) => {
-  if (!widgetComponent.value || widgetLockState.value.effectiveLocked) return
-  widgetComponent.value.option = value as Record<string, unknown>
-  if (shouldRefreshWidgetRender()) {
-    scheduleWidgetRenderRefresh()
-  }
-  recordWidgetConfigChange()
+  editWidget('更新部件配置', (component) => {
+    component.option = value as WidgetOption
+    if (shouldRefreshWidgetRender()) scheduleWidgetRenderRefresh()
+  })
 }
 
-/** 公共交互开关保存在 option，沿用组件保存、复制、发布和撤销快照协议。 */
+/** 公共开关和名称在同一仓库事务中写入并登记。 */
 const updateWidgetInteractive = (value: boolean) => {
-  if (!widgetComponent.value || widgetLockState.value.effectiveLocked) return
-  widgetComponent.value.option = { ...widgetComponent.value.option, interactive: value }
-  scheduleWidgetRenderRefresh()
-  recordWidgetConfigChange()
+  editWidget('更新部件交互', (component) => {
+    component.option = { ...component.option, interactive: value }
+    scheduleWidgetRenderRefresh()
+  })
 }
 
 const updateWidgetLabel = (value: string) => {
-  if (!widgetComponent.value || widgetLockState.value.effectiveLocked) return
-  widgetComponent.value.option = {
-    ...(widgetComponent.value.option || {}),
-    label: value,
-  }
-  if (shouldRefreshWidgetRender()) {
-    scheduleWidgetRenderRefresh()
-  }
-  recordWidgetConfigChange()
+  editWidget('更新部件名称', (component) => {
+    component.option = { ...component.option, label: value }
+    if (shouldRefreshWidgetRender()) scheduleWidgetRenderRefresh()
+  })
 }
 
-/**
- * 部件显隐统一落到 option.visible。
- * 结构树、基础面板、状态动作和交互动作都会消费同一份二维部件持久化状态；
- * 仓库同时递增当前部件的渲染版本，使组件、装饰、图标和图表都能立即失效画布缓存。
- */
+/** 显隐底层也供预览使用，只有编辑面板把它登记进历史。 */
 const updateWidgetVisible = (value: boolean) => {
-  if (!widgetId.value || !setWidgetPanelVisible(widgetId.value, value)) return
-  recordWidgetConfigChange()
+  const id = widgetId.value
+  if (!id || editorSceneOperation.value || getWidgetByPanelId(id)?.component !== widgetComponent.value) return
+  flushNestedOption()
+  runWidgetPanelHistoryChange('更新部件显隐', [id], () => setWidgetPanelVisible(id, value))
 }
 
+/** 锁定入口已在仓库中登记，面板只负责先结算配置草稿。 */
 const updateWidgetLocked = (value: boolean) => {
-  if (!widgetId.value || widgetLockState.value.inheritedLocked) return
+  if (!widgetId.value || editorSceneOperation.value || widgetLockState.value.inheritedLocked) return
+  flushNestedOption()
   setWidgetPanelLocked(widgetId.value, value)
 }
 
 watch(
   () => resolveWidgetPanelSelection(),
   () => {
-    recordWidgetConfigChange.flush()
+    flushNestedOption()
     syncWidgetTarget()
   },
   { immediate: true },
 )
 
-/**
- * 页面菜单和图文分页器直接编辑嵌套 option，不会像常规表单一样发出完整的 update:option。
- *
- * 因此仅监听这两个组件：每次修改节点、按钮图片、文字或布局后，
- * 只递增当前部件的渲染版本并合并一条撤销快照。不能把这个深度监听扩大到所有二维部件，
- * 否则文本输入、倒计时等高频配置也会无谓地重挂载画布组件。
- */
+watch(() => nestedOption.value?.draft, flushNestedOption, { deep: true })
 watch(
-  () => widgetComponent.value?.option,
+  [() => editorSceneOperation.value ? undefined : nestedOption.value?.component.option, editorSceneOperation],
   () => {
-    if (
-      widgetComponent.value?.info.keyName !== 'VPageMenu' &&
-      widgetComponent.value?.info.keyName !== 'VPagePagination'
-    ) {
-      return
-    }
-    scheduleWidgetRenderRefresh()
-    recordWidgetConfigChange()
+    if (editorSceneOperation.value) return
+    // 拖拽期间不跟踪仓库的逐帧写入，结束后再更新表单基线并结算迟到的表单结果。
+    syncNestedOption()
+    flushNestedOption()
   },
   { deep: true },
 )
 
+const stopBeforeOperation = subscribeEditorSceneBeforeOperation(flushNestedOption)
+let panelHost: ViewportHost | null = null
+let stopSceneLoad: (() => void) | undefined
+const stopHost = subscribeActiveSceneViewportHost((host) => {
+  if (panelHost === host) return
+  panelHost = host
+  stopSceneLoad?.()
+  nestedOption.value = null
+  if (host) syncNestedOption()
+  stopSceneLoad = host?.getStore().subscribe((event) => {
+    // 同编号场景重载也会废弃旧表单，防止迟到的嵌套更新落到新草稿。
+    if (event.type === 'sceneLoaded') nestedOption.value = null
+  })
+})
 onBeforeUnmount(() => {
-  recordWidgetConfigChange.flush()
-  if (pendingWidgetRenderFrame) {
-    cancelAnimationFrame(pendingWidgetRenderFrame)
-  }
-  recordWidgetConfigChange.cancel()
+  stopBeforeOperation()
+  stopHost()
+  stopSceneLoad?.()
+  flushNestedOption()
+  if (pendingWidgetRenderFrame) cancelAnimationFrame(pendingWidgetRenderFrame)
 })
 </script>

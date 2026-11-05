@@ -10,11 +10,17 @@ import type {
 import type { CameraPathWaypointSelection, SceneStore, SceneStoreEvent } from '../store/sceneStore'
 import type { SceneRuntime } from './sceneRuntime'
 import type { SceneObjectStreamingInteraction } from './runtimeTypes'
+import { buildSceneNodeIndex } from '../core/sceneNodeIndex'
+import { createSceneNodeVisibilityCache, type SceneNodeVisibilityState } from '../core/sceneNodeVisibility'
+import { createSceneNodeLockCache, type SceneNodeLockState } from '../core/sceneNodeLock'
+import { createSceneNodeWorkQueue, SceneNodeWorkFlag } from '../core/sceneNodeWorkQueue'
 
 export interface RuntimeBridge {
   start: () => void
   stop: () => void
   flush: () => Promise<void>
+  /** 失败补偿后用当前权威草稿覆盖可能部分成功的运行端。 */
+  resync: () => Promise<void>
   /**
    * 将对象编辑／拖拽保护意图直接转发给当前 Runtime。
    *
@@ -207,6 +213,8 @@ export function createRuntimeBridge(
   let pendingCameraPathWaypointSelection: CameraPathWaypointSelection | null | undefined = undefined
   const upsertMap = new Map<string, Parameters<SceneRuntime['upsertObject']>[0]>()
   const removedSet = new Set<string>()
+  // 桥接使用独立异步批次，不能被事务内派生查询提前消费；遍历工具与存储相同。
+  const stateWork = createSceneNodeWorkQueue(() => store.getNodeIndex(), store.getObjectIdsInLayer)
   const effectUpsertMap = new Map<string, Parameters<SceneRuntime['upsertEffect']>[0]>()
   const effectRemovedSet = new Set<string>()
   let selectedObjectId: string | null | undefined = undefined
@@ -215,10 +223,11 @@ export function createRuntimeBridge(
    * 将视觉分组状态投影为 Runtime 可直接消费的有效状态。
    * 投影只发生在桥接边界，不回写 SceneStore，因此组解锁/显示后仍能恢复成员自身状态。
    */
-  const projectObjectForRuntime = (object: SceneObject): SceneObject => {
-    const layer = object.layerId ? store.getLayer(object.layerId) : null
-    const effectivelyLocked = object.locked || layer?.locked === true
-    const effectivelyVisible = object.visible && layer?.visible !== false
+  const projectObjectForRuntime = (object: SceneObject,
+    readVisibility: (id: string) => SceneNodeVisibilityState | null = store.getObjectVisibilityState,
+    readLock: (id: string) => SceneNodeLockState | null = store.getObjectLockState): SceneObject => {
+    const effectivelyLocked = object.locked || readLock(object.id)?.inheritedLocked === true
+    const effectivelyVisible = object.visible && (readVisibility(object.id)?.inheritedVisible ?? true)
     if (!effectivelyLocked && effectivelyVisible === object.visible) return object
 
     return {
@@ -229,14 +238,34 @@ export function createRuntimeBridge(
     }
   }
 
-  const projectSceneForRuntime = (scene: SceneDefinition): SceneDefinition => ({
-    ...scene,
-    objects: scene.objects.map(projectObjectForRuntime),
-  })
+  const projectSceneForRuntime = (scene: SceneDefinition): SceneDefinition => {
+    let readVisibility = store.getObjectVisibilityState
+    let readLock = store.getObjectLockState
+    if (scene.objects !== store.getObjects() || scene.layers !== store.getLayers()) {
+      // 外部解析器可能产生临时快照；在其自身树上派生，不能混用当前草稿的父显隐。
+      const index = { ...buildSceneNodeIndex(scene.objects), structureVersion: 0 }
+      const visibility = createSceneNodeVisibilityCache(() => index, () => scene.layers)
+      readVisibility = visibility.get
+      readLock = createSceneNodeLockCache(() => index, () => scene.layers, visibility.getMembers).get
+    }
+    return { ...scene, objects: scene.objects.map((object) => projectObjectForRuntime(object, readVisibility, readLock)) }
+  }
+
+  const collectEffectiveStateUpserts = () => {
+    if (!stateWork.hasPending()) return
+    if (!hasSceneLoad) {
+      const index = store.getNodeIndex()
+      stateWork.flush(index, (id) => {
+        const object = index.nodesById.get(id)
+        if (object) upsertMap.set(id, object)
+      })
+    } else stateWork.clear()
+  }
 
   const drainAndApply = async () => {
     const currentVersion = lifecycleVersion
     while (true) {
+      collectEffectiveStateUpserts()
       const sceneToLoad = hasSceneLoad ? pendingScene : null
       const sceneSettings = sceneToLoad ? null : pendingSceneSettings
       const sceneLayers = sceneToLoad ? null : pendingSceneLayers
@@ -518,9 +547,12 @@ export function createRuntimeBridge(
 
   const handleEvent = (event: SceneStoreEvent) => {
     switch (event.type) {
+      case 'objectHierarchyChanged':
       case 'sceneLoaded': {
+        stateWork.clear()
         pendingSceneLayers = null
-        pendingScene = event.scene
+        // 一次层级事务走一次完整快照，保持原选择并等待运行端确认。
+        pendingScene = event.type === 'sceneLoaded' ? event.scene : store.getScene()
         hasSceneLoad = true
         pendingSceneSettings = null
         pendingSceneStreaming = undefined
@@ -531,7 +563,7 @@ export function createRuntimeBridge(
         removedSet.clear()
         effectUpsertMap.clear()
         effectRemovedSet.clear()
-        selectedObjectId = null
+        selectedObjectId = event.type === 'sceneLoaded' ? null : store.getSelectedObjectId()
         schedule()
         return
       }
@@ -609,6 +641,8 @@ export function createRuntimeBridge(
       case 'objectUpserted': {
         removedSet.delete(event.object.id)
         upsertMap.set(event.object.id, event.object)
+        stateWork.mark(event.object.id, (event.visibilityChanged ? SceneNodeWorkFlag.Visibility : 0) |
+          (event.lockChanged ? SceneNodeWorkFlag.Lock : 0))
         schedule()
         return
       }
@@ -622,15 +656,26 @@ export function createRuntimeBridge(
         if (event.layer.type !== 'object' && runtime.updateSceneLayers) pendingSceneLayers = store.getScene().layers
         /** 对象图层是视觉管理数据；只重新投影其成员，不在 Runtime 创建分组节点。 */
         if (event.layer.type === 'object') {
-          store.getObjects().forEach((object) => {
-            if (object.layerId === event.layer.id) upsertMap.set(object.id, object)
-          })
+          const flags = (event.visibilityChanged ? SceneNodeWorkFlag.Visibility : 0) |
+            (event.lockChanged ? SceneNodeWorkFlag.Lock : 0)
+          if (flags) {
+            // 显隐和锁定共用最终批次的成员读取，事件入队时无需先遍历一遍成员。
+            stateWork.markLayer(event.layer.id, flags)
+          } else {
+            const index = store.getNodeIndex()
+            for (const id of store.getObjectIdsInLayer(event.layer.id)) {
+              const object = index.nodesById.get(id)
+              if (object) upsertMap.set(id, object)
+            }
+          }
         }
         schedule()
         return
       }
       case 'layerRemoved': {
         if (runtime.updateSceneLayers) pendingSceneLayers = store.getScene().layers
+        // 缺失图层恢复默认显隐与锁定，传播到仍引用它的成员子树。
+        stateWork.markLayer(event.layerId, SceneNodeWorkFlag.Visibility | SceneNodeWorkFlag.Lock)
         /** 删除组命令会先把成员移回根级，对象事件已携带最终归属；这里只保证队列被刷新。 */
         schedule()
         return
@@ -691,6 +736,7 @@ export function createRuntimeBridge(
       unsubscribe = store.subscribe(handleEvent)
     },
     stop: () => {
+      stateWork.clear()
       pendingSceneLayers = null
       unsubscribe?.()
       unsubscribe = null
@@ -705,6 +751,19 @@ export function createRuntimeBridge(
       pendingCameraPaths = null
       pendingCameraPathWaypointSelection = undefined
       selectedObjectId = undefined
+    },
+    resync: async () => {
+      if (stopped || !started) throw new Error('运行时桥接已停止')
+      stateWork.clear()
+      pendingScene = store.getScene()
+      hasSceneLoad = true
+      selectedObjectId = store.getSelectedObjectId()
+      upsertMap.clear()
+      removedSet.clear()
+      effectUpsertMap.clear()
+      effectRemovedSet.clear()
+      schedule()
+      await pending
     },
     flush: async () => {
       await pending

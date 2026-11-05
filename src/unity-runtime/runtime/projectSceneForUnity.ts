@@ -1,4 +1,6 @@
+import { buildSceneNodeIndex } from '@/scene-platform/core/sceneNodeIndex'
 import type { SceneDefinition as EditorScene, SceneObject as EditorObject } from '@/scene-platform'
+import { resolveSceneStreamingConfigForRuntime } from '@/scene-platform/core/sceneStreamingPolicy'
 import type { SceneDefinition as UnityScene, SceneObject as UnityObject, SceneTransform as UnityTransform } from '@/scene-core'
 import { projectInstanceDefinition } from '@/scene-core/model/instanceDefinition'
 
@@ -100,6 +102,9 @@ export const projectObjectForUnity = (object: EditorObject, sceneId?: string): U
   })
   return {
     instanceId: object.id, objectType: object.type as UnityObject['objectType'], name: object.name,
+    // 本地变换沿业务父级解释，顺序使用现有领域order，不另建存档字段。
+    ...(object.parentInstanceId ? { parentInstanceId: object.parentInstanceId } : {}),
+    siblingOrder: object.order,
     visible: object.visible, locked: object.locked,
     transform: { space: transform.kind === 'geo' ? 'wgs84' : 'local',
       position: transform.kind === 'geo' ? [transform.longitude, transform.latitude, transform.height] : transform.position,
@@ -120,7 +125,13 @@ export const projectObjectForUnity = (object: EditorObject, sceneId?: string): U
 
 export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
   if (scene.type === 'gis' && scene.coordinateSystem.kind !== 'wgs84') throw new Error('GIS 场景必须使用 WGS84 坐标系')
+  const index = buildSceneNodeIndex(scene.objects)
   const renderObjects = scene.objects.filter((object) => !isUnityDeferredObject(object))
+  const renderedIds = new Set(renderObjects.map((object) => object.id))
+  for (const object of renderObjects) {
+    const parent = index.parentById.get(object.id)
+    if (parent && (scene.type === 'gis' || !renderedIds.has(parent))) throw new Error('当前运行端不支持地理父子变换或未接入类型作为父节点')
+  }
   for (const object of renderObjects) {
     if ((scene.type === 'gis') !== (object.transform.kind === 'geo')) throw new Error(`对象 ${object.name} 的坐标类型与场景不一致`)
   }
@@ -149,6 +160,8 @@ export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
       })),
     } } : {}),
     objects, resources: [...resources.values()], settings: {},
+    // 复用编辑器的持久化定义与覆盖规则；缺失保持兼容，显式关闭不能在引擎侧丢失。
+    ...(scene.streaming ? { streaming: resolveSceneStreamingConfigForRuntime(scene.streaming, 'editor') } : {}),
     twoD: { canvas: {}, components: [], layerTree: [] },
     dependencies: { dataBindings: [], behaviors: [], deviceBindings: [] },
   }

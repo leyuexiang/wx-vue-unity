@@ -175,8 +175,13 @@
           <ScenePropertyRow label="按钮文字" control-fill>
             <ScenePropertyInput v-model.trim="selectedItem.label" placeholder="请输入按钮文字" />
           </ScenePropertyRow>
+          <!-- 旧配置缺少样式时只显示默认值，选择按钮不写入持久化配置。 -->
           <ScenePropertyRow label="文字字体" control-fill>
-            <ScenePropertySelect v-model="selectedItem.fontFamily" size="small">
+            <ScenePropertySelect
+              :model-value="selectedItem.fontFamily ?? PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontFamily"
+              size="small"
+              @update:model-value="selectedItem.fontFamily = String($event)"
+            >
               <el-option
                 v-for="font in fontOptions"
                 :key="font.value"
@@ -187,23 +192,29 @@
           </ScenePropertyRow>
           <ScenePropertyRow label="文字字号" control-fill>
             <ScenePropertyNumberInput
-              v-model="selectedItem.fontSize"
+              :model-value="selectedItem.fontSize ?? PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontSize"
               :min="sizeRanges.labelFontSize.min"
               :max="sizeRanges.labelFontSize.max"
               :step="1"
+              @update:model-value="selectedItem.fontSize = $event ?? undefined"
             >
               <template #suffix>px</template>
             </ScenePropertyNumberInput>
           </ScenePropertyRow>
           <ScenePropertyRow label="文字颜色">
             <ScenePropertyColorPicker
-              v-model="selectedItem.fontColor"
+              :model-value="selectedItem.fontColor ?? PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontColor"
               variant="swatch"
               label="当前按钮文字颜色"
+              @update:model-value="selectedItem.fontColor = $event ?? undefined"
             />
           </ScenePropertyRow>
           <ScenePropertyRow label="文字粗细" control-fill>
-            <ScenePropertySelect v-model="selectedItem.fontWeight" size="small">
+            <ScenePropertySelect
+              :model-value="selectedItem.fontWeight ?? PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontWeight"
+              size="small"
+              @update:model-value="updateItemFontWeight"
+            >
               <el-option
                 v-for="weight in fontWeightOptions"
                 :key="weight.value"
@@ -343,18 +354,11 @@ const selectedItem = computed<PagePaginationItem | null>(
   () => props.option.items.find((item) => item.id === selectedItemId.value) || null,
 )
 
-/** 旧场景没有逐按钮文字样式时，首次选中该按钮就补齐与弹幕文字一致的默认值。 */
-watch(
-  selectedItem,
-  (item) => {
-    if (!item) return
-    item.fontFamily ??= PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontFamily
-    item.fontSize ??= PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontSize
-    item.fontColor ??= PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontColor
-    item.fontWeight ??= PAGE_PAGINATION_APPEARANCE_DEFAULTS.labelFontWeight
-  },
-  { immediate: true },
-)
+const updateItemFontWeight = (value: unknown) => {
+  const item = selectedItem.value
+  if (item && (typeof value === 'string' || typeof value === 'number')) item.fontWeight = value
+}
+
 const eventValueError = computed(() => {
   const current = selectedItem.value
   if (!current) return ''
