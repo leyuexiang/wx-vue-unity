@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { reactive } from 'vue'
 import { DRAG_MODEL_ENUM, MODEL_ENUM } from '@/enums'
 import { createSceneDefinition, createViewportHost, createUpdateObjectTransformCommand, type ViewportHost } from '@/scene-platform'
@@ -9,11 +10,17 @@ import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorScen
 import { createMoveSceneNodeCommand } from '@/scene-platform/commands/moveSceneNodeCommand'
 import { assembleSceneDefinitionFromRuntimeFragments } from '../sceneRuntimeFragmentAssembler'
 import { serializeSceneDefinitionToFourPackages } from '../sceneFourPackage'
-import { createEditorUnityObject } from '../editorUnityCreationAdapter'
+import { createEditorUnityGroup, createEditorUnityObject } from '../editorUnityCreationAdapter'
 import { preserveUneditedThreeDDomain, releaseOriginalScenePackages, retainOriginalScenePackages } from '../twoDPackagePreservation'
 import { saveEditorSceneToDim3d } from '../editorDim3dSceneSaveService'
 import { saveEditorSceneDefinition } from '../editorSceneSaveAdapter'
 import { setActiveSceneViewportHost, clearActiveSceneViewportHost } from '../editorScenePlatformHost'
+import { renameEditorSceneObjectWithCommand } from '../editorSceneObjectMutationAdapter'
+import { applySceneObjectVisibilityToStore } from '../editorSceneVisibilityAdapter'
+import { copyEditorSceneSubtrees } from '../editorSceneSubtreeCopy'
+import { deleteEditorSceneSubtrees } from '../editorSceneSubtreeDeletion'
+import { dispatchEditorHistory } from '../editorSceneUndoRedoAdapter'
+import { runConfirmedEditorCommand } from '../editorSceneCommandTransaction'
 
 /** 只替换播放器边界，实际执行对象映射、命令历史、桥接、双端投影和保存序列化。 */
 const hosts: ViewportHost[] = []
@@ -50,6 +57,76 @@ const setup = async (type: 'local3d' | 'gis' = 'local3d', mode: 'cloud' | 'webgp
 }
 
 describe('画布模型拖拽入口', () => {
+  it('Web 命令与四包读取完整草稿，投影不查询播放器中已卸载的模型表现', async () => {
+    setActivePinia(createPinia())
+    const { host, unity, create } = await setup()
+    setActiveSceneViewportHost(host)
+    const id = (await create())!
+    const parent = (await createEditorUnityGroup(host, () => true))!
+    const store = host.getStore()
+    const commandBus = host.getCommandBus()
+    store.setSelectedObjectId(null)
+    store.updateSceneStreaming({
+      groups: [],
+      chunks: [{ id: 'chunk', sceneId, bounds: { type: 'sphere', center: [0, 0, 0], radius: 10 },
+        objectIds: [id], assetIds: ['published-model'] }],
+    })
+    await host.getBridge().flush()
+    const history = (direction: 'undo' | 'redo') =>
+      dispatchEditorHistory(direction, { commandBus, onError: (error) => { throw error } })
+    unity.loadScene.mockClear()
+    expect(renameEditorSceneObjectWithCommand({ store, commandBus, objectId: id, name: '卸载后改名' }).status).toBe('applied')
+    expect(applySceneObjectVisibilityToStore({ store, commandBus, objectId: id, visible: false }).status).toBe('applied')
+    await host.getBridge().flush()
+    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, name: '卸载后改名', visible: false }))
+    expect(await history('undo')).toBe(true)
+    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, visible: true }))
+    expect(await history('undo')).toBe(true)
+    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, name: '资源模型' }))
+    expect(await history('redo')).toBe(true)
+    expect(await history('redo')).toBe(true)
+    expect(unity.loadScene).not.toHaveBeenCalled()
+
+    const position = store.getObjectWorldMatrix(id)[3]
+    expect(await runConfirmedEditorCommand(host, 'execute', createMoveSceneNodeCommand(store, id, parent), () => true)).toBe(true)
+    expect(store.getObjectWorldMatrix(id)[3]).toEqual(position)
+    expect(await copyEditorSceneSubtrees(host, [id])).toBe(true)
+    const copy = store.getSelectedObjectId()!
+    expect(copy).not.toBe(id)
+    expect(await deleteEditorSceneSubtrees(host, [id])).toBe(true)
+    expect(unity.loadScene.mock.lastCall?.[0].objects.map(object => object.instanceId)).not.toContain(id)
+    expect(await history('undo')).toBe(true)
+    const projection = unity.loadScene.mock.lastCall![0]
+    expect(projection.objects).toContainEqual(expect.objectContaining({ instanceId: id, parentInstanceId: parent, name: '卸载后改名', visible: false }))
+    expect(projection.objects).toContainEqual(expect.objectContaining({ instanceId: copy, parentInstanceId: parent, visible: false }))
+    expect(projection.streaming?.chunks[0]?.objectIds).toEqual([id, copy])
+
+    const serialized = serializeSceneDefinitionToFourPackages(store.getScene())
+    const reopened = assembleSceneDefinitionFromRuntimeFragments({
+      manifest: { fragmentType: 'manifest', fragmentKey: sceneId, contentJson: JSON.stringify(serialized) },
+      options: { sceneId, sceneType: 'local3d' },
+    })
+    expect(reopened.objects.find(object => object.id === id)).toMatchObject({ parentInstanceId: parent, name: '卸载后改名', visible: false })
+    expect(reopened.streaming?.chunks[0]?.objectIds).toEqual([id, copy])
+  })
+
+  it('空业务分组进入 Unity 和四包，撤销和重做复用编号', async () => {
+    const { host, unity } = await setup()
+    setActiveSceneViewportHost(host)
+    const id = await createEditorUnityGroup(host, () => true)
+    expect(id).toBeTruthy()
+    expect(host.getStore().getObject(id!)).toMatchObject({ type: 'group', name: '新建分组' })
+    expect(host.getStore().getSelectedObjectId()).toBe(id)
+    expect(unity.loadScene.mock.lastCall?.[0].objects).toContainEqual(expect.objectContaining({ instanceId: id, objectType: 'group' }))
+    const serialized = serializeSceneDefinitionToFourPackages(host.getStore().getScene())
+    expect(JSON.parse(serialized.threeDJson).components).toContainEqual(expect.objectContaining({ instanceId: id, targetType: 'group' }))
+    const bus = host.getCommandBus()
+    expect(bus.undo()).toBe(true)
+    expect(host.getStore().getObject(id!)).toBeNull()
+    expect(bus.redo()).toBe(true)
+    expect(host.getStore().getObject(id!)?.id).toBe(id)
+  })
+
   it('将三维资源交给正式创建链路，不再被二维阶段的占位提示拦截', () => {
     // 入口契约防止后续迁移再次留下硬编码返回；运行时行为由下方的集成用例覆盖。
     const canvas = readFileSync(new URL('../../../views/sceneEdit/SceneCenter/SceneCanvas/index.vue', import.meta.url), 'utf8')

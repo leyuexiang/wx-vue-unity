@@ -148,9 +148,22 @@ function applySession(session: Session): void {
   try { sessionStorage.setItem(sessionKey, JSON.stringify(session)) } catch { /* 存储受限时仅保持内存会话。 */ }
 }
 
-/** 按用户所选平台调用对应密码登录，应用编号独立配置，禁止把运营应用作为租户回退值。 */
-export async function loginStandalone(phonenumber: string, password: string, platformType: PlatformType = 'operation'): Promise<StandaloneProfile> {
+/** 短信请求沿用认证租户配置，发送成功不代表已建立会话。 */
+export async function sendStandaloneSms(mobile: string, platformType: PlatformType): Promise<void> {
+  if (!DIM3D_ADMIN_API) throw new Error('当前登录服务暂不支持短信登录')
+  if (!/^1[3-9]\d{9}$/.test(mobile.trim())) throw new Error('请输入有效手机号')
   if (platformType !== 'operation' && platformType !== 'tenant') throw new Error('请选择有效登录平台')
+  const tenantId = String(platformType === 'tenant' ? import.meta.env.VITE_AUTH_TENANT_ID || '' : import.meta.env.VITE_AUTH_OPERATION_TENANT_ID || '').trim()
+  if (!/^[1-9]\d{0,18}$/.test(tenantId)) throw new Error('未配置有效登录租户编号')
+  await call<boolean>('/system/auth/send-sms-code', { mobile: mobile.trim(), scene: 21 }, undefined, tenantId)
+}
+
+/** 两种登录复用权限加载与会话校验，不通过手机号表单改变租户或登录平台。 */
+export async function loginStandalone(phonenumber: string, password: string, platformType: PlatformType = 'operation', method: 'account' | 'mobile' = 'account'): Promise<StandaloneProfile> {
+  if (platformType !== 'operation' && platformType !== 'tenant') throw new Error('请选择有效登录平台')
+  if (method !== 'account' && method !== 'mobile') throw new Error('请选择有效登录方式')
+  if (method === 'mobile' && (!/^1[3-9]\d{9}$/.test(phonenumber.trim()) || !/^\d{4,6}$/.test(password))) throw new Error('请输入有效手机号和验证码')
+  if (method === 'mobile' && !DIM3D_ADMIN_API) throw new Error('当前登录服务暂不支持短信登录')
   const configuredClientId = platformType === 'tenant' ? import.meta.env.VITE_AUTH_TENANT_CLIENT_ID :
     import.meta.env.VITE_AUTH_OPERATION_CLIENT_ID || import.meta.env.VITE_AUTH_CLIENT_ID
   const clientId = String(configuredClientId || '').trim()
@@ -162,9 +175,10 @@ export async function loginStandalone(phonenumber: string, password: string, pla
   if (DIM3D_ADMIN_API) {
     const tenantId = String(platformType === 'tenant' ? import.meta.env.VITE_AUTH_TENANT_ID || '' : import.meta.env.VITE_AUTH_OPERATION_TENANT_ID || '').trim()
     if (!/^[1-9]\d{0,18}$/.test(tenantId)) throw new Error('未配置有效登录租户编号')
-    // 账号字段遵循本项目真实登录合同，租户由显式部署配置选择，服务端继续校验账号归属。
+    // 密码和短信走各自已存在的认证入口；租户仍由部署配置选择并由服务端校验。
     const result = await call<{ accessToken: string; expiresTime: string | number }>(
-      '/system/auth/login', { username: phonenumber.trim(), password }, undefined, tenantId)
+      method === 'mobile' ? '/system/auth/sms-login' : '/system/auth/login',
+      method === 'mobile' ? { mobile: phonenumber.trim(), code: password } : { username: phonenumber.trim(), password }, undefined, tenantId)
     const expiresAt = typeof result.expiresTime === 'number' ? result.expiresTime : Date.parse(result.expiresTime)
     if (!Number.isFinite(expiresAt) || expiresAt <= issuedAt) throw new Error('登录有效期格式错误')
     tokens = { access_token: result.accessToken, client_id: 'admin-api', tenantId, expire_in: (expiresAt - issuedAt) / 1000 }

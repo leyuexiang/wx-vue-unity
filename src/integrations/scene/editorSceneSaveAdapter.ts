@@ -5,13 +5,17 @@ import type { LegacyScenePanelStateProvider } from './editorSceneSettingsAdapter
 import type { SceneAsyncConfig } from '@/types/threeScene'
 import type { WidgetSceneFragment } from './widgetRuntime/widgetSceneFragment'
 import type { EditorLegacySceneSaveOptions } from './editorLegacySceneSaveAdapter'
+import type { Dim3dSceneSaveAllBody } from '@/servers/manual/dim3d/api/sceneRuntime'
+import { captureOriginalScenePackages, preserveUneditedThreeDDomain } from './twoDPackagePreservation'
+import { serializeSceneDefinitionToFourPackages } from './sceneFourPackage'
 import {
   buildEditorSceneDefinitionBaseSaveSource,
   buildEditorSceneDefinitionSaveSourceFromBase,
 } from './editorSceneSaveSourceAdapter'
 
 import {
-  saveEditorSceneToDim3d,
+  prepareEditorSceneSave,
+  submitPreparedEditorSceneSave,
   type EditorDim3dSceneSaveBookmark,
   type EditorDim3dSceneSaveContext,
   type EditorDim3dSceneSaveServiceOptions,
@@ -36,6 +40,8 @@ export interface SaveEditorSceneDefinitionOptions {
   saveContext?: EditorDim3dSceneSaveContext | null
   /** 仅供定向测试注入接口替身或固定幂等键。 */
   dim3dSaveOptions?: EditorDim3dSceneSaveServiceOptions
+  /** 保存批次生成后通知调用方释放短期编辑门禁；过期快照在发送前由调用方拒绝。 */
+  onPrepared?: (body: Readonly<Dim3dSceneSaveAllBody>) => void
 }
 
 /**
@@ -103,9 +109,9 @@ const captureEditorSceneDefinitionFromBase = async (
   baseSceneSaveSource: SceneDefinition,
   options: CaptureEditorSceneDefinitionOptions,
 ) => {
-  const widgetSceneFragment = await captureEditorWidgetSceneFragment(options)
   const sceneGlobalState =
     'sceneGlobalState' in options ? options.sceneGlobalState : readEditorSceneGlobalStateSnapshot()
+  const widgetSceneFragment = await captureEditorWidgetSceneFragment(options)
   return buildEditorSceneDefinitionSaveSourceFromBase(
     baseSceneSaveSource,
     widgetSceneFragment,
@@ -166,11 +172,14 @@ export const saveEditorSceneDefinition = async (
   if (options.legacySaveOptions || 'legacySceneConfig' in options) throw new Error('旧格式场景需先转换为完整四包')
 
   // 与场景快照同时固定编辑范围，等待采集时的新命令属于下一次保存。
-  const editableHierarchyIds = sceneWasReadFromHost && activeHost?.getRuntime().id.startsWith('unity-')
+  const usesUnityRuntime = sceneWasReadFromHost && activeHost?.getRuntime().id.startsWith('unity-')
+  const editableHierarchyIds = usesUnityRuntime && activeHost
     ? new Set(activeHost.getStore().getHierarchyEditedIds()) : undefined
   const deletedObjectIds = sceneWasReadFromHost && activeHost
     ? new Set(activeHost.getStore().getDeletedObjectIds()) : undefined
   const saveEdits = sceneWasReadFromHost ? activeHost?.getStore().captureSaveEdits() : undefined
+  const saveContext = options.saveContext ? { ...options.saveContext } : null
+  const originalPackages = captureOriginalScenePackages(saveContext?.sceneId ?? scene.id)
   const sceneToSave = await captureEditorSceneDefinitionFromBase(baseSceneSaveSource, options)
 
   if (options.repository) {
@@ -182,23 +191,26 @@ export const saveEditorSceneDefinition = async (
     }
   }
 
-  if (!options.saveContext) {
+  if (!saveContext) {
     throw new Error('当前场景缺少后端保存上下文，无法保存。')
   }
-  const backendBookmark = await saveEditorSceneToDim3d(
+  const body = prepareEditorSceneSave(
     sceneToSave,
-    options.saveContext,
+    saveContext,
     {
       ...options.dim3dSaveOptions,
+      originalPackages,
       ...(editableHierarchyIds?.size ? { editableHierarchyIds } : {}),
       ...(deletedObjectIds?.size ? { deletedObjectIds } : {}),
       ...(saveEdits ? { saveEdits } : {}),
       // 仅当前 Unity 会话已接管的对象开放变换保存，按对象编号匹配原始四包。
-      ...(sceneWasReadFromHost && activeHost?.getRuntime().id.startsWith('unity-') ? {
+      ...(usesUnityRuntime ? {
         editableTransformIds: new Set(sceneToSave.objects.filter(object => !isUnityDeferredObject(object)).map(object => object.id)),
       } : {}),
     },
   )
+  options.onPrepared?.(body)
+  const backendBookmark = await submitPreparedEditorSceneSave(body, options.dim3dSaveOptions?.saveAll)
 
   return {
     scene: sceneToSave,
@@ -208,3 +220,25 @@ export const saveEditorSceneDefinition = async (
 }
 
 export const saveActiveEditorSceneDefinition = saveEditorSceneDefinition
+
+/** 失锁后导出当前内存草稿，沿用保存的合并许可，不包含租约或任何请求身份。 */
+export const captureEditorSceneDraftPackages = async (options: CaptureEditorSceneDefinitionOptions = {}) => {
+  const host = getActiveSceneViewportHost()
+  if (!host) throw new Error('当前没有可导出的编辑草稿')
+  const store = host.getStore()
+  const source = store.getScene()
+  const original = captureOriginalScenePackages(source.id)
+  const edits = store.captureSaveEdits()
+  const deleted = new Set(store.getDeletedObjectIds())
+  const hierarchy = new Set(store.getHierarchyEditedIds())
+  const runtime = host.getRuntime()
+  const scene = await captureEditorSceneDefinitionSnapshot({ ...options, scene: source, runtime })
+  const editableTransforms = runtime.id.startsWith('unity-')
+    ? new Set(scene.objects.filter(object => !isUnityDeferredObject(object)).map(object => object.id))
+    : undefined
+  return { name: scene.name, payload: {
+    schemaVersion: scene.schemaVersion,
+    ...preserveUneditedThreeDDomain(source.id, serializeSceneDefinitionToFourPackages(scene),
+      editableTransforms, hierarchy, deleted, edits, original),
+  } }
+}

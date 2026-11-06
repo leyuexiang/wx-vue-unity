@@ -57,3 +57,35 @@ describe('本项目148认证', () => {
       .toBe('https://other.invalid/admin-api/data')
   })
 })
+
+
+describe('手机短信登录', () => {
+  it('发送验证码使用后台登录场景和所选租户，不建立会话', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok(true))
+    vi.stubGlobal('fetch', fetchMock)
+    const auth = await import('../standalone')
+    await auth.sendStandaloneSms('13800000000', 'tenant')
+    expect(fetchMock).toHaveBeenCalledWith('https://service.invalid/admin-api/system/auth/send-sms-code', expect.objectContaining({
+      headers: expect.objectContaining({ 'tenant-id': '2' }), body: JSON.stringify({ mobile: '13800000000', scene: 21 }),
+    }))
+    expect(storage.size).toBe(0)
+  })
+  it('验证码登录复用权限查询，账号登录仍使用原密码接口', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(ok({ accessToken: 'fake-access', expiresTime: Date.now() + 60000 }))
+      .mockResolvedValueOnce(ok(profile))
+    vi.stubGlobal('fetch', fetchMock)
+    const auth = await import('../standalone')
+    await auth.loginStandalone('13800000000', '123456', 'operation', 'mobile')
+    expect(fetchMock.mock.calls[0]).toEqual(['https://service.invalid/admin-api/system/auth/sms-login', expect.objectContaining({
+      headers: expect.objectContaining({ 'tenant-id': '1' }), body: JSON.stringify({ mobile: '13800000000', code: '123456' }),
+    })])
+    expect(fetchMock.mock.calls[1]?.[0]).toContain('/system/auth/get-permission-info')
+  })
+  it('无效手机号或验证码不发请求', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    const auth = await import('../standalone')
+    await expect(auth.sendStandaloneSms('invalid', 'tenant')).rejects.toThrow('有效手机号')
+    await expect(auth.loginStandalone('13800000000', 'bad', 'tenant', 'mobile')).rejects.toThrow('验证码')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})

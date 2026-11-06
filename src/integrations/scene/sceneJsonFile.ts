@@ -184,10 +184,15 @@ export const createSceneJsonFileName = (name: string, now = new Date()) => {
   return `${safeName}-${timestamp}.json`
 }
 
-/** 浏览器本地下载；下一轮任务释放临时地址，确保点击下载时地址仍有效。 */
+/** 管理页的已保存修订下载继续受管理能力约束。 */
 export const downloadSceneJsonFile = (payload: SerializedSceneFourPackage, name: string) => {
   if (!getCurrentManagementCapabilities().scene.canDownloadJson)
     throw new Error('当前平台不支持下载场景文件')
+  downloadRetainedEditorDraft(payload, name)
+}
+
+/** 失锁恢复只下载本页已持有的草稿。下一轮任务再释放临时地址。 */
+export const downloadRetainedEditorDraft = (payload: SerializedSceneFourPackage, name: string) => {
   const url = URL.createObjectURL(
     new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' }),
   )

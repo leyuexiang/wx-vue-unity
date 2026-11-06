@@ -63,6 +63,7 @@ export interface SceneThreeDPackage {
   layers: SceneThreeDLayerPackage[]
   streaming: ScenePackageJsonObject
   cameraPaths: ScenePackageJsonValue[]
+  effects?: ScenePackageJsonValue[]
   vegetation?: ScenePackageJsonObject
 }
 export interface SceneTwoDComponentPackage extends ScenePackageJsonObject {
@@ -955,6 +956,17 @@ const createInstanceDeviceBindings = (
   ]
 }
 
+/** 复制前以保存投影核对原始实例和拥有的依赖，避免另一套字段清单与保存边界走散。 */
+export const projectThreeDObjectForCopyCheck = (object: SceneObject, sceneId: string) => {
+  const metadata = getRecord(object.metadata)
+  return {
+    target: toThreeTarget(object, sceneId),
+    dataBindings: createInstanceDataBindings(metadata, object.id, 'threeD'),
+    behaviors: createInstanceBehaviors(metadata, object.id, 'threeD'),
+    deviceBindings: createInstanceDeviceBindings(metadata, object.id, 'threeD'),
+  }
+}
+
 /** 资源市场图片使用的稳定来源标记；历史数据缺失该字段时统一按外部地址处理。 */
 const WIDGET_IMAGE_RESOURCE_MARKET_SOURCE = 'resource-market'
 
@@ -1484,6 +1496,7 @@ export const createSceneFourPackageDocuments = (
   const threeDBaseSettings = {
     ...(hasKeys(settings.three) ? { three: settings.three } : {}),
     ...(hasKeys(scenePanel) ? { editor: { scenePanel } } : {}),
+    ...(typeof settings.mediaServerId === 'string' ? { mediaServerId: settings.mediaServerId } : {}),
   }
   const gisLayers = scene.layers.filter((layer) =>
     ['imagery', 'terrain', 'tileset', 'vector'].includes(layer.type),
@@ -1529,6 +1542,15 @@ export const createSceneFourPackageDocuments = (
         scene.cameraPaths ?? [],
         '$.threeD.cameraPaths',
       ) as ScenePackageJsonValue[],
+      ...(scene.effects.length
+        ? { effects: cloneScenePackageJsonValue(scene.effects.map(effect => ({
+          ...effect,
+          ...(effect.assetRefs ? {
+            // 效果引用也只保存稳定编号，临时签名地址由资源依赖重新解析。
+            assetRefs: effect.assetRefs.map(asset => cloneResourcePersistenceValue(asset, '$.threeD.effects[].assetRefs[]')),
+          } : {}),
+        })), '$.threeD.effects') as ScenePackageJsonValue[] }
+        : {}),
       ...(scene.vegetation
         ? {
             /** 植被专用净化保留业务版本和摘要，只剥离当前会话的资源地址与认证信息。 */

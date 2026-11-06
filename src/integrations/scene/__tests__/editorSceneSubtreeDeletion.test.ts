@@ -123,6 +123,19 @@ describe('三维子树批量删除', () => {
     expect(commandBus.getUndoSize()).toBe(0)
   })
 
+  it('原档未接管实例的扩展仍引用子树时阻止删除', async () => {
+    const { host, store, commandBus } = await setup()
+    const original = serializeSceneDefinitionToFourPackages(store.getScene())
+    const threeD = JSON.parse(original.threeDJson)
+    threeD.components.push({
+      instanceId: 'unloaded', contentJson: JSON.stringify({ vendor: { observationTargetUuid: 'deep' } }),
+    })
+    retainOriginalScenePackages(id, { ...original, threeDJson: JSON.stringify(threeD) })
+    await expect(deleteEditorSceneSubtrees(host, ['parent'])).rejects.toThrow('原始三维实例扩展仍引用')
+    expect(store.getObjects()).toHaveLength(4)
+    expect(commandBus.getUndoSize()).toBe(0)
+  })
+
   it('四包保全仅移除显式删除项，保留未加载记录、共享资源和扩展字段', async () => {
     const { host, store, commandBus } = await setup()
     const original = serializeSceneDefinitionToFourPackages(store.getScene())

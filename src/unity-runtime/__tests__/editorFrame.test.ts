@@ -8,7 +8,7 @@ const fixture = async (mode: 'cloud' | 'webgpu') => {
   scene.objects = [{ id: 'bottle', name: '水瓶', type: 'primitive', visible: true, locked: false, order: 0,
     transform: { kind: 'local', position: [0, 15, 0], rotation: [0, 0, 0], scale: [100, 100, 100] },
     metadata: { editorGeometryType: 'BoxGeometry' } }]
-  const unity = { loadScene: vi.fn(async () => {}), executeInteractionAction: vi.fn(async () => {}),
+  const unity = { loadScene: vi.fn(async () => {}), executeInteractionAction: vi.fn(async () => {}), setSelection: vi.fn(),
     capabilities: { features: { 'interaction.action': true } } }
   Object.assign(runtime, { unity })
   await runtime.loadScene(scene)
@@ -34,5 +34,21 @@ describe('Unity 结构树聚焦', () => {
     await expect(runtime.frame({ objectId: 'bottle' })).rejects.toThrow('相机正在飞行')
     await runtime.frame({ objectId: 'bottle' })
     expect(unity.executeInteractionAction).toHaveBeenCalledTimes(2)
+  })
+
+  it('排队中的聚焦在改选后失效，不再发往 Unity', async () => {
+    const { runtime, unity } = await fixture('webgpu')
+    let finish: () => void = () => {}
+    unity.executeInteractionAction.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    runtime.setSelectedObject('bottle')
+    const first = runtime.moveCameraToObject('bottle')
+    await Promise.resolve()
+    const queued = runtime.moveCameraToObject('bottle')
+    runtime.setSelectedObject(null)
+    finish()
+    expect(await first).toBe(true)
+    expect(await queued).toBe(false)
+    expect(unity.executeInteractionAction).toHaveBeenCalledTimes(1)
+    expect(unity.setSelection).toHaveBeenLastCalledWith(null)
   })
 })

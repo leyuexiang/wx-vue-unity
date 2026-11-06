@@ -9,6 +9,21 @@ import type { ComputedRef, InjectionKey } from 'vue'
 export const isPrimaryStructureMouseButton = (event: Pick<MouseEvent, 'button'>) =>
   event.button === 0
 
+/** 多选必须包含视口的主选中编号，同时剔除批量层级变更中已移除的编号。 */
+export function reconcileStructureSceneSelection(
+  ids: Set<string>,
+  primary: string | null,
+  hasObject: (id: string) => boolean,
+) {
+  if (!primary || !ids.has(primary)) {
+    ids.clear()
+    return
+  }
+  for (const id of ids) {
+    if (!hasObject(id)) ids.delete(id)
+  }
+}
+
 /**
  * 根据当前多选结果和 Ctrl 语义，生成下一次部件选中集合。
  *

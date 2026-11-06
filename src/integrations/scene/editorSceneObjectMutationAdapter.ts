@@ -327,7 +327,7 @@ export const removeEditorSceneObjectFromStore = ({
     objects: scene.objects,
     streaming: scene.streaming,
   })
-  if (repairedStreaming !== scene.streaming) store.updateSceneStreaming(repairedStreaming)
+  if (repairedStreaming !== scene.streaming) store.updateSceneStreaming(repairedStreaming, 'membership')
 
   return {
     status: 'applied',
@@ -408,7 +408,7 @@ export const duplicateEditorSceneObjectWithCommand = ({
       const currentScene = activeStore.getScene()
       const sceneWithStreamingChunk = ensureEditorSceneStreamingChunks(currentScene)
       if (sceneWithStreamingChunk.streaming !== currentScene.streaming) {
-        activeStore.updateSceneStreaming(sceneWithStreamingChunk.streaming)
+        activeStore.updateSceneStreaming(sceneWithStreamingChunk.streaming, 'membership')
       }
       activeStore.setSelectedObjectId(duplicatedObjectId)
     },
@@ -418,7 +418,7 @@ export const duplicateEditorSceneObjectWithCommand = ({
        * removeObject 会裁剪副本区块；恢复复制前的完整快照可同时保留手工区块、运行时覆盖和关闭状态。
        * cloneDeep 防止后续重做修改命令持有的历史基线。
        */
-      activeStore.updateSceneStreaming(cloneDeep(previousStreaming))
+      activeStore.updateSceneStreaming(cloneDeep(previousStreaming), 'membership')
       activeStore.setSelectedObjectId(previousSelectedObjectId)
     },
   }

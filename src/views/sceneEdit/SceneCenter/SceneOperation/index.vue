@@ -114,13 +114,17 @@ import { useRoute } from 'vue-router'
 import { appLogger } from '@/utils/logger'
 import { beginEditorSceneOperation, editorSceneOperation, editorSceneRecovery } from '@/integrations/scene/editorSceneOperationGate'
 import { saveActiveEditorSceneDefinition } from '@/integrations/scene/editorSceneSaveAdapter'
-import type {
-  EditorDim3dSceneSaveBookmark,
-  EditorDim3dSceneSaveContext,
+import {
+  EditorSceneSaveError,
+  submitPreparedEditorSceneSave,
+  type EditorDim3dSceneSaveBookmark,
+  type EditorDim3dSceneSaveContext,
 } from '@/integrations/scene/editorDim3dSceneSaveService'
+import { readWidgetSceneFragment } from '@/integrations/scene/widgetRuntime/widgetSceneFragment'
+import type { Dim3dSceneSaveAllBody } from '@/servers/manual/dim3d/api/sceneRuntime'
 import { getActiveSceneViewportHost, subscribeActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
-import { createEditorSceneSaveStateTracker } from '@/integrations/scene/editorSceneSaveState'
+import { createEditorSceneSaveStateTracker, type EditorSceneSaveCheckpoint } from '@/integrations/scene/editorSceneSaveState'
 import {
   clearEditorHistory,
   getEditorUndoRedoState,
@@ -151,6 +155,7 @@ const emit = defineEmits<{
   saveSucceeded: [bookmark: EditorDim3dSceneSaveBookmark]
   /** 同步真实请求中的状态，供顶栏禁用保存按钮；脏状态变化不会触发额外接口。 */
   saveStateChange: [saving: boolean]
+  saveLockLost: []
 }>()
 
 /**
@@ -172,6 +177,8 @@ const editorSceneSaveStateTracker = createEditorSceneSaveStateTracker((snapshot)
   emit('saveStateChange', snapshot.saving)
 })
 const sceneSaveState = ref(editorSceneSaveStateTracker.getSnapshot())
+// 不确定回执仅保留在本会话内，下一次保存先确认这批已冻结的四包。
+let pendingSaveBatch: { checkpoint: EditorSceneSaveCheckpoint; body: Readonly<Dim3dSceneSaveAllBody> } | undefined
 let stopScenePlatformHostSubscription: (() => void) | null = null
 let stopScenePlatformStoreSubscription: (() => void) | null = null
 let stopScenePlatformHistorySubscription: (() => void) | null = null
@@ -344,42 +351,54 @@ const handleRedo = () => replayHistory('redo')
 
 const handleSaveSceneConfig = async () => {
   const host = getActiveSceneViewportHost()
-  if (!host || sceneSaveState.value.saving || editorSceneOperation.value) return
+  const context = props.saveContext
+  if (!host || !context || sceneSaveState.value.saving || editorSceneOperation.value) return
   const release = beginEditorSceneOperation('save')
-  editorSceneSaveStateTracker.beginSave()
-  // 同编号草稿重新加载也会清除 saving，旧回执不能影响新会话。
-  const isCurrentSave = () => getActiveSceneViewportHost() === host && sceneSaveState.value.saving
+  const checkpoint = editorSceneSaveStateTracker.captureCheckpoint()
+  const sameLease = () => props.saveContext?.sceneId === context.sceneId &&
+    props.saveContext.lockToken === context.lockToken && props.saveContext.baseRevisionNo === context.baseRevisionNo
+  if (pendingSaveBatch && (pendingSaveBatch.checkpoint.session !== checkpoint.session ||
+    pendingSaveBatch.body.sceneId !== context.sceneId || pendingSaveBatch.body.lockToken !== context.lockToken ||
+    pendingSaveBatch.body.baseRevisionNo !== context.baseRevisionNo)) pendingSaveBatch = undefined
+  const retry = pendingSaveBatch
+  const attempt = editorSceneSaveStateTracker.beginSave(retry?.checkpoint ?? checkpoint)
+  // 同编号重载、新批次和锁变化都不能让迟到回执推进当前基线。
+  const isCurrentSave = () => getActiveSceneViewportHost() === host &&
+    editorSceneSaveStateTracker.isCurrentSave(attempt)
 
   try {
-    /**
-     * G002 起保存入口改为提交 SceneStore 中的纯 SceneDefinition。
-     * 旧 sceneApi 仍负责当前真实画面和未迁移交互，但不再作为保存 JSON 的拼装来源。
-     */
-    const result = await saveActiveEditorSceneDefinition({
-      sceneApi: store.sceneApi,
-      saveContext: props.saveContext,
-    })
-    if (!isCurrentSave()) return
-    if (!result.backendBookmark) {
-      throw new Error('场景保存接口未返回后端保存书签。')
+    let bookmark: EditorDim3dSceneSaveBookmark | undefined
+    if (retry) {
+      release()
+      bookmark = await submitPreparedEditorSceneSave(retry.body)
+    } else {
+      const result = await saveActiveEditorSceneDefinition({
+        sceneApi: store.sceneApi,
+        saveContext: context,
+        widgetSceneFragment: readWidgetSceneFragment(),
+        onPrepared: (body) => {
+          if (!isCurrentSave() || !sameLease()) throw new Error('保存快照所属场景或编辑锁已变化')
+          pendingSaveBatch = { body, checkpoint }
+          // 四包固定后等待网络无需占用编辑门禁，新操作保持未保存。
+          release()
+        },
+      })
+      bookmark = result.backendBookmark
     }
-    const savedState = editorSceneSaveStateTracker.markSaved()
-    /**
-     * 保存期间若产生新编辑，保留历史，避免把未保存的操作从撤销栈移除。
-     * 已完全保存时仍沿用现有清栈策略，保存检查点改造另行接入。
-     */
-    if (!savedState.dirty) clearEditorHistory({ commandBus: host.getCommandBus() })
+    if (!isCurrentSave()) return
+    if (!sameLease() || !bookmark) throw new Error('保存回执所属场景或编辑锁已变化')
+    pendingSaveBatch = undefined
+    editorSceneSaveStateTracker.markSaved(attempt)
     refreshScenePlatformHistoryRevision()
-    emit('saveSucceeded', result.backendBookmark)
-    ElMessage.success('场景保存成功')
+    emit('saveSucceeded', bookmark)
+    ElMessage.success(retry && sceneSaveState.value.dirty ? '原保存批次已确认，后续编辑仍待保存' : '场景保存成功')
   } catch (error) {
     if (!isCurrentSave()) return
-    const saveFailureState = editorSceneSaveStateTracker.markFailed(error)
-    /**
-     * G008 要求保存失败不能清空脏状态。
-     * 失败时只记录场景 id 和错误原因，当前 Store 快照继续留在页面中，用户修复接口或网络后可直接重试保存。
-     */
-    appLogger.error('SceneOperation', '保存场景定义失败', route.query.id, error)
+    if (!(error instanceof EditorSceneSaveError && error.kind === 'uncertain' && sameLease()))
+      pendingSaveBatch = undefined
+    const saveFailureState = editorSceneSaveStateTracker.markFailed(error, attempt)
+    if (error instanceof EditorSceneSaveError && error.kind === 'lockLost') emit('saveLockLost')
+    appLogger.error('SceneOperation', '保存场景定义失败', route.query.id, saveFailureState.lastErrorMessage)
     ElMessage.error(saveFailureState.lastErrorMessage || '场景保存失败，当前改动已保留')
   } finally {
     release()
@@ -443,5 +462,6 @@ onBeforeUnmount(() => {
   scenePlatformStore.value = null
   unityGizmoRuntime.value = null
   editorSceneSaveStateTracker.dispose()
+  pendingSaveBatch = undefined
 })
 </script>

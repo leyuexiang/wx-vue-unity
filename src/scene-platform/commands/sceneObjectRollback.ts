@@ -43,6 +43,6 @@ export function captureSceneObjectMembershipRollback(store: SceneStore, ids: Rea
     if (deleted.size) store.removeObjectBatch(deleted)
     if (added.size) store.removeObjectBatch(added, { revertInsertion: { streaming } })
     if (entries.length) store.restoreObjectBatch(entries, streaming, { replaceExisting: true })
-    if (store.getScene().streaming !== streaming) store.updateSceneStreaming(streaming)
+    if (store.getScene().streaming !== streaming) store.updateSceneStreaming(streaming, 'membership')
   }
 }

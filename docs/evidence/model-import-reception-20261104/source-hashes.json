@@ -1,0 +1,7 @@
+{
+  "src/views/resourceManage/modelManage/AddDialog.vue": "b83705b69a76e5f7c5e555be0251cb972f900d24bc9813fee811eb07d541ab77",
+  "src/servers/manual/dim3d/api/modelImport.ts": "9d92a21ce40374c86f107bf224791059d0c07885bdbea14465a47a05d7d525fd",
+  "src/utils/modelImport/incrementalSha256.ts": "bfbb7c861863369efdc00085ec8d84d30126b315e53ec3159a13f8246e1c5b6d",
+  "src/utils/modelImport/fileHash.worker.ts": "926e4545f3c0f2b9fbb6c5d705a353e98d5b6714af6398cb338233148f11e938",
+  "src/utils/modelImport/hashFile.ts": "f42e79236fc767a1a09296aa1b662952a4be4330ca90e633453c0aa786e2a1e9"
+}

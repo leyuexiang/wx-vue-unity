@@ -1,0 +1,14 @@
+{
+  "queued": {
+    "saveDisabled": true,
+    "queryOnlyAfterRecovery": true,
+    "hash": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  },
+  "committed": {
+    "saveEnabled": true,
+    "status": "模型已发布，可以保存"
+  },
+  "workerHashMatchesAbc": true,
+  "controlledResponses": true,
+  "realServerVerified": false
+}

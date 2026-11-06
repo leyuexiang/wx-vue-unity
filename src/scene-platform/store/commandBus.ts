@@ -23,6 +23,10 @@ export interface ConfirmedCommandTransaction {
   finishRollback: () => void
 }
 export interface CommandBus {
+  /** 当前持久化编辑状态的会话内身份，撤销/重做可回到相同身份。 */
+  getHistoryState: () => number
+  /** 独立持久化写入使旧命令端点无法证明当前数据等价。 */
+  invalidateHistoryState: () => void
   beginConfirmed: (action: 'execute' | 'undo' | 'redo', command?: SceneCommand) => ConfirmedCommandTransaction | null
   /** 读取本次撤销或重做的目标，用于在执行前确定需要等待的运行端。 */
   getReplayCommand: (direction: 'undo' | 'redo') => SceneCommand | undefined
@@ -67,16 +71,34 @@ export interface CommandBus {
  */
 export function createCommandBus(store: SceneStore): CommandBus {
   const MAX_HISTORY_SIZE = 220
-  const undoStack: SceneCommand[] = []
-  const redoStack: SceneCommand[] = []
+  type HistoryEntry = { command: SceneCommand; before: number; after: number }
+  const undoStack: HistoryEntry[] = []
+  const redoStack: HistoryEntry[] = []
+  let identitySequence = 0
+  let historyState = 0
   let mergeCandidate: SceneCommand | undefined
   const breakHistoryMerge = () => { mergeCandidate = undefined }
+  const invalidateHistoryState = () => {
+    historyState = ++identitySequence
+    breakHistoryMerge()
+  }
   store.subscribe((event) => {
-    if (event.type === 'sceneLoaded' || event.type === 'selectionChanged') breakHistoryMerge()
+    if (event.type === 'sceneLoaded') invalidateHistoryState()
+    else if (event.type === 'selectionChanged') breakHistoryMerge()
   })
   const getReplayCommand: CommandBus['getReplayCommand'] = (direction) => {
     const stack = direction === 'undo' ? undoStack : redoStack
-    return stack[stack.length - 1]
+    return stack[stack.length - 1]?.command
+  }
+  const moveHistoryState = (entry: HistoryEntry, direction: 'undo' | 'redo') => {
+    const source = direction === 'undo' ? 'after' : 'before'
+    const destination = direction === 'undo' ? 'before' : 'after'
+    if (historyState !== entry[source]) {
+      // 无历史写入可能改过命令会覆盖的字段；跨过这一边时为两个端点重新分配身份。
+      entry[source] = ++identitySequence
+      entry[destination] = ++identitySequence
+    }
+    historyState = entry[destination]
   }
   const historyListeners = new Set<(event: CommandHistoryEvent) => void>()
   let executingDepth = 0
@@ -117,8 +139,8 @@ export function createCommandBus(store: SceneStore): CommandBus {
   }
 
   /** 清空指定栈并释放其中无法再恢复的运行时资源。 */
-  const discardStack = (stack: SceneCommand[]): void => {
-    stack.forEach(discardCommand)
+  const discardStack = (stack: HistoryEntry[]): void => {
+    for (const entry of stack) discardCommand(entry.command)
     stack.length = 0
   }
 
@@ -133,12 +155,14 @@ export function createCommandBus(store: SceneStore): CommandBus {
    */
   const recordExecuted = (command: SceneCommand) => {
     requireIdle()
-    const previousCommand = undoStack[undoStack.length - 1]
-    if (previousCommand && previousCommand === mergeCandidate &&
+    const previous = undoStack[undoStack.length - 1]
+    const previousCommand = previous?.command
+    if (previous && previousCommand && previousCommand === mergeCandidate &&
         command.mergeSession !== undefined && previousCommand.mergeSession === command.mergeSession &&
         previousCommand.name === command.name &&
         (previousCommand.confirmationScope ?? 'runtime') === (command.confirmationScope ?? 'runtime') &&
         previousCommand.mergeWith?.(command)) {
+      previous.after = historyState = ++identitySequence
       /** 合并后的新命令不会进入任何历史栈，必须立即释放其独占资源，避免资源泄漏。 */
       discardCommand(command)
       discardRedoStack()
@@ -146,16 +170,20 @@ export function createCommandBus(store: SceneStore): CommandBus {
       return
     }
 
-    undoStack.push(command)
+    const before = historyState
+    historyState = ++identitySequence
+    undoStack.push({ command, before, after: historyState })
     mergeCandidate = command.mergeSession === undefined ? undefined : command
     if (undoStack.length > MAX_HISTORY_SIZE) {
-      discardCommand(undoStack.shift())
+      discardCommand(undoStack.shift()?.command)
     }
     discardRedoStack()
     notifyHistoryChanged({ type: 'execute', command })
   }
 
   return {
+    getHistoryState: () => historyState,
+    invalidateHistoryState,
     getReplayCommand,
     breakHistoryMerge,
     subscribeTransaction: (listener) => {
@@ -236,8 +264,11 @@ export function createCommandBus(store: SceneStore): CommandBus {
           pendingToken = null
           if (action === 'execute') recordExecuted(command)
           else {
-            if (action === 'undo') { undoStack.pop(); redoStack.push(command) }
-            else { redoStack.pop(); undoStack.push(command) }
+            const source = action === 'undo' ? undoStack : redoStack
+            const destination = action === 'undo' ? redoStack : undoStack
+            const entry = source.pop()!
+            moveHistoryState(entry, action)
+            destination.push(entry)
             notifyHistoryChanged({ type: action, command })
           }
           transactionEvent('commit')
@@ -263,8 +294,9 @@ export function createCommandBus(store: SceneStore): CommandBus {
     undo: () => {
       requireIdle()
       breakHistoryMerge()
-      const command = undoStack[undoStack.length - 1]
-      if (!command) return false
+      const entry = undoStack[undoStack.length - 1]
+      if (!entry) return false
+      const { command } = entry
       executingDepth += 1
       try {
         store.runTransaction(() => {
@@ -274,15 +306,17 @@ export function createCommandBus(store: SceneStore): CommandBus {
         executingDepth = Math.max(0, executingDepth - 1)
       }
       undoStack.pop()
-      redoStack.push(command)
+      moveHistoryState(entry, 'undo')
+      redoStack.push(entry)
       notifyHistoryChanged({ type: 'undo', command })
       return true
     },
     redo: () => {
       requireIdle()
       breakHistoryMerge()
-      const command = redoStack[redoStack.length - 1]
-      if (!command) return false
+      const entry = redoStack[redoStack.length - 1]
+      if (!entry) return false
+      const { command } = entry
       executingDepth += 1
       try {
         store.runTransaction(() => {
@@ -292,7 +326,8 @@ export function createCommandBus(store: SceneStore): CommandBus {
         executingDepth = Math.max(0, executingDepth - 1)
       }
       redoStack.pop()
-      undoStack.push(command)
+      moveHistoryState(entry, 'redo')
+      undoStack.push(entry)
       notifyHistoryChanged({ type: 'redo', command })
       return true
     },
@@ -302,7 +337,8 @@ export function createCommandBus(store: SceneStore): CommandBus {
        * 只能取消当前栈顶的原始命令，不能从历史中间删除命令；
        * 后者会破坏后续命令依赖的 Store 快照和正常撤销顺序。
        */
-      if (undoStack[undoStack.length - 1] !== command) return false
+      const entry = undoStack[undoStack.length - 1]
+      if (entry?.command !== command) return false
       breakHistoryMerge()
 
       executingDepth += 1
@@ -314,6 +350,7 @@ export function createCommandBus(store: SceneStore): CommandBus {
         executingDepth = Math.max(0, executingDepth - 1)
       }
       undoStack.pop()
+      moveHistoryState(entry, 'undo')
       discardCommand(command)
       notifyHistoryChanged({ type: 'cancel', command })
       return true
@@ -322,10 +359,7 @@ export function createCommandBus(store: SceneStore): CommandBus {
       // 宿主销毁可废弃等待中的事务，迟到确认会因令牌失效而被拒绝。
       pendingToken = null
       breakHistoryMerge()
-      /**
-       * 保存成功或重新加载场景后，当前 Store 快照已经成为新的编辑基线。
-       * 这里只清空命令历史，不回滚 Store，避免用户在保存后还能撤销到保存前状态。
-       */
+      // 清场或重置释放历史资源，当前数据与其身份不随清栈改变。
       const hadHistory = undoStack.length > 0 || redoStack.length > 0
       discardStack(undoStack)
       discardStack(redoStack)

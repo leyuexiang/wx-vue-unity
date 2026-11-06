@@ -5,8 +5,16 @@ import { getActiveSceneViewportHost } from './editorScenePlatformHost'
 export type EditorSceneOperation = 'importJson' | 'template' | 'createObject' | 'save' | 'publish' | 'saveTemplate' | 'moveSceneNode' | 'deleteSceneNodes' | 'copySceneNodes' | 'history' | 'widgetEdit' | 'publicRequestEdit'
 const activeOperation = shallowRef<EditorSceneOperation | null>(null)
 const recovery = shallowRef<{ message: string; retry: () => Promise<boolean> } | null>(null)
+const lostLease = shallowRef<symbol | null>(null)
 export const editorSceneRecovery = readonly(recovery)
-export const editorSceneOperation = computed(() => recovery.value ? 'historyRecovery' : activeOperation.value)
+export const editorSceneOperation = computed(() => lostLease.value ? 'leaseLost' : recovery.value ? 'historyRecovery' : activeOperation.value)
+
+/** 保持场景宿主存活以供恢复导出，同时阻止键盘等入口绕开只读画面。 */
+export const holdEditorSceneForLeaseLoss = () => {
+  const token = Symbol('lease-lost')
+  lostLease.value = token
+  return () => { if (lostLease.value === token) lostLease.value = null }
+}
 const beforeOperation = new Set<() => void>()
 
 /** 先结算当前面板草稿，避免下一次操作捕获未登记的属性状态。 */

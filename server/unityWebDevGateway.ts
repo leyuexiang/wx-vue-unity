@@ -10,8 +10,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 const host = '127.0.0.1'
 const port = Number(process.env.UNITY_WEB_DEV_PORT || 5191)
 const pageOrigin = process.env.UNITY_WEB_DEV_PAGE_ORIGIN || 'http://localhost:5180'
-const backend = new URL(process.env.UNITY_WEB_DEV_BACKEND || 'http://192.168.10.148:12522')
-// 默认与148本项目管理API一致，旧参考部署可显式配置reference。
+// 后端必须显式指定，防止联调时把当前会话令牌转发到另一套测试环境。
+const backend = new URL(required('UNITY_WEB_DEV_BACKEND'))
+// 默认使用本项目管理 API，旧参考部署可显式配置 reference。
 const adminApi = process.env.UNITY_WEB_DEV_API_MODE !== 'reference'
 const playerRoot = path.resolve(required('UNITY_WEB_DEV_PLAYER_DIR'))
 const artRoot = path.resolve(required('UNITY_WEB_DEV_ART_DIR'))

@@ -240,7 +240,7 @@ export const bindEditorSceneStreamingChunksToObjectTransforms = (store: SceneSto
     const scene = store.getScene()
     const updatedScene = updateEditorSceneStreamingChunkBounds(scene, event.object)
     if (updatedScene === scene) return
-    store.updateSceneStreaming(updatedScene.streaming)
+    store.updateSceneStreaming(updatedScene.streaming, 'loadNormalization')
   })
 
 /** 根据持久化变换构造保守包围范围，避免依赖尚未创建或已被卸载的引擎对象。 */

@@ -253,6 +253,93 @@ describe('统一历史回放入口', () => {
     } finally { tracker.dispose() }
   })
 
+  it('保存点跨撤销重做稳定，分支与独立写入不会伪装成已保存状态', async () => {
+    const { host, commandBus } = await setup()
+    const store = host.getStore()
+    const tracker = createEditorSceneSaveStateTracker()
+    tracker.bindStore(store, commandBus)
+    ensureEditorSceneObjectLayersInStore(store)
+    const layerId = store.getLayers()[0]!.id
+    try {
+      commandBus.execute(createUpdateObjectLayerCommand(layerId, { name: '保存版本' }))
+      const attempt = tracker.beginSave()
+      tracker.markSaved(attempt)
+      expect(commandBus.undo()).toBe(true)
+      expect(tracker.getSnapshot().dirty).toBe(true)
+      expect(commandBus.redo()).toBe(true)
+      expect(tracker.getSnapshot().dirty).toBe(false)
+
+      commandBus.undo()
+      commandBus.execute(createUpdateObjectLayerCommand(layerId, { name: '新分支' }))
+      expect(commandBus.getRedoSize()).toBe(0)
+      expect(tracker.getSnapshot().dirty).toBe(true)
+
+      // 独立写入碰到历史会回放的字段，旧命令重做不能冒充这个保存点。
+      store.upsertLayer({ ...store.getLayers()[0]!, name: '命令之外的保存值' })
+      tracker.markSaved(tracker.beginSave())
+      commandBus.undo()
+      commandBus.redo()
+      expect(store.getLayers()[0]!.name).toBe('新分支')
+      expect(tracker.getSnapshot().dirty).toBe(true)
+    } finally { tracker.dispose() }
+  })
+
+  it('合并、超过 220 步、分支替换和关场各释放一次历史资源', async () => {
+    const { commandBus } = await setup()
+    commandBus.clear()
+    const hooks = Array.from({ length: 222 }, () => vi.fn())
+    const make = (onDiscard: () => void) => ({
+      name: '容量检查', execute: () => {}, undo: () => {}, onDiscard,
+    })
+    const first = { ...make(hooks[0]!), mergeSession: 'drag', mergeWith: () => true }
+    commandBus.recordExecuted(first)
+    commandBus.recordExecuted({ ...make(hooks[1]!), mergeSession: 'drag' })
+    expect(commandBus.getUndoSize()).toBe(1)
+    expect(hooks[0]).not.toHaveBeenCalled()
+    expect(hooks[1]).toHaveBeenCalledTimes(1)
+    for (const hook of hooks.slice(2)) commandBus.recordExecuted(make(hook))
+    expect(commandBus.getUndoSize()).toBe(220)
+    expect(hooks[0]).toHaveBeenCalledTimes(1)
+    commandBus.undo()
+    expect(hooks[221]).not.toHaveBeenCalled()
+    const replacement = vi.fn()
+    commandBus.recordExecuted(make(replacement))
+    expect(hooks[221]).toHaveBeenCalledTimes(1)
+    commandBus.clear()
+    expect(replacement).toHaveBeenCalledTimes(1)
+    for (const hook of hooks) expect(hook).toHaveBeenCalledTimes(1)
+  })
+
+  it('事务期间卸载尺寸面板时，同值结算无需写入历史', async () => {
+    const { commandBus } = await setup()
+    setActivePinia(createPinia())
+    const widgets = useSceneWidgetStore()
+    const current = widgets.getWidgetCanvasConfig()
+    const count = commandBus.getUndoSize()
+    const release = beginEditorSceneOperation('save')
+    try {
+      expect(commitSceneStageSizeChange(current)).toEqual(current)
+      expect(commandBus.getUndoSize()).toBe(count)
+      expect(() => commitSceneStageSizeChange({ width: current.width + 1 })).toThrow('场景正在处理其他操作')
+    } finally { release() }
+  })
+
+  it('同编号重载后的旧回执不能结束新的保存尝试', async () => {
+    const { host, commandBus } = await setup()
+    const store = host.getStore()
+    const tracker = createEditorSceneSaveStateTracker()
+    tracker.bindStore(store, commandBus)
+    try {
+      const old = tracker.beginSave()
+      await host.replaceScene(store.getScene())
+      store.updateSceneSettings({ ...store.getScene().settings, mediaServerId: '新草稿' })
+      const current = tracker.beginSave()
+      expect(tracker.markSaved(old)).toMatchObject({ saving: true, dirty: true })
+      expect(tracker.markFailed(new Error('旧回执'), old)).toMatchObject({ saving: true, dirty: true })
+      expect(tracker.markSaved(current)).toMatchObject({ saving: false, dirty: false })
+    } finally { tracker.dispose() }
+  })
+
   it('舞台、二维数据和全局请求共用历史及脏状态，回放后的配置重新读取仓库', async () => {
     const options = await setup()
     setActivePinia(createPinia())

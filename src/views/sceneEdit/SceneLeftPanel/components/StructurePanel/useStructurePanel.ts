@@ -2,10 +2,11 @@ import { toRaw, computed, nextTick, onBeforeUnmount, onMounted, provide, ref, wa
 import { Search, Delete, Hide, View, Lock, Unlock } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { runConfirmedEditorCommand } from '@/integrations/scene/editorSceneCommandTransaction'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { beginEditorSceneOperation, editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
 import { buildSceneNodeIndex } from '@/scene-platform/core/sceneNodeIndex'
 import { createMoveSceneNodesCommand, isLocalHierarchyNode } from '@/scene-platform/commands/moveSceneNodeCommand'
+import type { SceneCommand } from '@/scene-platform/commands/types'
 import type { SceneAllContentsItem, WidgetLayerNode } from '@/types/threeScene'
 import type { CommandBus, RuntimeBridge, SceneObject, SceneStore } from '@/scene-platform'
 import { useSceneStore, useSceneWidgetStore } from '@/stores/sceneEditStore'
@@ -35,9 +36,9 @@ import {
 } from '@/integrations/scene/editorSceneObjectTree'
 import { deleteEditorSceneSubtrees } from '@/integrations/scene/editorSceneSubtreeDeletion'
 import { copyEditorSceneSubtrees } from '@/integrations/scene/editorSceneSubtreeCopy'
+import { createEditorUnityGroup } from '@/integrations/scene/editorUnityCreationAdapter'
 import {
   buildEditorSceneObjectLayerGroups,
-  createEditorSceneObjectLayer,
   deleteEditorSceneObjectLayer,
   ensureEditorSceneObjectLayersInStore,
   isEditorManagedDefaultObjectLayer,
@@ -49,6 +50,7 @@ import {
   setEditorSceneObjectLayerVisible,
 } from '@/integrations/scene/editorSceneLayerAdapter'
 import { applySceneObjectVisibilityToStore } from '@/integrations/scene/editorSceneVisibilityAdapter'
+import { renameEditorSceneObjectWithCommand } from '@/integrations/scene/editorSceneObjectMutationAdapter'
 import { appLogger } from '@/utils/logger'
 import {
   findPageFrameChild,
@@ -56,6 +58,13 @@ import {
 } from '@/packages/components/Widget/VPageMenu/pageFrameTypes'
 import WidgetGroupItem from './WidgetGroupItem'
 import WidgetLeafItem from './WidgetLeafItem'
+import {
+  buildSceneHierarchyLayout,
+  createSceneHierarchySearch,
+  flattenSceneHierarchyRows,
+  resolveSceneHierarchyLocation,
+} from './sceneHierarchyRows'
+import { resolveSceneHierarchyDrop, type SceneHierarchyDropTarget } from './sceneHierarchyDrag'
 import createGroupIcon from '@/assets/icons/create-group.svg'
 import structureModelActiveIcon from '@/assets/images/structure-model-active.svg'
 import structureModelDefaultIcon from '@/assets/images/structure-model-default.svg'
@@ -81,6 +90,7 @@ import {
 import {
   isPrimaryStructureMouseButton,
   isStructureSceneObjectSelected,
+  reconcileStructureSceneSelection,
   resolveNextExpandedStructureGroups,
   resolveStructureSelectionRange,
   resolveNextStructureWidgetSelection,
@@ -106,6 +116,9 @@ export const useStructurePanel = () => {
     kind: 'scene-object'
     isActive: boolean
     raw: SceneAllContentsItem
+    depth?: number
+    expandable?: boolean
+    expanded?: boolean
   }
 
   type StructureModelLayerGroup = {
@@ -116,6 +129,8 @@ export const useStructurePanel = () => {
     objectCount: number
     isSystemDefaultLayer: boolean
     items: StructureSceneObjectItem[]
+    displayCount?: number
+    searchHit?: boolean
   }
   type StructureCategory = 'model' | 'three-dimensional-component' | 'widget'
 
@@ -126,6 +141,18 @@ export const useStructurePanel = () => {
   const activeStructureCategory = ref<StructureCategory>('model')
   const structureCategorySelectedByUser = ref(false)
   const expandedGroupIds = ref<string[]>([])
+  // 对象图层与业务节点使用独立展开集合，避免同名编号串到二维分组。
+  const expandedSceneLayerIds = ref(new Set<string>())
+  const expandedSceneNodeIds = ref(new Set<string>())
+  const isSceneLayerExpanded = (id: string) => expandedSceneLayerIds.value.has(id)
+  const toggleSceneLayerExpanded = (id: string) => {
+    if (!expandedSceneLayerIds.value.delete(id)) expandedSceneLayerIds.value.add(id)
+  }
+  const toggleSceneNodeExpanded = (id: string) => {
+    // 搜索暂时展开命中路径，用户的常规展开状态在清空搜索后恢复。
+    if (hierarchySearchKeyword.value) return
+    if (!expandedSceneNodeIds.value.delete(id)) expandedSceneNodeIds.value.add(id)
+  }
   const contextMenuRef = ref<HTMLElement>()
   const contextMenu = ref(createHiddenStructureContextMenuState())
   const scenePlatformStore = ref<SceneStore | null>(null)
@@ -157,8 +184,19 @@ export const useStructurePanel = () => {
   let stopScenePlatformHostSubscription: (() => void) | null = null
   let stopScenePlatformStoreSubscription: (() => void) | null = null
   let syncingSceneObjectLayers = false
+  let structureSceneSession = 0
 
   const searchKeyword = computed(() => searchValue.value.trim().toLowerCase())
+  const hierarchySearchKeyword = ref('')
+  // 只延后业务树查询，清空立即恢复，平铺列表与二维搜索保持原有响应方式。
+  watch(searchKeyword, (keyword, _, onCleanup) => {
+    if (!keyword) {
+      hierarchySearchKeyword.value = ''
+      return
+    }
+    const timer = setTimeout(() => { hierarchySearchKeyword.value = keyword }, 180)
+    onCleanup(() => clearTimeout(timer))
+  })
   const currentTransformMaterialUuid = computed(() => store.currentTransformMaterialUuid)
   const transformMaterialRandomId = computed(() => store.transformMaterialRandomId)
 
@@ -342,6 +380,129 @@ export const useStructurePanel = () => {
       )
   })
 
+  const hierarchyDisplayLayers = computed(() => {
+    void scenePlatformStoreRevision.value
+    return (scenePlatformStore.value?.getLayers() ?? [])
+      .filter((layer) => layer.type === 'object' && !isEditorManagedDefaultObjectLayer(layer))
+      .sort((a, b) => a.order - b.order)
+  })
+  const hierarchyLayout = computed(() => {
+    void scenePlatformStoreRevision.value
+    const sceneStore = scenePlatformStore.value
+    if (sceneStore?.getScene().type !== 'local3d' || !getActiveSceneViewportHost()?.getRuntime().id.startsWith('unity-')) return null
+    const index = sceneStore.getNodeIndex()
+    // 平铺草稿仍可用原拖拽。存在业务父级时显示层级，拖拽语义由 M2-06 接入。
+    if (!index.childrenByParent.size || (index.childrenByParent.size === 1 && index.childrenByParent.has(''))) return null
+    return buildSceneHierarchyLayout(index, allModelItems.value, allThreeDimensionalComponentItems.value,
+      new Set(hierarchyDisplayLayers.value.map((layer) => layer.id)))
+  })
+  const searchSceneHierarchy = createSceneHierarchySearch()
+  const hierarchyMatches = computed(() =>
+    searchSceneHierarchy(hierarchyLayout.value, hierarchySearchKeyword.value),
+  )
+  const sceneObjectCategoryCounts = computed(() => ({
+    model: hierarchyLayout.value?.sections.model.count ?? allModelItems.value.length,
+    'three-dimensional-component': hierarchyLayout.value?.sections['three-dimensional-component'].count
+      ?? allThreeDimensionalComponentItems.value.length,
+  }))
+  const hierarchyVisibleRows = computed(() => {
+    const layout = hierarchyLayout.value
+    const category = activeStructureCategory.value
+    if (!layout || category === 'widget') return null
+    const section = layout.sections[category]
+    const keyword = hierarchySearchKeyword.value
+    const matches = hierarchyMatches.value?.pathIds
+    const flatten = (roots: readonly string[], filter = matches) =>
+      flattenSceneHierarchyRows(layout, roots, expandedSceneNodeIds.value, filter)
+    const rootItems = flatten(section.roots.get('') ?? [])
+    const groups: StructureModelLayerGroup[] = []
+    for (const layer of hierarchyDisplayLayers.value) {
+      const objectCount = scenePlatformStore.value?.getObjectIdsInLayer(layer.id).size ?? 0
+      if (objectCount && !section.memberLayers.has(layer.id)) continue
+      const roots = section.roots.get(layer.id) ?? []
+      const layerMatches = Boolean(keyword && layer.name.toLowerCase().includes(keyword))
+      const items = layerMatches
+        ? flattenSceneHierarchyRows(layout, roots, expandedSceneNodeIds.value, undefined, true)
+        : isSceneLayerExpanded(layer.id) || keyword ? flatten(roots) : []
+      if (keyword && !layerMatches && !items.length) continue
+      groups.push({ id: layer.id, name: layer.name, visible: layer.visible, locked: layer.locked,
+        objectCount, isSystemDefaultLayer: false, items, displayCount: roots.length, searchHit: layerMatches })
+    }
+    return { rootItems, groups }
+  })
+
+  // 沿用图层在前的显示顺序，图层和对象行使用各自的键命名空间。
+  const sceneHierarchyRows = computed(() => {
+    const rows = hierarchyVisibleRows.value
+    if (!rows) return null
+    const directIds = hierarchyMatches.value?.directIds
+    const result: (
+      | { kind: 'node'; key: string; item: StructureSceneObjectItem; layerDepth: number; searchHit: boolean }
+      | { kind: 'layer'; key: string; group: StructureModelLayerGroup; searchHit: boolean }
+    )[] = []
+    const appendNode = (item: StructureSceneObjectItem, layerDepth: number) => {
+      result.push({ kind: 'node', key: `node:${item.id}`, item, layerDepth, searchHit: directIds?.has(item.id) ?? false })
+    }
+    for (const group of rows.groups) {
+      result.push({ kind: 'layer', key: `layer:${group.id}`, group, searchHit: group.searchHit ?? false })
+      for (const item of group.items) appendNode(item, 1)
+    }
+    for (const item of rows.rootItems) appendNode(item, 0)
+    return result
+  })
+  const selectedHierarchyObjectId = computed(() => {
+    void scenePlatformStoreRevision.value
+    return hierarchyLayout.value ? scenePlatformStore.value?.getSelectedObjectId() : undefined
+  })
+  const hierarchyRenameTarget = computed(() => {
+    const id = selectedHierarchyObjectId.value
+    if (!id || selectedSceneObjectIds.value.size > 1 ||
+      hierarchyLayout.value?.categoryById.get(id) !== activeStructureCategory.value) return undefined
+    const platform = scenePlatformStore.value
+    if (!platform?.getObject(id)) return undefined
+    return { id, locked: platform.isObjectEffectivelyLocked(id) }
+  })
+  const canEditHierarchyRows = computed(() => Boolean(scenePlatformCommandBus.value) && !editorSceneOperation.value)
+  const renameHierarchySelection = async () => {
+    const platform = scenePlatformStore.value
+    const commandBus = scenePlatformCommandBus.value
+    const target = hierarchyRenameTarget.value
+    const object = target && platform?.getObject(target.id)
+    if (!target || !object || !commandBus || target.locked || editorSceneOperation.value) return
+    const session = structureSceneSession
+    let name: string
+    try {
+      const result = await ElMessageBox.prompt('输入节点名称', '重命名节点', {
+        inputValue: object.name,
+        inputValidator: (value) => Boolean(value?.trim()) || '请输入节点名称',
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+      })
+      name = result.value
+    } catch {
+      return
+    }
+    // 弹窗可跨越重载或保存，提交前以会话和稳定编号重新确认编辑资格。
+    if (structureSceneSession !== session || scenePlatformStore.value !== platform ||
+      scenePlatformCommandBus.value !== commandBus || editorSceneOperation.value) return
+    try {
+      const result = renameEditorSceneObjectWithCommand({ store: platform, commandBus, objectId: object.id, name })
+      if (result.status === 'applied') flushScenePlatformBridge('重命名节点')
+      else if (result.reason === 'locked-object') ElMessage.warning('节点已锁定，无法重命名')
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? error.message : '无法重命名节点')
+    }
+  }
+  const revealSceneHierarchyObject = (id: string) => {
+    const layout = hierarchyLayout.value
+    if (!layout || activeStructureCategory.value === 'widget' || hierarchySearchKeyword.value) return
+    const location = resolveSceneHierarchyLocation(layout, id)
+    if (!location) return
+    activeStructureCategory.value = location.category
+    for (const parent of location.ancestors) expandedSceneNodeIds.value.add(parent)
+    if (location.layerId) expandedSceneLayerIds.value.add(location.layerId)
+  }
+
   /** 结构树模型区和三维组件区共用以下动态数据，模板只保留一套列表实现。 */
   const activeSceneObjectLabel = computed(() =>
     activeStructureCategory.value === 'three-dimensional-component' ? '三维组件' : '模型',
@@ -368,8 +529,8 @@ export const useStructurePanel = () => {
     const currentCategory = activeStructureCategory.value as SceneObjectStructureCategory
     const nextCategory = resolveAutomaticSceneObjectCategory(
       currentCategory,
-      allModelItems.value.length,
-      allThreeDimensionalComponentItems.value.length,
+      sceneObjectCategoryCounts.value.model,
+      sceneObjectCategoryCounts.value['three-dimensional-component'],
       structureCategorySelectedByUser.value,
     )
     activeStructureCategory.value = nextCategory
@@ -399,9 +560,11 @@ export const useStructurePanel = () => {
 
   /** 根据当前结构分类判断三维对象分组能否删除，模型与三维组件共用同一组级规则。 */
   const isActiveSceneObjectGroupDeleteDisabled = (group: StructureModelLayerGroup) =>
-    activeStructureCategory.value === 'three-dimensional-component'
+    group.locked || (hierarchyLayout.value && scenePlatformStore.value
+      ? [...scenePlatformStore.value.getObjectIdsInLayer(group.id)].some((id) => scenePlatformStore.value!.isObjectEffectivelyLocked(id))
+      : activeStructureCategory.value === 'three-dimensional-component'
       ? threeDimensionalComponentGroupDeleteDisabledIds.value.has(group.id)
-      : isModelGroupDeleteDisabled(group)
+      : isModelGroupDeleteDisabled(group))
 
   const widgetEntryMap = computed(() => buildWidgetEntryMap(sceneWidgetStore.totalWidgets || []))
   const widgetGroupMap = computed(
@@ -572,7 +735,7 @@ export const useStructurePanel = () => {
       value: 'model' as const,
       icon: structureModelDefaultIcon,
       activeIcon: structureModelActiveIcon,
-      count: allModelItems.value.length,
+      count: sceneObjectCategoryCounts.value.model,
     },
     {
       label: '二维组件',
@@ -586,7 +749,7 @@ export const useStructurePanel = () => {
       value: 'three-dimensional-component' as const,
       icon: structureThreeDimensionalComponentDefaultIcon,
       activeIcon: structureThreeDimensionalComponentActiveIcon,
-      count: allThreeDimensionalComponentItems.value.length,
+      count: sceneObjectCategoryCounts.value['three-dimensional-component'],
     },
   ])
 
@@ -1444,15 +1607,23 @@ export const useStructurePanel = () => {
   const isWidgetGroupDeleteDisabled = (group: Extract<WidgetLayerNode, { type: 'group' }>) =>
     widgetGroupDeleteDisabledIds.value.has(group.id)
 
-  const createModelGroup = () => {
-    const result = createEditorSceneObjectLayer({
-      store: scenePlatformStore.value,
-      commandBus: scenePlatformCommandBus.value,
-    })
-    if (result.status !== 'applied' || !result.layerId) return
-    expandedGroupIds.value = Array.from(new Set([...expandedGroupIds.value, result.layerId]))
-    store.setCurrentObjectLayerId(result.layerId)
-    refreshScenePlatformStoreRevision()
+  const canCreateBusinessGroup = computed(() => Boolean(localHierarchy.value && canEditHierarchyRows.value &&
+    !searchKeyword.value && !hierarchySearchKeyword.value))
+  const createBusinessGroup = async () => {
+    const host = getActiveSceneViewportHost()
+    if (!host || host.getStore() !== toRaw(scenePlatformStore.value) || !canCreateBusinessGroup.value) return
+    const session = structureSceneSession
+    const isActive = () => getActiveSceneViewportHost() === host && structureSceneSession === session
+    try {
+      const id = await createEditorUnityGroup(host, isActive)
+      if (!id) return
+      selectStructureCategory('model')
+      store.setCurrentObjectLayerId(null)
+      await nextTick()
+      if (isActive()) revealSceneHierarchyObject(id)
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? error.message : '无法创建业务分组')
+    }
   }
 
   /** 模型分组选中态写入主 Store，使左树与右侧分组属性面板消费同一数据源。 */
@@ -1512,40 +1683,68 @@ export const useStructurePanel = () => {
     }
     return [...index.nodesById.values()].filter((candidate) => isLocalHierarchyNode(candidate) && !descendants.has(candidate.id))
   })
-  const getHierarchyParentName = (id: string) => {
-    const index = localHierarchy.value
-    const parent = index?.parentById.get(id)
-    return parent ? index?.nodesById.get(parent)?.name : undefined
-  }
-  const editSelectedHierarchy = async (parent: string | undefined, shift?: number) => {
+  // 选择器和拖放都先冲刷待确认变换，再在同一会话内生成并确认一条层级命令。
+  const runHierarchyMove = async (prepare: (platform: SceneStore) => SceneCommand | undefined) => {
     const host = getActiveSceneViewportHost()
-    const nodes = hierarchySelection.value
-    if (!host || host.getStore() !== toRaw(scenePlatformStore.value) || !nodes.length || editorSceneOperation.value) return
+    if (!host || host.getStore() !== toRaw(scenePlatformStore.value) || editorSceneOperation.value) return false
+    const session = structureSceneSession
     try {
       const release = beginEditorSceneOperation('moveSceneNode')
       try {
-        const store = host.getStore()
-        const sceneId = store.getScene().id
-        const current = () => getActiveSceneViewportHost() === host && store.getScene().id === sceneId
-        // 先结算待确认的变换，再按最新的权威草稿计算世界姿态。
+        const current = () => getActiveSceneViewportHost() === host && structureSceneSession === session
         await host.getBridge().flush()
-        if (!current()) return
-        let target: number | undefined
-        if (shift !== undefined) {
-          const index = localHierarchy.value
-          const node = selectedHierarchyNode.value
-          if (!node || !index) return
-          const siblings = (index.childrenByParent.get(node.parentInstanceId ?? '') ?? [])
-            .filter((id) => node.parentInstanceId || index.nodesById.get(id)?.layerId === node.layerId)
-          target = siblings.indexOf(node.id) + shift
-        }
-        const command = createMoveSceneNodesCommand(store, nodes.map((node) => node.id), parent, target)
-        if (command) await runConfirmedEditorCommand(host, 'execute', command, current)
+        if (!current()) return false
+        const command = prepare(host.getStore())
+        return command ? await runConfirmedEditorCommand(host, 'execute', command, current) : false
       } finally {
         release()
       }
     } catch (error) {
       ElMessage.warning(error instanceof Error ? error.message : '无法调整节点层级')
+      return false
+    }
+  }
+  const editSelectedHierarchy = (parent: string | undefined, shift?: number) => {
+    const ids = hierarchySelection.value.map((node) => node.id)
+    if (!ids.length) return
+    return runHierarchyMove((platform) => {
+      if (shift === undefined) return createMoveSceneNodesCommand(platform, ids, parent)
+      const index = platform.getNodeIndex()
+      const node = ids.length === 1 ? index.nodesById.get(ids[0]!) : undefined
+      if (!node) return
+      const siblings = (index.childrenByParent.get(node.parentInstanceId ?? '') ?? [])
+        .filter((id) => node.parentInstanceId || index.nodesById.get(id)?.layerId === node.layerId)
+      return createMoveSceneNodesCommand(platform, ids, node.parentInstanceId, siblings.indexOf(node.id) + shift)
+    })
+  }
+
+  type HierarchyDragSource = { id: string; ids: string[]; session: number }
+  const getHierarchyDragSource = (id: string): HierarchyDragSource | undefined => {
+    const platform = scenePlatformStore.value
+    const node = platform?.getObject(id)
+    if (!hierarchyLayout.value || !canEditHierarchyRows.value || searchKeyword.value || hierarchySearchKeyword.value ||
+      !node || !isLocalHierarchyNode(node) || platform?.isObjectEffectivelyLocked(id)) return
+    // 已选中的行拖动整个批次，未选中的行仅拖动自身。
+    const selected = selectedSceneObjectIds.value
+    return { id, ids: selected.has(id) ? [...selected] : [id], session: structureSceneSession }
+  }
+  const getHierarchyDropError = (source: HierarchyDragSource, target: SceneHierarchyDropTarget) => {
+    const platform = scenePlatformStore.value
+    if (!platform || structureSceneSession !== source.session || editorSceneOperation.value) return '拖动已失效'
+    try {
+      resolveSceneHierarchyDrop(platform, source.ids, target)
+    } catch (error) {
+      return error instanceof Error ? error.message : '无法拖到此处'
+    }
+  }
+  const dropHierarchyNodes = async (source: HierarchyDragSource, target: SceneHierarchyDropTarget) => {
+    if (structureSceneSession !== source.session || searchKeyword.value || hierarchySearchKeyword.value) return
+    const moved = await runHierarchyMove((platform) => {
+      const { parentId, siblingIndex } = resolveSceneHierarchyDrop(platform, source.ids, target)
+      return createMoveSceneNodesCommand(platform, source.ids, parentId, siblingIndex)
+    })
+    if (moved && structureSceneSession === source.session && target.kind === 'node' && target.placement === 'inside') {
+      expandedSceneNodeIds.value.add(target.id)
     }
   }
   const hasBusinessHierarchy = computed(() =>
@@ -1642,12 +1841,14 @@ export const useStructurePanel = () => {
     const nextVisible = sceneObject ? !sceneObject.visible : !item.visible
 
     if (sceneObject) {
-      applySceneObjectVisibilityToStore({
+      if (hierarchyLayout.value && !scenePlatformCommandBus.value) return
+      const result = applySceneObjectVisibilityToStore({
         commandBus: scenePlatformCommandBus.value,
         store: scenePlatformStore.value,
         objectId: item.uuid,
         visible: nextVisible,
       })
+      if (result.status !== 'applied') return
     } else if (!toggleSceneContentVisibleByUuid(item.uuid)) {
       return
     }
@@ -1657,7 +1858,9 @@ export const useStructurePanel = () => {
   }
 
   const toggleModelLayerVisible = (group: StructureModelLayerGroup) => {
-    const nextVisible = !group.visible
+    // 树形图层的持久化状态只从当前仓库和命令读取，避免窗口行快照覆盖较新的状态。
+    if (editorSceneOperation.value || (hierarchyLayout.value && !scenePlatformCommandBus.value)) return
+    const nextVisible = !(scenePlatformStore.value?.getLayer(group.id)?.visible ?? group.visible)
 
     /**
      * 组内受管对象由图层适配器批量写入 Store，再统一冲刷 RuntimeBridge。
@@ -1683,17 +1886,18 @@ export const useStructurePanel = () => {
   }
 
   const toggleModelLayerLocked = (group: StructureModelLayerGroup) => {
+    if (editorSceneOperation.value) return
     const result = setEditorSceneObjectLayerLocked({
       store: scenePlatformStore.value,
       commandBus: scenePlatformCommandBus.value,
       layerId: group.id,
-      locked: !group.locked,
+      locked: !(scenePlatformStore.value?.getLayer(group.id)?.locked ?? group.locked),
     })
     if (result.status === 'applied') refreshScenePlatformStoreRevision()
   }
 
   const deleteModelGroup = (group: StructureModelLayerGroup) => {
-    if (isModelGroupDeleteDisabled(group)) return
+    if (editorSceneOperation.value || isActiveSceneObjectGroupDeleteDisabled(group)) return
     try {
       const result = deleteEditorSceneObjectLayer({
         store: scenePlatformStore.value,
@@ -1712,6 +1916,22 @@ export const useStructurePanel = () => {
     const sceneObject = scenePlatformStore.value?.getObject(item.id)
     if (!sceneObject) return !item.raw.userData.isDrag
     return resolveEditorSceneObjectEffectiveState(scenePlatformStore.value, item.id).effectiveLocked
+  }
+
+  // 仅为窗口中的节点读取派生状态。后代按真实父级和所属图层继承权限。
+  const getHierarchyNodeActions = (item: StructureSceneObjectItem) => {
+    const platform = scenePlatformStore.value
+    const object = platform?.getObject(item.id)
+    if (!object) {
+      return { locked: !item.raw.userData.isDrag, inheritedLocked: false, inheritedHidden: false,
+        visibilityDisabled: false, lockDisabled: false, canDrag: false }
+    }
+    const state = resolveEditorSceneObjectEffectiveState(platform, item.id)
+    const missingCommand = !scenePlatformCommandBus.value
+    return { locked: state.effectiveLocked, inheritedLocked: state.inheritedLocked,
+      inheritedHidden: !state.inheritedVisible, visibilityDisabled: missingCommand || state.effectiveLocked,
+      lockDisabled: missingCommand || state.inheritedLocked,
+      canDrag: !missingCommand && !state.effectiveLocked && isLocalHierarchyNode(object) }
   }
 
   /**
@@ -1822,6 +2042,9 @@ export const useStructurePanel = () => {
     if (scenePlatformStore.value !== nextStore) {
       /** 宿主切换到另一份场景仓库时清除上一个场景的分类选择，再按新场景内容自动定位。 */
       selectedSceneObjectIds.value = new Set()
+      structureSceneSession++
+      expandedSceneLayerIds.value.clear()
+      expandedSceneNodeIds.value.clear()
       structureCategorySelectedByUser.value = false
       activeStructureCategory.value = 'model'
     }
@@ -1852,10 +2075,26 @@ export const useStructurePanel = () => {
           }
         }
         if (event.type === 'sceneLoaded') {
+          structureSceneSession++
           selectedSceneObjectIds.value = new Set()
+          expandedSceneLayerIds.value.clear()
+          expandedSceneNodeIds.value.clear()
           /** 场景切换重新从默认模型分类开始；若新场景只有组件，下面会自动切到组件分类。 */
           structureCategorySelectedByUser.value = false
           activeStructureCategory.value = 'model'
+        }
+        if (event.type === 'layerRemoved') expandedSceneLayerIds.value.delete(event.layerId)
+        if (event.type === 'objectRemoved') {
+          expandedSceneNodeIds.value.delete(event.objectId)
+          selectedSceneObjectIds.value.delete(event.objectId)
+        }
+        if (selectedSceneObjectIds.value.size && (event.type === 'selectionChanged' || event.type === 'objectHierarchyChanged')) {
+          reconcileStructureSceneSelection(selectedSceneObjectIds.value, nextStore.getSelectedObjectId(),
+            (id) => Boolean(nextStore.getObject(id)))
+        }
+        if (event.type === 'objectHierarchyChanged' && expandedSceneNodeIds.value.size) {
+          const nodes = nextStore.getNodeIndex().nodesById
+          for (const id of expandedSceneNodeIds.value) if (!nodes.has(id)) expandedSceneNodeIds.value.delete(id)
         }
         // 兼容补齐只随加载执行，不能覆盖用户主动将节点移回根级的结果。
         if (event.type === 'sceneLoaded' && !syncingSceneObjectLayers) {
@@ -1867,7 +2106,7 @@ export const useStructurePanel = () => {
           }
         }
         refreshScenePlatformStoreRevision()
-        if (event.type === 'sceneLoaded' || event.type === 'objectUpserted') {
+        if (event.type === 'sceneLoaded' || event.type === 'objectUpserted' || event.type === 'objectHierarchyChanged') {
           autoSelectSceneObjectCategory()
         }
       })
@@ -1904,6 +2143,7 @@ export const useStructurePanel = () => {
   })
 
   onBeforeUnmount(() => {
+    structureSceneSession++
     stopScenePlatformHostSubscription?.()
     stopScenePlatformHostSubscription = null
     stopScenePlatformStoreSubscription?.()
@@ -1940,6 +2180,7 @@ export const useStructurePanel = () => {
     modelLayerDragGroup,
     widgetLayerDragGroup,
     searchKeyword,
+    hierarchySearchKeyword,
     currentTransformMaterialUuid,
     transformMaterialRandomId,
     refreshScenePlatformStoreRevision,
@@ -1957,6 +2198,12 @@ export const useStructurePanel = () => {
     visibleThreeDimensionalComponentGroups,
     activeSceneObjectLabel,
     activeSceneObjectRootItems,
+    sceneHierarchyRows,
+    hierarchyRenameTarget,
+    renameHierarchySelection,
+    canEditHierarchyRows,
+    selectedHierarchyObjectId,
+    revealSceneHierarchyObject,
     activeVisibleSceneObjectGroups,
     modelGroupDeleteDisabledIds,
     isModelGroupDeleteDisabled,
@@ -1977,6 +2224,9 @@ export const useStructurePanel = () => {
     structureCategoryItems,
     selectStructureCategory,
     isGroupExpanded,
+    isSceneLayerExpanded,
+    toggleSceneLayerExpanded,
+    toggleSceneNodeExpanded,
     toggleGroupExpanded,
     hideContextMenu,
     adjustContextMenuPosition,
@@ -1993,8 +2243,10 @@ export const useStructurePanel = () => {
     selectedHierarchyParent,
     hierarchySelection,
     hierarchyParents,
-    getHierarchyParentName,
     editSelectedHierarchy,
+    getHierarchyDragSource,
+    getHierarchyDropError,
+    dropHierarchyNodes,
     selectWidgetFromNode,
     selectWidgetChildFromNode,
     selectGroup,
@@ -2016,7 +2268,8 @@ export const useStructurePanel = () => {
     handleWidgetRootDragChange,
     canMoveWidget,
     isWidgetGroupDeleteDisabled,
-    createModelGroup,
+    canCreateBusinessGroup,
+    createBusinessGroup,
     selectedModelGroupId,
     selectModelGroup,
     handleModelMove,
@@ -2030,6 +2283,7 @@ export const useStructurePanel = () => {
     toggleModelLayerLocked,
     deleteModelGroup,
     isModelLocked,
+    getHierarchyNodeActions,
     updateMeshPickup,
     flushScenePlatformBridge,
     deleteMesh,

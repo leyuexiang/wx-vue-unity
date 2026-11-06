@@ -1,4 +1,5 @@
-import type { SceneFourPackagePayload } from './sceneFourPackage'
+import { projectThreeDObjectForCopyCheck, type SceneFourPackagePayload } from './sceneFourPackage'
+import type { SceneStore } from '@/scene-platform'
 import type { SceneSaveEdits } from '@/scene-platform/core/sceneSaveEdits'
 import { attachDataBindingOverflow, mergeDataBindingOverflow, SERVER_PERSISTED_DATA_BINDING_LIMIT } from './dataBindingOverflow'
 import { visitThreeDObjectReferences } from './threeDObjectReferences'
@@ -23,6 +24,8 @@ export const retainOriginalScenePackages = (sceneId: string, payload: SceneFourP
 }
 export const releaseOriginalScenePackages = (sceneId: string) => { originals.delete(sceneId) }
 export const hasOriginalScenePackages = (sceneId: string) => originals.has(sceneId)
+/** 四包都是不可变文本，保存捕获后不再读取可能已被重载的会话缓存。 */
+export const captureOriginalScenePackages = (sceneId: string) => originals.get(sceneId) ?? null
 
 /** 删除公共请求按最终四包复查，包含未加载及尚未接管的原始依赖。 */
 export function assertPublicRequestRemovalAllowed(payload: SceneFourPackagePayload, deleted: ReadonlySet<string>) {
@@ -51,13 +54,101 @@ export function assertNoDeletedObjectReferences(value: unknown, ids: ReadonlySet
   }
 }
 
+const legacyTargetFields = new Set([
+  'id', 'componentType', 'type', 'initialOwnVisible', 'initialEffectiveVisible', 'layerId', 'order', 'resourceKeys',
+  'metadata', 'style', 'effect', 'light', 'firstPerson', 'billboard',
+])
+const owns = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key)
+
+/** 原字段可以是投影的子集。数组须逐项对应，避免把不同的动作或请求视为同一记录。 */
+function containsOriginalCopyData(original: unknown, projected: unknown, compareValues = true): boolean {
+  const pending: Array<[unknown, unknown]> = [[original, projected]]
+  while (pending.length) {
+    const [before, after] = pending.pop()!
+    if (before === after) continue
+    if (Array.isArray(before) && Array.isArray(after) && before.length === after.length) {
+      before.forEach((value, index) => pending.push([value, after[index]]))
+    } else if (isRecord(before) && isRecord(after)) {
+      for (const [key, value] of Object.entries(before)) {
+        if (!owns(after, key)) return false
+        pending.push([value, after[key]])
+      }
+    } else if (compareValues || before === null || after === null ||
+      typeof before === 'object' || typeof before !== typeof after) return false
+  }
+  return true
+}
+
+/** 未投影的原档字段或依赖必须在分配副本前拒绝，源记录由既有保存保全。 */
+export function assertOriginalThreeDCopyAllowed(store: SceneStore, ids: ReadonlySet<string>) {
+  const sceneId = store.getScene().id
+  const original = originals.get(sceneId)
+  if (!original) return
+  const threeD = parse(original.threeDJson)
+  const originalIds = new Set<string>()
+  const dependencies = parse(mergeDataBindingOverflow(original.sceneJson, original.dependenciesJson).dependenciesJson)
+  const projections = new Map<string, ReturnType<typeof projectThreeDObjectForCopyCheck>>()
+  const verifiedDependencies = new Set<unknown>()
+  const getProjection = (id: string) => {
+    let value = projections.get(id)
+    if (!value) {
+      value = projectThreeDObjectForCopyCheck(store.getObject(id)!, sceneId)
+      projections.set(id, value)
+    }
+    return value
+  }
+  const reject = (id: string) => {
+    throw new Error(`节点「${store.getObject(id)?.name ?? id}」含有无法完整复制的原档扩展或依赖`)
+  }
+  for (const target of [...records(threeD.objects), ...records(threeD.components)]) {
+    const id = targetIdOf(target)
+    if (!id) continue
+    originalIds.add(id)
+    if (!ids.has(id)) continue
+    const projected = getProjection(id).target
+    if (Object.keys(target).some((key) => !owns(projected, key) && !legacyTargetFields.has(key) &&
+      key !== 'layerKey' && key !== 'parentInstanceId')) reject(id)
+    const rawContent = typeof target.contentJson === 'string' ? parse(target.contentJson) : target.contentJson
+    const currentContent = projected.contentJson
+    if (rawContent != null && !containsOriginalCopyData(rawContent, currentContent)) reject(id)
+    for (const key of ['metadata', 'style', 'effect', 'light', 'firstPerson', 'billboard'] as const) {
+      if (target[key] != null && !containsOriginalCopyData(target[key], currentContent[key])) reject(id)
+    }
+    if (target.transform != null && !containsOriginalCopyData(target.transform, projected.transform, false)) reject(id)
+    const resourceKeys = target.resourceRefKeys ?? target.resourceKeys
+    if (Array.isArray(resourceKeys) && resourceKeys.some((key) => !projected.resourceRefKeys.includes(String(key)))) reject(id)
+  }
+  for (const [kind, group] of Object.entries(dependencies)) {
+    for (const record of records(group)) {
+      const owners = Array.isArray(record.owners) ? [...record.owners, record.owner] : [record.owner]
+      for (const owner of owners) {
+        if (!isRecord(owner) || owner.domain !== 'threeD' || typeof owner.instanceId !== 'string' || !ids.has(owner.instanceId)) continue
+        const id = owner.instanceId
+        const projected = getProjection(id)
+        if (kind === 'resources' && projected.target.resourceRefKeys.includes(String(record.resourceKey)) &&
+          Object.keys(owner).every((key) => ['domain', 'ownerType', 'instanceId'].includes(key))) continue
+        if (kind === 'dataBindings' || kind === 'behaviors' || kind === 'deviceBindings') {
+          const match = projected[kind].find((candidate) =>
+            !verifiedDependencies.has(candidate) && containsOriginalCopyData(record, candidate))
+          if (match) {
+            verifiedDependencies.add(match)
+            continue
+          }
+        }
+        reject(id)
+      }
+    }
+  }
+  return originalIds
+}
+
 export function assertOriginalThreeDDeletionAllowed(
   sceneId: string,
   ids: ReadonlySet<string>,
   editedHierarchyIds?: ReadonlySet<string>,
   saveEdits?: SceneSaveEdits,
+  original = captureOriginalScenePackages(sceneId),
 ) {
-  const original = originals.get(sceneId)
   if (!original) return
   const threeD = parse(original.threeDJson)
   for (const node of [...records(threeD.objects), ...records(threeD.components)]) {
@@ -65,14 +156,41 @@ export function assertOriginalThreeDDeletionAllowed(
     if (ids.has(String(node.parentInstanceId ?? '')) && !ids.has(id) && !editedHierarchyIds?.has(id)) {
       throw new Error('原始草稿仍有子节点引用待删除节点，请重新打开场景后重试')
     }
+    if (ids.has(id)) continue
+    const edited = saveEdits?.objects.get(id)
+    const content = typeof node.contentJson === 'string' ? parse(node.contentJson) : node.contentJson
+    const withoutEditedMetadata = (value: unknown) => {
+      if (!isRecord(value) || !edited?.size) return value
+      const metadata = { ...value }
+      for (const key of ['statusList', 'interactiveEvent', 'dataConfig', 'deviceBinding'] as const) {
+        if (edited.has(key)) delete metadata[key]
+      }
+      return metadata
+    }
+    assertNoDeletedObjectReferences({
+      ...node,
+      metadata: withoutEditedMetadata(node.metadata),
+      contentJson: isRecord(content) ? { ...content, metadata: withoutEditedMetadata(content.metadata) } : content,
+    }, ids, '原始三维实例扩展')
   }
-  for (const behavior of records(parse(original.dependenciesJson).behaviors)) {
-    if (isTwoDOwner(behavior.owner) || isDeletedThreeDOwner(behavior.owner, ids)) continue
-    // 面板已编辑的可回读行为由生成包复查。未接管行为继续按原记录拦截。
-    if (isRecord(behavior.owner) && behavior.owner.domain === 'threeD' &&
-        typeof behavior.owner.instanceId === 'string' &&
-        isEditableBehaviorRecord(behavior, saveEdits?.objects.get(behavior.owner.instanceId))) continue
-    assertNoDeletedObjectReferences(behavior, ids, '原始三维草稿中的交互或状态')
+  const dependencies = parse(mergeDataBindingOverflow(original.sceneJson, original.dependenciesJson).dependenciesJson)
+  for (const [kind, group] of Object.entries(dependencies)) {
+    const managed = kind === 'behaviors' || kind === 'dataBindings' || kind === 'deviceBindings' || kind === 'resources'
+    for (const record of records(group)) {
+      if (!managed && (isDeletedThreeDOwner(record.owner, ids) ||
+        (Array.isArray(record.owners) && record.owners.some((owner) => isDeletedThreeDOwner(owner, ids))))) {
+        throw new Error('待删除节点拥有未接管的原档依赖，无法安全删除')
+      }
+      if (isTwoDOwner(record.owner) || (managed && isDeletedThreeDOwner(record.owner, ids))) continue
+      if (kind !== 'resources' && Array.isArray(record.owners) && record.owners.some((owner) => isDeletedThreeDOwner(owner, ids))) {
+        throw new Error('待删除节点拥有未接管的共享依赖，无法安全删除')
+      }
+      // 面板已编辑的可回读行为由生成包复查，其他原始依赖按原记录校验。
+      if (kind === 'behaviors' && isRecord(record.owner) && record.owner.domain === 'threeD' &&
+        typeof record.owner.instanceId === 'string' &&
+        isEditableBehaviorRecord(record, saveEdits?.objects.get(record.owner.instanceId))) continue
+      assertNoDeletedObjectReferences(record, ids, '原始三维草稿中的依赖')
+    }
   }
 }
 
@@ -97,6 +215,26 @@ export function assertOriginalObjectLayerDeletionAllowed(
  * Unity 明确接管的原实例可更新变换，其余原实例保留；新增实例按稳定编号识别。
  * 同一资源先保留原三维拥有者，再合并当前二维和新增三维拥有者，避免共享资源丢失或重复登记。
  */
+// 兼容包中的未知对象字段随已确认编辑合并，数组的删除和顺序由调用方按业务身份处理。
+const mergeRecords = (original: unknown, current: unknown): JsonRecord => ({
+  ...(isRecord(original) ? original : {}),
+  ...Object.fromEntries(Object.entries(isRecord(current) ? current : {}).map(([key, value]) => [
+    key, isRecord(value) && isRecord(original) && isRecord(original[key])
+      ? mergeRecords(original[key], value) : value,
+  ])),
+})
+
+const rowId = (row: unknown) => isRecord(row) && typeof row.id === 'string' ? row.id : undefined
+const mergeOrderedRows = (original: unknown, current: unknown, merge = mergeRecords): unknown[] => {
+  const previous = Array.isArray(original) ? original : []
+  const byId = new Map(previous.map(row => [rowId(row), row]))
+  const next = Array.isArray(current) ? current : []
+  return [...next.map(row => {
+    const id = rowId(row)
+    return id ? merge(byId.get(id), row) : row
+  }), ...previous.filter(row => !rowId(row))]
+}
+
 export function preserveUneditedThreeDDomain(
   sceneId: string,
   generated: SceneFourPackagePayload,
@@ -104,8 +242,8 @@ export function preserveUneditedThreeDDomain(
   editableHierarchyIds?: ReadonlySet<string>,
   deletedObjectIds?: ReadonlySet<string>,
   saveEdits?: SceneSaveEdits,
+  original = captureOriginalScenePackages(sceneId),
 ): SceneFourPackagePayload {
-  const original = originals.get(sceneId)
   if (!original) return generated
   const before = parse(mergeDataBindingOverflow(original.sceneJson, original.dependenciesJson).dependenciesJson)
   const after = parse(generated.dependenciesJson)
@@ -114,7 +252,7 @@ export function preserveUneditedThreeDDomain(
   const originalThreeD = parse(original.threeDJson)
   const generatedThreeD = parse(generated.threeDJson)
   const deleted = deletedObjectIds ?? new Set<string>()
-  if (deleted.size) assertOriginalThreeDDeletionAllowed(sceneId, deleted, editableHierarchyIds, saveEdits)
+  if (deleted.size) assertOriginalThreeDDeletionAllowed(sceneId, deleted, editableHierarchyIds, saveEdits, original)
   // 两类目标共用编号集合，防止类型分类变化被误判为新增实例；保存时只做线性扫描。
   const targetGroups = ['objects', 'components'] as const
   const originalIds = new Set(targetGroups.flatMap(key => records(originalThreeD[key]).map(targetIdOf)))
@@ -125,6 +263,8 @@ export function preserveUneditedThreeDDomain(
   const newTargets = additions.flatMap(([, targets]) => targets)
   const newIds = new Set(newTargets.map(target => String(target.instanceId)))
   const threeD: JsonRecord = { ...originalThreeD }
+  const domains = saveEdits?.domains
+  const editedEffects = saveEdits?.effects
   let targetsChanged = false
   const usedLayerKeys = new Set(newTargets.map(layerKeyOf).filter(Boolean))
   for (const [key, targets] of additions) {
@@ -198,6 +338,47 @@ export function preserveUneditedThreeDDomain(
       }
     }
   }
+  if (domains?.has('settings')) threeD.baseConfig = mergeRecords(originalThreeD.baseConfig, generatedThreeD.baseConfig)
+  if (domains?.has('cameraPaths')) {
+    threeD.cameraPaths = mergeOrderedRows(originalThreeD.cameraPaths, generatedThreeD.cameraPaths, (before, after) => {
+      const path = mergeRecords(before, after)
+      if (isRecord(after) && Array.isArray(after.waypoints))
+        path.waypoints = mergeOrderedRows(isRecord(before) ? before.waypoints : undefined, after.waypoints)
+      return path
+    })
+  }
+  if (domains?.has('vegetation')) {
+    if (generatedThreeD.vegetation === undefined) delete threeD.vegetation
+    else threeD.vegetation = mergeRecords(originalThreeD.vegetation, generatedThreeD.vegetation)
+  }
+  if (domains?.has('streamingPolicy')) {
+    const before = isRecord(threeD.streaming) ? threeD.streaming : {}
+    const after = isRecord(generatedThreeD.streaming) ? generatedThreeD.streaming : {}
+    const streaming = mergeRecords(before, after)
+    if (after.options === undefined) delete streaming.options
+    for (const key of ['groups', 'chunks'] as const)
+      streaming[key] = mergeOrderedRows(before[key], after[key])
+    threeD.streaming = streaming
+  }
+  if (editedEffects?.size) {
+    const after = new Map(records(generatedThreeD.effects).map(effect => [rowId(effect), effect]))
+    const before = Array.isArray(originalThreeD.effects) ? originalThreeD.effects : []
+    const effects = before.flatMap(effect => {
+      const id = rowId(effect)
+      if (!id || !editedEffects.has(id)) return [effect]
+      const next = after.get(id)
+      after.delete(id)
+      if (!next) return []
+      const merged = mergeRecords(effect, next)
+      if (!Array.isArray(next.assetRefs)) delete merged.assetRefs
+      return [merged]
+    })
+    for (const id of editedEffects) {
+      const next = after.get(id)
+      if (next) effects.push(next)
+    }
+    threeD.effects = effects
+  }
   const originalLayers = Array.isArray(originalThreeD.layers) ? originalThreeD.layers : []
   const currentLayers = new Map(records(generatedThreeD.layers).map(layer => [layerIdOf(layer), layer]))
   const originalLayerKeys = new Set(records(originalLayers).map(layerIdOf))
@@ -246,9 +427,12 @@ export function preserveUneditedThreeDDomain(
   const isLayerOwner = (value: unknown, ids: ReadonlySet<string>) =>
     isRecord(value) && value.domain === 'threeD' && value.ownerType === 'layer' &&
     typeof value.ownerKey === 'string' && ids.has(value.ownerKey)
-  const isRemovedOwner = (value: unknown) => isDeletedThreeDOwner(value, deleted) || isLayerOwner(value, removedLayers)
+  const isEditedEffectOwner = (value: unknown) => isRecord(value) && value.domain === 'threeD' &&
+    value.ownerType === 'effect' && typeof value.ownerKey === 'string' && editedEffects?.has(value.ownerKey)
+  const isRemovedOwner = (value: unknown) => isDeletedThreeDOwner(value, deleted) ||
+    isLayerOwner(value, removedLayers) || isEditedEffectOwner(value)
   const isCurrentOwner = (value: unknown) => isTwoDOwner(value) ||
-    isLayerOwner(value, newLayerKeys) ||
+    isLayerOwner(value, newLayerKeys) || isEditedEffectOwner(value) ||
     (isRecord(value) && value.domain === 'threeD' && newIds.has(String(value.instanceId)))
   const isGeneratedCurrent = (value: unknown) => isGeneratedTwoD(value) ||
     (isRecord(value) && (isCurrentOwner(value.owner) ||
@@ -293,7 +477,11 @@ export function preserveUneditedThreeDDomain(
       !removedOwnerResources.has(resourceKey) || (Array.isArray(item.owners) && item.owners.length > 0))
       .map(([, item]) => item)
   }
-  const scene = { ...parse(original.sceneJson), ...parse(generated.sceneJson) }
+  const originalScene = parse(original.sceneJson)
+  const generatedScene = parse(generated.sceneJson)
+  const scene: JsonRecord = { ...originalScene, ...generatedScene,
+    ...(isRecord(originalScene.metadata) || isRecord(generatedScene.metadata)
+      ? { metadata: mergeRecords(originalScene.metadata, generatedScene.metadata) } : {}) }
   if (deleted.size) {
     assertNoDeletedObjectReferences(merged.behaviors, deleted, '保存草稿中的交互或状态')
     assertNoDeletedObjectReferences(scene.sceneActions, deleted, '保存草稿中的场景动作')
@@ -308,8 +496,11 @@ export function preserveUneditedThreeDDomain(
   }
   const result = {
     sceneJson: JSON.stringify(scene),
-    threeDJson: newIds.size || targetsChanged || layersChanged || deleted.size ? JSON.stringify(threeD) : original.threeDJson,
-    twoDJson: JSON.stringify({ ...originalTwoD, ...generatedTwoD, components }),
+    threeDJson: newIds.size || targetsChanged || layersChanged || deleted.size || domains?.size || editedEffects?.size
+      ? JSON.stringify(threeD) : original.threeDJson,
+    twoDJson: JSON.stringify({ ...originalTwoD, ...generatedTwoD, components,
+      ...(isRecord(originalTwoD.canvas) || isRecord(generatedTwoD.canvas)
+        ? { canvas: mergeRecords(originalTwoD.canvas, generatedTwoD.canvas) } : {}) }),
     dependenciesJson: JSON.stringify(merged),
   }
   const requestKey = (record: JsonRecord) => String(record.publicRequestKey ?? record.requestKey ?? record.id ?? '')

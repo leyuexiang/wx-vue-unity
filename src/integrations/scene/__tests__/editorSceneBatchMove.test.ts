@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { createSceneDefinition, createViewportHost, MemorySceneRuntime, type SceneObject, type ViewportHost } from '@/scene-platform'
 import { createMoveSceneNodesCommand } from '@/scene-platform/commands/moveSceneNodeCommand'
+import { getSceneHierarchyDropPlacement, resolveSceneHierarchyDrop } from '@/views/sceneEdit/SceneLeftPanel/components/StructurePanel/sceneHierarchyDrag'
 import { clearActiveSceneViewportHost, setActiveSceneViewportHost } from '../editorScenePlatformHost'
 import { runConfirmedEditorCommand } from '../editorSceneCommandTransaction'
 import { dispatchEditorHistory } from '../editorSceneUndoRedoAdapter'
@@ -53,6 +54,39 @@ afterEach(() => {
 })
 
 describe('批量换父级', () => {
+  it('拖到同级边缘按移除后的下标整批插入，保持世界姿态并一步撤销', async () => {
+    const options = await setup()
+    const { host, store, commandBus } = options
+    const before = structuredClone(store.getObjects())
+    const ids = ['first', 'child', 'second']
+    const target = resolveSceneHierarchyDrop(store, ids, { kind: 'node', id: 'target-peer', placement: 'before' })
+    expect(target).toEqual({ parentId: 'target', siblingIndex: 0 })
+    const command = createMoveSceneNodesCommand(store, ids, target.parentId, target.siblingIndex)
+    expect(await runConfirmedEditorCommand(host, 'execute', command, () => true)).toBe(true)
+    expect(store.getNodeIndex().childrenByParent.get('target')).toEqual(['second', 'first', 'target-peer'])
+    expect(store.getObject('first')?.transform).toMatchObject({ position: [-88, 0, 0] })
+    expect(store.getObject('child')?.parentInstanceId).toBe('first')
+    expect(commandBus.getUndoSize()).toBe(1)
+    expect(await dispatchEditorHistory('undo', options)).toBe(true)
+    expect(store.getObjects()).toEqual(before)
+  })
+
+  it('按行区域区分落点，拒绝拖到子树、跨图层根级排序和锁定目标', async () => {
+    const { store, commandBus } = await setup()
+    const rect = { top: 10, height: 40 }
+    expect([15, 30, 45].map((y) => getSceneHierarchyDropPlacement(y, rect))).toEqual(['before', 'inside', 'after'])
+    const objects = structuredClone(store.getObjects())
+    expect(resolveSceneHierarchyDrop(store, ['first'], { kind: 'node', id: 'first-peer', placement: 'after' }))
+      .toEqual({ parentId: 'source', siblingIndex: 1 })
+    expect(resolveSceneHierarchyDrop(store, ['first'], { kind: 'root' })).toEqual({})
+    expect(() => resolveSceneHierarchyDrop(store, ['first'], { kind: 'node', id: 'child', placement: 'inside' })).toThrow('后代')
+    expect(() => resolveSceneHierarchyDrop(store, ['first'], { kind: 'node', id: 'second', placement: 'before' })).toThrow('同一图层')
+    store.upsertLayer({ ...store.getLayer('b')!, locked: true })
+    expect(() => resolveSceneHierarchyDrop(store, ['first'], { kind: 'node', id: 'second', placement: 'inside' })).toThrow('锁定')
+    expect(store.getObjects()).toEqual(objects)
+    expect(commandBus.getUndoSize()).toBe(0)
+  })
+
   it('跨父级按草稿顺序移动，重叠后代保留原父级，一步回放并按正式四包恢复', async () => {
     const options = await setup()
     const { host, store, commandBus } = options

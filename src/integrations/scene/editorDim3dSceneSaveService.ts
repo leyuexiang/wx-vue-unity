@@ -1,6 +1,7 @@
 import { preserveUneditedThreeDDomain } from './twoDPackagePreservation'
 import type { SceneDefinition } from '@/scene-platform'
 import type { SceneSaveEdits } from '@/scene-platform/core/sceneSaveEdits'
+import type { SceneFourPackagePayload } from './sceneFourPackage'
 import {
   createDim3dSceneSaveAllBody,
   saveAllDim3dScene,
@@ -40,14 +41,39 @@ export interface EditorDim3dSceneSaveServiceOptions {
   deletedObjectIds?: ReadonlySet<string>
   /** 只将实际编辑的图层和实例字段合入原四包。 */
   saveEdits?: SceneSaveEdits
+  originalPackages?: SceneFourPackagePayload | null
   /** 单元测试可注入接口替身；生产路径始终使用四包整体保存接口。 */
   saveAll?: (body: Dim3dSceneSaveAllBody) => Promise<Dim3dSceneSaveAllResponse>
-  /** 单元测试可注入固定幂等键；生产路径每次点击保存生成一个新键。 */
+  /** 新批次生成请求号，丢失回执时保留原请求号。 */
   createRequestId?: () => string
   changeSummary?: string
 }
 
 const SCENE_ID_PATTERN = /^[1-9]\d*$/
+
+export class EditorSceneSaveError extends Error {
+  constructor(readonly kind: 'uncertain' | 'lockLost' | 'conflict' | 'rejected', message: string) {
+    super(message)
+  }
+}
+
+export const readSceneRequestFailure = (value: unknown): { code?: number; message?: string } => {
+  if (!value || typeof value !== 'object') return {}
+  const result = value as { code?: unknown; status?: unknown; msg?: unknown; message?: unknown; response?: { status?: unknown } }
+  const code = result.code ?? result.status ?? result.response?.status
+  const message = result.msg ?? result.message
+  return { code: typeof code === 'number' ? code : undefined, message: typeof message === 'string' ? message : undefined }
+}
+
+const classifySaveFailure = (error: unknown) => {
+  if (error instanceof EditorSceneSaveError) return error
+  const { code, message } = readSceneRequestFailure(error)
+  if (code === 409 && message && /编辑锁|锁令牌/.test(message))
+    return new EditorSceneSaveError('lockLost', '当前场景编辑锁已失效，请重新进入编辑器')
+  if (code !== undefined && (code < 500 || code > 599))
+    return new EditorSceneSaveError('rejected', message?.trim() || `场景保存被服务端拒绝（${code}）`)
+  return new EditorSceneSaveError('uncertain', '未取得本次保存的确认回执，再次保存将先重试原批次')
+}
 
 /** 为单次保存生成幂等键；不支持原生 UUID 时使用时间戳和随机片段保证页签内唯一。 */
 const createSaveRequestId = () => {
@@ -88,21 +114,21 @@ const assertSaveSucceeded = (
   sceneId: string,
 ): Dim3dSceneSaveResult & { sceneId: string; conflict: false } => {
   if (response.code !== 200) {
-    throw new Error(response.msg?.trim() || `场景保存失败，业务码：${String(response.code)}`)
+    throw classifySaveFailure(response)
   }
   if (!response.data) {
-    throw new Error('场景保存接口未返回保存结果。')
+    throw new EditorSceneSaveError('uncertain', '场景保存接口未返回确认回执，再次保存将重试原批次')
   }
-  if (response.data.conflict !== false) {
+  if (response.data.conflict === true) {
     const conflictRevision = response.data.conflictRevisionNo
-    throw new Error(
+    throw new EditorSceneSaveError('conflict',
       conflictRevision === undefined
         ? '场景保存发生版本冲突，请重新进入编辑器后再保存。'
         : `场景保存发生版本冲突，服务端当前修订号为 ${conflictRevision}。`,
     )
   }
-  if (response.data.sceneId !== sceneId) {
-    throw new Error(`场景保存接口返回了不一致的场景编号：${String(response.data.sceneId ?? '')}`)
+  if (response.data.sceneId !== sceneId || response.data.conflict !== false) {
+    throw new EditorSceneSaveError('uncertain', '保存回执与当前批次不符，再次保存将重试原批次')
   }
   return response.data as Dim3dSceneSaveResult & { sceneId: string; conflict: false }
 }
@@ -113,11 +139,11 @@ const assertSaveSucceeded = (
  * 本服务不包含 localStorage、分包补偿或四接口并发逻辑。四个 JSON 字符串属于同一个请求，
  * 由后端在同一行覆盖；请求失败时仅抛错并保留页面内存中的编辑状态。
  */
-export const saveEditorSceneToDim3d = async (
+export const prepareEditorSceneSave = (
   scene: SceneDefinition,
   context: EditorDim3dSceneSaveContext,
   options: EditorDim3dSceneSaveServiceOptions = {},
-): Promise<EditorDim3dSceneSaveBookmark> => {
+): Readonly<Dim3dSceneSaveAllBody> => {
   const { sceneId, lockToken } = assertSaveContext(context)
   const requestId = (options.createRequestId ?? createSaveRequestId)().trim()
   if (!requestId) throw new Error('保存请求幂等键不能为空。')
@@ -132,11 +158,25 @@ export const saveEditorSceneToDim3d = async (
     ...(options.changeSummary?.trim() ? { changeSummary: options.changeSummary.trim() } : {}),
   })
   // 一次提交四包：合并当前二维与新建三维对象，同时保全尚未接入编辑的原三维域。
-  const protectedBody = { ...body, ...preserveUneditedThreeDDomain(
+  return Object.freeze({ ...body, ...preserveUneditedThreeDDomain(
     sceneId, body, options.editableTransformIds, options.editableHierarchyIds, options.deletedObjectIds, options.saveEdits,
-  ) }
-  const response = await (options.saveAll ?? saveAllDim3dScene)(protectedBody)
-  const result = assertSaveSucceeded(response, sceneId)
+    options.originalPackages,
+  ) })
+}
+
+/** 重试直接提交之前冻结的编号、基准修订和四包字节。 */
+export const submitPreparedEditorSceneSave = async (
+  body: Readonly<Dim3dSceneSaveAllBody>,
+  submit: EditorDim3dSceneSaveServiceOptions['saveAll'] = saveAllDim3dScene,
+): Promise<EditorDim3dSceneSaveBookmark> => {
+  const { sceneId, requestId } = body
+  if (!requestId) throw new Error('保存请求幂等键不能为空。')
+  let result: ReturnType<typeof assertSaveSucceeded>
+  try {
+    result = assertSaveSucceeded(await submit(body), sceneId)
+  } catch (error) {
+    throw classifySaveFailure(error)
+  }
 
   return {
     sceneId,
@@ -147,3 +187,9 @@ export const saveEditorSceneToDim3d = async (
     ...(result.savedTime ? { savedTime: result.savedTime } : {}),
   }
 }
+
+export const saveEditorSceneToDim3d = async (
+  scene: SceneDefinition,
+  context: EditorDim3dSceneSaveContext,
+  options: EditorDim3dSceneSaveServiceOptions = {},
+) => submitPreparedEditorSceneSave(prepareEditorSceneSave(scene, context, options), options.saveAll)

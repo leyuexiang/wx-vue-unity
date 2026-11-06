@@ -16,7 +16,7 @@ import { createSceneNodeLockCache, type SceneNodeLockState } from '../core/scene
 import { createSceneNodeWorkQueue, type SceneNodeWorkQueue } from '../core/sceneNodeWorkQueue'
 import {
   sceneLayerSaveFields, sceneObjectSaveFields, sceneObjectSaveMetadataKeys,
-  type SceneLayerSaveField, type SceneObjectSaveField, type SceneSaveEdits,
+  type SceneLayerSaveField, type SceneObjectSaveField, type SceneSaveDomain, type SceneSaveEdits,
 } from '../core/sceneSaveEdits'
 
 /**
@@ -40,7 +40,7 @@ export type SceneStoreEvent =
   /** 场景级设置的增量更新，不触发对象和效果的全量重建。 */
   | { type: 'sceneSettingsUpdated'; settings: SceneSettings }
   /** 区块和流式分组的可持久化元数据变更。 */
-  | { type: 'sceneStreamingUpdated'; streaming: SceneStreamingConfig | undefined }
+  | { type: 'sceneStreamingUpdated'; streaming: SceneStreamingConfig | undefined; origin?: 'loadNormalization' }
   /** 显隐和锁定标记只描述派生传播范围，不是后代的持久化编辑。 */
   | { type: 'objectUpserted'; object: SceneObject; origin?: 'loadNormalization'; visibilityChanged?: boolean; lockChanged?: boolean }
   | { type: 'objectRemoved'; objectId: string }
@@ -96,6 +96,7 @@ export interface SceneStore {
   /** 原子替换场景流式元数据，供资源实例创建后补齐区块归属。 */
   updateSceneStreaming: (
     streaming: SceneStreamingConfig | undefined,
+    origin?: 'membership' | 'loadNormalization',
   ) => SceneStreamingConfig | undefined
   updateCameraPaths: (cameraPaths: CameraPath[]) => CameraPath[]
   /**
@@ -247,14 +248,20 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
   let hierarchyEditedIds = new Set<string>()
   let objectSaveEdits = new Map<string, ReadonlySet<SceneObjectSaveField>>()
   let layerSaveEdits = new Map<string, ReadonlySet<SceneLayerSaveField>>()
+  let editedDomains = new Set<SceneSaveDomain>()
+  let editedEffects = new Set<string>()
   const captureSaveEdits = (): SceneSaveEdits => ({
     objects: new Map(objectSaveEdits),
     layers: new Map(layerSaveEdits),
+    domains: new Set(editedDomains),
+    effects: new Set(editedEffects),
   })
   const restoreSaveEdits = (edits: SceneSaveEdits) => {
     snapshotSaveEditsForTransaction()
     objectSaveEdits = new Map(edits.objects)
     layerSaveEdits = new Map(edits.layers)
+    editedDomains = new Set(edits.domains)
+    editedEffects = new Set(edits.effects)
   }
   let deletedObjectIds = new Set<string>()
   let selectedObjectId: string | null = null
@@ -275,6 +282,16 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
   // 普通变换和选择无需复制本会话的字段索引，首次实际改动才留补偿快照。
   const snapshotSaveEditsForTransaction = () => {
     if (transactionSnapshot && !transactionSnapshot.saveEdits) transactionSnapshot.saveEdits = captureSaveEdits()
+  }
+  const markDomainEdited = (domain: SceneSaveDomain) => {
+    if (editedDomains.has(domain)) return
+    snapshotSaveEditsForTransaction()
+    editedDomains.add(domain)
+  }
+  const markEffectEdited = (id: string) => {
+    if (editedEffects.has(id)) return
+    snapshotSaveEditsForTransaction()
+    editedEffects.add(id)
   }
 
   const dispatch = (event: SceneStoreEvent) => {
@@ -548,6 +565,7 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
   }
 
   const upsertEffect = (effect: EffectSpec) => {
+    markEffectEdited(effect.id)
     const index = getEffectIndex(effect.id)
     if (index >= 0) {
       const previous = scene.effects[index]
@@ -562,6 +580,7 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
   }
 
   const insertEffectAt = (effect: EffectSpec, index: number) => {
+    markEffectEdited(effect.id)
     const existingIndex = getEffectIndex(effect.id)
     if (existingIndex >= 0) {
       scene.effects.splice(existingIndex, 1)
@@ -575,6 +594,7 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
   const removeEffect = (effectId: string) => {
     const index = getEffectIndex(effectId)
     if (index < 0) return null
+    markEffectEdited(effectId)
 
     const removed = scene.effects[index]
     scene.effects.splice(index, 1)
@@ -587,6 +607,7 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
   }
 
   const updateSceneSettings = (settings: SceneSettings) => {
+    markDomainEdited('settings')
     const previous = scene.settings
     /**
      * 用新 SceneDefinition 外壳替换 settings，避免持有旧 settings 引用的保存适配层看到半更新状态。
@@ -606,8 +627,10 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
    * 区块归属属于场景定义而非单个对象字段；资源实例创建后由编辑器适配层调用此入口，
    * RuntimeBridge 会按场景流式索引重新注册，避免直接修改 getScene() 返回对象造成界面和运行时不同步。
    */
-  const updateSceneStreaming = (streaming: SceneStreamingConfig | undefined) => {
+  const updateSceneStreaming: SceneStore['updateSceneStreaming'] = (streaming, origin) => {
     const previous = scene.streaming
+    // 自动成员维护不能授权重写原手工分组和策略。
+    if (!origin) markDomainEdited('streamingPolicy')
     /**
      * 流式配置可能来自资源创建、恢复或外部适配器；统一在 Store 边界过滤不存在的对象编号，
      * 防止任意调用方把坏索引重新写回场景。对象尚未 upsert 时应先提交对象，再提交区块配置。
@@ -623,12 +646,14 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
     } else {
       scene = { ...scene, streaming: repairedStreaming }
     }
-    emit({ type: 'sceneStreamingUpdated', streaming: repairedStreaming })
+    emit({ type: 'sceneStreamingUpdated', streaming: repairedStreaming,
+      ...(origin === 'loadNormalization' ? { origin } : {}) })
     return previous
   }
 
   /** 以整组替换路径数组，保证路径点编辑只产生一个领域事件并可被命令撤销。 */
   const updateCameraPaths = (cameraPaths: CameraPath[]) => {
+    markDomainEdited('cameraPaths')
     const previous = scene.cameraPaths ?? []
     scene = { ...scene, cameraPaths }
     emit({ type: 'cameraPathsUpdated', cameraPaths })
@@ -655,6 +680,7 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
    * 删除系统时同时删除可选字段，而不是长期保存显式 undefined，确保序列化结果与旧场景兼容。
    */
   const updateVegetation = (vegetation: VegetationSystemDefinition | undefined) => {
+    markDomainEdited('vegetation')
     const previous = scene.vegetation
     if (vegetation === undefined) {
       const { vegetation: _removedVegetation, ...sceneWithoutVegetation } = scene
@@ -734,6 +760,8 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
       snapshotSaveEditsForTransaction()
       objectSaveEdits.clear()
       layerSaveEdits.clear()
+      editedDomains.clear()
+      editedEffects.clear()
       deletedObjectIds = new Set()
       selectedObjectId = null
       selectedEffectId = null

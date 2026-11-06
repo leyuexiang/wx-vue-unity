@@ -8,6 +8,7 @@ import {
   createSceneFourPackageDocuments,
   parseSceneFourPackagePayload,
   serializeSceneFourPackageDocuments,
+  type SceneFourPackagePayload,
 } from './sceneFourPackage'
 import {
   saveDim3dSceneSnapshotAsTemplate,
@@ -19,7 +20,8 @@ import {
 import { DIM3D_TEMPLATE_TYPE, type Dim3dTemplateType } from '@/servers/manual/dim3d/api/template'
 import { filterSceneFourPackageDocumentsForTemplate } from './templateFourPackageFilter'
 import type { EditorSceneGlobalStateSnapshot } from './editorSceneGlobalStateAdapter'
-import { preserveUneditedThreeDDomain } from './twoDPackagePreservation'
+import { captureOriginalScenePackages, preserveUneditedThreeDDomain } from './twoDPackagePreservation'
+import { isUnityDeferredObject } from '@/unity-runtime/runtime/projectSceneForUnity'
 
 /** 弹窗可编辑且被新另存接口真实接收的模板元数据。 */
 export interface EditorDim3dSceneTemplateForm {
@@ -76,6 +78,8 @@ const createTemplateRequestBody = (
   deletedObjectIds?: ReadonlySet<string>,
   editedHierarchyIds?: ReadonlySet<string>,
   saveEdits?: SceneSaveEdits,
+  editableTransformIds?: ReadonlySet<string>,
+  original?: SceneFourPackagePayload | null,
 ): Dim3dSceneSnapshotTemplateBody => {
   const name = form.name.trim()
   if (!name) throw new Error('请输入模板名称')
@@ -90,10 +94,11 @@ const createTemplateRequestBody = (
   const sourcePackages = parseSceneFourPackagePayload(preserveUneditedThreeDDomain(
     scene.id,
     serializeSceneFourPackageDocuments(createSceneFourPackageDocuments(scene)),
-    undefined,
+    editableTransformIds,
     editedHierarchyIds,
     deletedObjectIds,
     saveEdits,
+    original,
   ))
   /**
    * saveScope 不能只作为元数据交给后端：前端先生成模板工作副本并完成域、依赖和引用裁剪，
@@ -150,6 +155,9 @@ export const saveActiveEditorSceneAsTemplate = async (
   const deletedObjectIds = host ? new Set(host.getStore().getDeletedObjectIds()) : undefined
   const editedHierarchyIds = host ? new Set(host.getStore().getHierarchyEditedIds()) : undefined
   const saveEdits = host?.getStore().captureSaveEdits()
+  const sourceId = options.scene?.id ?? host?.getStore().getScene().id
+  const original = sourceId ? captureOriginalScenePackages(sourceId) : null
+  const usesUnity = host?.getRuntime().id.startsWith('unity-')
   const scene = await captureEditorSceneDefinitionSnapshot({
     scene: options.scene,
     sceneApi: options.sceneApi,
@@ -160,7 +168,10 @@ export const saveActiveEditorSceneAsTemplate = async (
       ? { sceneGlobalState: options.sceneGlobalState }
       : {}),
   })
-  const body = createTemplateRequestBody(scene, form, deletedObjectIds, editedHierarchyIds, saveEdits)
+  const editableTransformIds = usesUnity
+    ? new Set(scene.objects.filter(object => !isUnityDeferredObject(object)).map(object => object.id))
+    : undefined
+  const body = createTemplateRequestBody(scene, form, deletedObjectIds, editedHierarchyIds, saveEdits, editableTransformIds, original)
   const response = await (options.saveTemplate ?? saveDim3dSceneSnapshotAsTemplate)(body)
   return assertTemplateSaveSucceeded(response, form.saveScope)
 }

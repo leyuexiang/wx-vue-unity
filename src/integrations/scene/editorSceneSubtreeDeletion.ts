@@ -18,8 +18,7 @@ export async function deleteEditorSceneSubtrees(host: ViewportHost, ids: readonl
     assertNoDeletedObjectReferences(readEditorSceneGlobalStateSnapshot()?.sceneActions, deleted, '场景动作')
     for (const object of store.getObjects()) {
       if (!deleted.has(object.id)) {
-        assertNoDeletedObjectReferences(object.metadata?.statusList, deleted, `「${object.name}」`)
-        assertNoDeletedObjectReferences(object.metadata?.interactiveEvent, deleted, `「${object.name}」`)
+        assertNoDeletedObjectReferences([object.metadata, object.style, object.effect, object.billboard], deleted, `「${object.name}」`)
       }
     }
     for (const { component } of widgets.totalWidgets ?? []) {

@@ -26,7 +26,8 @@ function copyChunkMembership(streaming: SceneStreamingConfig | undefined, copies
 export function createCopySceneSubtreesCommand(
   requested: readonly string[],
   createId: () => string,
-  prepareCopy: (copy: SceneObject, copies: ReadonlyMap<string, string>) => void,
+  prepareCopy: (copy: SceneObject, copies: ReadonlyMap<string, string>, source: SceneObject) => void,
+  validateSources?: (ids: ReadonlySet<string>) => void,
 ): SceneCommand {
   let batch: {
     entries: RemovedSceneObject[]
@@ -46,6 +47,7 @@ export function createCopySceneSubtreesCommand(
       if (!batch) {
         const { ids, nodesById } = editable
         if (!ids.size) return
+        validateSources?.(ids)
         const copies = new Map<string, string>()
         const copyIds = new Set<string>()
         const objects = store.getObjects()
@@ -79,7 +81,8 @@ export function createCopySceneSubtreesCommand(
 
         const entries: RemovedSceneObject[] = []
         for (const [sourceId, copyId] of copies) {
-          const copy = structuredClone(nodesById.get(sourceId)!)
+          const source = nodesById.get(sourceId)!
+          const copy = structuredClone(source)
           copy.id = copyId
           if (copy.parentInstanceId) copy.parentInstanceId = copies.get(copy.parentInstanceId) ?? copy.parentInstanceId
           const order = rootOrder.get(sourceId)
@@ -92,7 +95,7 @@ export function createCopySceneSubtreesCommand(
             delete copy.metadata.engineObjectUuid
             delete copy.metadata.legacyOnlyUuid
           }
-          prepareCopy(copy, copies)
+          prepareCopy(copy, copies, source)
           entries.push({ removed: copy, index: objects.length + entries.length })
         }
         const streaming = store.getScene().streaming

@@ -2,15 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
   createSceneDefinition, createViewportHost, createCreateObjectLayerCommand, createMoveObjectToLayerCommand,
-  createUpdateObjectExtensionsCommand, createUpdateObjectLayerCommand, createUpdateObjectNameCommand,
+  createUpdateObjectExtensionsCommand, createUpdateObjectLayerCommand,
   createUpdateObjectVisibilityCommand, type SceneLayer, type SceneObject, type ViewportHost,
 } from '@/scene-platform'
 import { createDeleteObjectLayerCommand } from '@/scene-platform/commands/objectLayerCommands'
 import { createEmptyDataConfig } from '@/types/data-config'
 import { deleteEditorSceneObjectLayer } from '../editorSceneLayerAdapter'
+import { renameEditorSceneObjectWithCommand } from '../editorSceneObjectMutationAdapter'
 import { clearActiveSceneViewportHost, setActiveSceneViewportHost } from '../editorScenePlatformHost'
 import { runConfirmedEditorCommand } from '../editorSceneCommandTransaction'
 import { saveEditorSceneDefinition } from '../editorSceneSaveAdapter'
+import { prepareEditorSceneSave, submitPreparedEditorSceneSave } from '../editorDim3dSceneSaveService'
 import { saveActiveEditorSceneAsTemplate } from '../editorDim3dSceneTemplateService'
 import { setEditorSceneObjectDataConfig } from '../editorSceneDataConfigAdapter'
 import { setEditorSceneObjectInteractiveEventList } from '../editorSceneInteractionConfigAdapter'
@@ -78,6 +80,46 @@ afterEach(() => {
 })
 
 describe('旧三维档案的显式字段合并', () => {
+  it('显式场景设置、流式策略和效果合入原包，未知字段仍可重开', async () => {
+    const { store, threeD, retain, save } = await setup()
+    threeD.baseConfig.weather = { density: 1, vendorWeather: '原样' }
+    threeD.streaming = { options: { enabled: true, vendorBudget: '原样' }, chunks: [], groups: [] }
+    threeD.effects = [{ id: 'fog', type: 'weather', params: { density: 1, vendorEffect: true } },
+      { id: 'untouched', type: 'weather', params: { density: 3 } }]
+    retain()
+    store.updateSceneSettings({ ...store.getScene().settings, weather: { density: 2 }, mediaServerId: 'public-id' })
+    store.updateSceneStreaming({ options: { enabled: false }, chunks: [], groups: [] })
+    store.upsertEffect({ id: 'fog', type: 'weather', params: { density: 2 } })
+    const payload = await save()
+    const merged = JSON.parse(payload.threeDJson)
+    expect(merged.baseConfig.weather).toEqual({ density: 2, vendorWeather: '原样' })
+    expect(merged.baseConfig.settings.mediaServerId).toBe('public-id')
+    expect(merged.streaming.options).toEqual({ enabled: false, vendorBudget: '原样' })
+    expect(merged.effects).toEqual([{ id: 'fog', type: 'weather', params: { density: 2, vendorEffect: true } },
+      { id: 'untouched', type: 'weather', params: { density: 3 } }])
+  })
+
+  it('保存响应丢失后按原字节重试，后续编辑另起请求，拒绝及冲突可区分', async () => {
+    const { store } = await setup()
+    const context = { sceneId, lockToken: 'test-lock', baseRevisionNo: 3 }
+    const frozen = prepareEditorSceneSave(store.getScene(), context, { createRequestId: () => 'first' })
+    const send = vi.fn()
+      .mockRejectedValueOnce(new TypeError('模拟回执丢失'))
+      .mockResolvedValueOnce({ code: 200, data: { sceneId, revisionNo: 4, conflict: false } })
+    await expect(submitPreparedEditorSceneSave(frozen, send)).rejects.toMatchObject({ kind: 'uncertain' })
+    store.upsertObject({ ...store.getObject('editable')!, name: '后续编辑' })
+    await expect(submitPreparedEditorSceneSave(frozen, send)).resolves.toMatchObject({ requestId: 'first', revisionNo: 4 })
+    expect(send.mock.calls[1]![0]).toBe(send.mock.calls[0]![0])
+    const next = prepareEditorSceneSave(store.getScene(), { ...context, baseRevisionNo: 4 }, { createRequestId: () => 'second' })
+    expect(next).toMatchObject({ requestId: 'second', baseRevisionNo: 4 })
+    expect(next.threeDJson).not.toBe(frozen.threeDJson)
+    await expect(submitPreparedEditorSceneSave(next, async () => ({ code: 409, msg: '编辑锁已失效' })))
+      .rejects.toMatchObject({ kind: 'lockLost' })
+    await expect(submitPreparedEditorSceneSave(next, async () => ({ code: 409, msg: '保存请求号已绑定其他内容' })))
+      .rejects.toMatchObject({ kind: 'rejected' })
+    await expect(submitPreparedEditorSceneSave(next, async () => ({ code: 200, data: { conflict: true, conflictRevisionNo: 5 } })))
+      .rejects.toMatchObject({ kind: 'conflict' })
+  })
   it('实际命令修改的图层和实例字段可保存重开及另存，原档扩展和未接管记录保留', async () => {
     const { store, commandBus, threeD, dependencies, retain, save } = await setup()
     const originalLayer = threeD.layers.find((entry: { layerKey: string }) => entry.layerKey === 'source')
@@ -99,7 +141,9 @@ describe('旧三维档案的显式字段合并', () => {
     commandBus.execute(createUpdateObjectLayerCommand('source', { name: '原图层改名', visible: false }))
     commandBus.execute(createCreateObjectLayerCommand(layer('empty-group', 2)))
     commandBus.execute(createMoveObjectToLayerCommand('editable', 'target'))
-    commandBus.execute(createUpdateObjectNameCommand('editable', '改名后'))
+    expect(renameEditorSceneObjectWithCommand({
+      store, commandBus, objectId: 'editable', name: '  改名后  ',
+    })).toMatchObject({ status: 'applied', name: '改名后' })
     commandBus.execute(createUpdateObjectVisibilityCommand('editable', false))
     commandBus.execute(createUpdateObjectExtensionsCommand('editable', { metadata: { pickable: false, deviceId: 'new-device' } }))
     setEditorSceneObjectDataConfig({ store, commandBus, objectId: 'editable', dataConfig: data('新值') })

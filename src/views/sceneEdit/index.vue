@@ -26,8 +26,13 @@
       @publish="releaseScene"
       @back="handleBackToPreviousPage"
     />
+    <div v-if="sceneLockLost" class="scene-edit-lock-banner flex items-center justify-between gap-3 px-3 py-2" role="status">
+      <span>编辑锁已失效。当前草稿仍在本页，可以导出后重新进入编辑器。</span>
+      <el-button size="small" @click="exportRetainedSceneDraft">导出当前草稿</el-button>
+    </div>
     <splitpanes
-      v-show="sceneLockReady && !sceneLockLost"
+      v-show="sceneLockReady"
+      :inert="sceneLockLost"
       class="scene-edit-shell"
       style="height: calc(100vh - var(--scene-edit-header-height))"
       @ready="handleReady"
@@ -57,6 +62,7 @@
               :save-context="sceneSaveContext"
               @save-state-change="handleSceneSaveStateChange"
               @save-succeeded="handleSceneSaveSucceeded"
+              @save-lock-lost="handleSceneSaveLockLost"
             />
             <div id="scene" class="scene-edit-center-pane__viewport"></div>
           </div>
@@ -93,7 +99,7 @@
   <Teleport :to="teleportTo">
     <SceneCanvas
       ref="sceneCanvasRef"
-      v-if="sceneLockReady && !sceneLockLost && splitPanesReady"
+      v-if="sceneLockReady && splitPanesReady"
       :render-mode="renderMode"
       @scene-load-state-change="handleSceneLoadStateChange"
       @renderer-disconnected="handleRendererDisconnected"
@@ -159,6 +165,8 @@ import { appLogger } from '@/utils/logger'
 import { ENABLE_SCENE_LOCK } from '@/config/sceneLock'
 import { getWidgetOverlayHostPort } from '@/integrations/scene/widgetRuntime'
 import { getActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
+import { captureEditorSceneDraftPackages } from '@/integrations/scene/editorSceneSaveAdapter'
+import { readWidgetSceneFragment } from '@/integrations/scene/widgetRuntime/widgetSceneFragment'
 import {
   FirstPersonPreviewController,
   type FirstPersonPreviewPose,
@@ -166,9 +174,10 @@ import {
   type SceneObject,
   type SceneRuntime,
 } from '@/scene-platform'
-import type {
-  EditorDim3dSceneSaveBookmark,
-  EditorDim3dSceneSaveContext,
+import {
+  readSceneRequestFailure,
+  type EditorDim3dSceneSaveBookmark,
+  type EditorDim3dSceneSaveContext,
 } from '@/integrations/scene/editorDim3dSceneSaveService'
 import {
   saveActiveEditorSceneAsTemplate,
@@ -188,7 +197,7 @@ import { SCENE_PANEL_ENUM as LEFT_SCENE_PANEL_ENUM } from './enum'
 import { SCENE_PANEL_ENUM as RIGHT_SCENE_PANEL_ENUM } from '@/enums/scenePanelEnum'
 import { getCurrentManagementCapabilities } from '@/auth/capabilities'
 import './theme.scss'
-import { beginEditorSceneOperation, editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
+import { beginEditorSceneOperation, editorSceneOperation, holdEditorSceneForLeaseLoss } from '@/integrations/scene/editorSceneOperationGate'
 import { isUnityRenderMode } from '@/unity-runtime/renderMode'
 import { createEditorSceneExitController } from '@/integrations/scene/editorSceneExitController'
 
@@ -353,6 +362,7 @@ let sceneLockHeartbeatTimer: ReturnType<typeof setInterval> | undefined
 let sceneLockHeartbeatInFlight = false
 let sceneLockHeartbeatCompletion: Promise<void> | undefined
 const sceneLockLost = ref(false)
+let releaseLostLease: (() => void) | undefined
 let sceneLockReleaseSent = false
 /** 当前页签实际持有的锁快照；退出和卸载阶段优先使用它，不依赖路由或存储仍然可读。 */
 let activeSceneLock:
@@ -449,9 +459,47 @@ const sceneSaveContext = computed<EditorDim3dSceneSaveContext | null>(() => {
 
 /** 保存成功后推进后端基准修订；页面内存书签不作为跨刷新缓存。 */
 const handleSceneSaveSucceeded = (bookmark: EditorDim3dSceneSaveBookmark) => {
+  if (sceneSaveContext.value?.sceneId !== bookmark.sceneId) return
   latestSceneSaveBookmark.value = bookmark
   if (bookmark.revisionNo !== undefined) {
     sceneBaseRevisionNo.value = bookmark.revisionNo
+  }
+}
+
+const markSceneLockLost = (sceneId: string, clientKey: string, lockToken: string) => {
+  // 旧页签的心跳或保存回执只能改变它自己对应的租约。
+  if (getRouteQueryString(route.query.id) !== sceneId || getRouteQueryString(route.query.clientKey) !== clientKey ||
+    getStoredSceneLockToken(sceneId, clientKey) !== lockToken || sceneLockLost.value) return
+  sceneLockLost.value = true
+  releaseLostLease = holdEditorSceneForLeaseLoss()
+  sceneCanvasRef.value?.stopSceneDataPolling()
+  clearStoredSceneLockToken(sceneId, clientKey, lockToken)
+  if (sceneLockHeartbeatTimer !== undefined) clearInterval(sceneLockHeartbeatTimer)
+  sceneLockHeartbeatTimer = undefined
+  activeSceneLock = undefined
+  ElMessage.warning('当前场景编辑锁已失效，当前草稿已保留')
+}
+
+const handleSceneSaveLockLost = () => {
+  const sceneId = getRouteQueryString(route.query.id)
+  const clientKey = getRouteQueryString(route.query.clientKey)
+  const token = getStoredSceneLockToken(sceneId, clientKey)
+  if (token) markSceneLockLost(sceneId, clientKey, token)
+}
+
+const exportRetainedSceneDraft = async () => {
+  if (!sceneLockLost.value || !sceneLockReady.value || sceneDataLoadState.value !== 'ready') return
+  const host = getActiveSceneViewportHost()
+  const sceneId = getRouteQueryString(route.query.id)
+  try {
+    const draft = await captureEditorSceneDraftPackages({ widgetSceneFragment: readWidgetSceneFragment() })
+    const { downloadRetainedEditorDraft } = await import('@/integrations/scene/sceneJsonFile')
+    // 导出准备期间若编辑页切换，只丢弃原页面的结果。
+    if (!sceneLockLost.value || getActiveSceneViewportHost() !== host ||
+      getRouteQueryString(route.query.id) !== sceneId) return
+    downloadRetainedEditorDraft(draft.payload, draft.name)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '无法导出当前草稿')
   }
 }
 
@@ -523,22 +571,18 @@ const refreshSceneLock = async () => {
   const completion = (async () => {
     try {
       const response = await heartbeatDim3dScene(sceneId, { lockToken })
-      if (response.data?.locked === true) {
-        sceneLockLost.value = true
-        // 令牌已失效，立即清理会话存储，防止同一标签页重新进入时跳过重新加锁。
-        clearStoredSceneLockToken(sceneId, clientKey, lockToken)
-        if (sceneLockHeartbeatTimer !== undefined) {
-          clearInterval(sceneLockHeartbeatTimer)
-          sceneLockHeartbeatTimer = undefined
-        }
-        activeSceneLock = undefined
-        ElMessage.warning('当前场景编辑锁已失效，请重新进入编辑器')
+      if (response.code === 409 || response.data?.locked === true) {
+        markSceneLockLost(sceneId, clientKey, lockToken)
         return
       }
       if (response.data?.locked !== false) {
         appLogger.warn('SceneEdit', '场景心跳返回未知锁状态', sceneId, response)
       }
     } catch (error) {
+      if (readSceneRequestFailure(error).code === 409) {
+        markSceneLockLost(sceneId, clientKey, lockToken)
+        return
+      }
       // 单次网络失败不立即判定失锁，保留定时器等待下一周期重试，避免短暂抖动中断编辑。
       appLogger.warn('SceneEdit', '场景编辑锁心跳续期失败，将在下一周期重试', sceneId, error)
     } finally {
@@ -563,6 +607,8 @@ const startSceneLockHeartbeat = () => {
   const lockToken = activeSceneLock?.lockToken || getStoredSceneLockToken(sceneId, clientKey)
   if (!sceneId || !lockToken || sceneLockHeartbeatTimer !== undefined) return
   sceneLockLost.value = false
+  releaseLostLease?.()
+  releaseLostLease = undefined
   // 首次挂载立即刷新一次状态，之后再按固定周期续期，避免初始 10 分钟内状态无更新。
   void refreshSceneLock()
   sceneLockHeartbeatTimer = setInterval(() => {
@@ -1275,6 +1321,7 @@ const releaseScene = async () => {
   }
 }
 onUnmounted(() => {
+  releaseLostLease?.()
   editorPreviewGeneration += 1
   stopEditorFirstPersonPreview()
   window.removeEventListener('keydown', handleEditorFirstPersonKeyDown)
@@ -1361,6 +1408,13 @@ onUnmounted(() => {
   width: 100%;
   height: auto;
   min-height: 0;
+}
+.scene-edit-lock-banner {
+  /* 失锁时由提示条接管第二行操作区，避免已停用的绝对定位页签遮住导出按钮。 */
+  position: absolute;
+  inset: var(--scene-edit-header-height) 0 auto;
+  z-index: 3;
+  background: var(--scene-edit-bg-panel);
 }
 .scene-edit-preview-layer {
   /**

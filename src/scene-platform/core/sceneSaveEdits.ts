@@ -6,8 +6,11 @@ export const sceneObjectSaveMetadataKeys = [
 export const sceneLayerSaveFields = ['name', 'visible', 'locked', 'order'] as const
 export type SceneObjectSaveField = typeof sceneObjectSaveFields[number] | typeof sceneObjectSaveMetadataKeys[number]
 export type SceneLayerSaveField = typeof sceneLayerSaveFields[number] | 'presence'
+export type SceneSaveDomain = 'settings' | 'cameraPaths' | 'vegetation' | 'streamingPolicy'
 
 export interface SceneSaveEdits {
   readonly objects: ReadonlyMap<string, ReadonlySet<SceneObjectSaveField>>
   readonly layers: ReadonlyMap<string, ReadonlySet<SceneLayerSaveField>>
+  readonly domains?: ReadonlySet<SceneSaveDomain>
+  readonly effects?: ReadonlySet<string>
 }

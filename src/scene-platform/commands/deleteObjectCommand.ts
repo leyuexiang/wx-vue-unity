@@ -46,7 +46,7 @@ export function createDeleteObjectCommand(objectId: string): SceneCommand {
             streaming: currentScene.streaming,
           })
           if (repairedStreaming !== currentScene.streaming) {
-            store.updateSceneStreaming(repairedStreaming)
+            store.updateSceneStreaming(repairedStreaming, 'membership')
           }
           streamingChangedByDelete = store.getScene().streaming !== previousStreamingReference
         }
@@ -62,7 +62,7 @@ export function createDeleteObjectCommand(objectId: string): SceneCommand {
        * 包括混合区块、分组和运行态覆盖，保证再次重做仍可得到同一场景快照。
        */
       if (streamingChangedByDelete) {
-        store.updateSceneStreaming(cloneStreamingConfig(previousStreaming))
+        store.updateSceneStreaming(cloneStreamingConfig(previousStreaming), 'membership')
       }
       store.setSelectedObjectId(previousSelectedObjectId)
     },

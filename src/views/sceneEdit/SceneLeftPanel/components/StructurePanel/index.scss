@@ -94,6 +94,11 @@
   /* 结构节点只用于选择和拖拽，禁止浏览器把名称识别为可搜索文本拖拽。 */
   user-select: none;
 }
+.scene-edit-structure-panel__body.has-hierarchy-window {
+  /* 窗口坐标从滚动区顶部起算，避免浏览器在替换窗口行时自动调整滚动位置。 */
+  padding-block: 0;
+  overflow-anchor: none;
+}
 .scene-edit-structure-panel__body img {
   /* 图标不参与排序，关闭其原生图片拖拽，避免覆盖节点自身的拖拽手势。 */
   -webkit-user-drag: none;
@@ -102,6 +107,7 @@
   flex: 0 0 auto;
 }
 .scene-edit-structure-panel__group-header {
+  position: relative;
   flex: 0 0 auto;
   margin: 0 12px;
 }
@@ -186,6 +192,49 @@
 .scene-edit-structure-item + .scene-edit-structure-item {
   margin-top: 2px;
 }
+.scene-edit-structure-window {
+  position: relative;
+}
+.scene-edit-structure-window-row {
+  position: absolute;
+  inset-inline: 0;
+}
+/* 每个窗口槽固定留出两像素间距，滚动定位与实际行高一致。 */
+.scene-edit-structure-window-row > .scene-edit-structure-item {
+  height: calc(100% - 2px);
+}
+.scene-edit-structure-root-drop {
+  /* 覆盖固定栏，拖动开始时保持列表及已命中的行坐标稳定。 */
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px dashed var(--scene-edit-line);
+  background: var(--scene-edit-panel, #1c2c39);
+  color: var(--scene-edit-text-2);
+  font-size: 12px;
+}
+.scene-edit-structure-root-drop.is-drop-active,
+.scene-edit-structure-window-row.is-drop-inside > .scene-edit-structure-item {
+  border-color: var(--scene-edit-accent);
+}
+.scene-edit-structure-window-row.is-drop-before::after,
+.scene-edit-structure-window-row.is-drop-after::after {
+  position: absolute;
+  z-index: 1;
+  inset-inline: 8px;
+  border-top: 2px solid var(--scene-edit-accent);
+  content: '';
+  pointer-events: none;
+}
+.scene-edit-structure-window-row.is-drop-before::after {
+  top: 0;
+}
+.scene-edit-structure-window-row.is-drop-after::after {
+  bottom: 1px;
+}
 .scene-edit-structure-item {
   box-sizing: border-box;
   display: flex;
@@ -242,6 +291,10 @@
   min-width: 16px;
   color: var(--scene-edit-text-3);
   text-align: center;
+}
+/* 直接命中使用加粗标题，保留祖先行与结果行的区别。 */
+.scene-edit-structure-item__name.is-search-hit {
+  font-weight: 600;
 }
 .scene-edit-structure-actions {
   /*
@@ -330,6 +383,10 @@
 }
 .scene-edit-structure-expand.is-expanded {
   transform: rotate(0deg);
+}
+/* 叶节点保留同样的展开按钮列，使它的文字随层级向右缩进。 */
+.scene-edit-structure-expand-spacer {
+  flex: 0 0 16px;
 }
 .scene-edit-structure-ghost {
   opacity: 0.35;

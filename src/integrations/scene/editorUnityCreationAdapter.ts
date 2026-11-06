@@ -4,12 +4,43 @@ import {
   mapEditorCreationToGisSceneObject,
   mapEditorCreationToSceneObject,
   type ScreenPoint,
+  type SceneObject,
   type ViewportHost,
 } from '@/scene-platform'
 import { projectObjectForUnity } from '@/unity-runtime/runtime/projectSceneForUnity'
 import type { EditorCreationModel } from './editorCreationRouter'
 import { runConfirmedEditorCommand } from './editorSceneCommandTransaction'
 import { appLogger } from '@/utils/logger'
+import { createSnowflakeId } from '@/utils/snowflakeId'
+import { beginEditorSceneOperation, editorSceneOperation } from './editorSceneOperationGate'
+import { getActiveSceneViewportHost } from './editorScenePlatformHost'
+
+/** 创建可作为父级的空业务节点，沿用 Unity 投影确认和撤销。 */
+export async function createEditorUnityGroup(host: ViewportHost, isActive: () => boolean): Promise<string | null> {
+  const store = host.getStore()
+  if (getActiveSceneViewportHost() !== host || !isActive() || editorSceneOperation.value ||
+    store.getScene().type !== 'local3d' || !host.getRuntime().id.startsWith('unity-')) return null
+  const release = beginEditorSceneOperation('createObject')
+  try {
+    const id = createSnowflakeId()
+    if (store.getObject(id) || store.getDeletedObjectIds().has(id)) throw new Error('分组编号重复，请重试')
+    let order = 0
+    for (const node of store.getObjects()) {
+      if (!node.parentInstanceId && !node.layerId) order = Math.max(order, node.order + 1)
+    }
+    if (order > 2147483647) throw new Error('根节点顺序已达上限，无法创建分组')
+    const group: SceneObject = {
+      id, name: '新建分组', type: 'group', visible: true, locked: false, order,
+      transform: { kind: 'local', position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
+    }
+    projectObjectForUnity(group, store.getScene().id)
+    const applied = await runConfirmedEditorCommand(host, 'execute', createCreateObjectCommand(group), isActive,
+      () => store.setSelectedObjectId(id))
+    return applied && isActive() ? id : null
+  } finally {
+    release()
+  }
+}
 
 /**
  * 将资源卡片接入统一命令历史和运行时桥接；调用方在等待期间持有场景操作门禁。

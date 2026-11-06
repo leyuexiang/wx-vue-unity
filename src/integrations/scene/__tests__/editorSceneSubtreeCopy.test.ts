@@ -18,7 +18,7 @@ const action = {
   sourceModelValue: 'second', targetModelValue: 'parent',
   targets: [{ domain: 'twoD', instanceId: 'leaf' }, { domain: 'threeD', instanceId: 'second' }],
   parameterSource: { kind: 'object', id: 'leaf' },
-  unknown: 'leaf',
+  unknown: 'opaque-value',
 }
 let active: ViewportHost | undefined
 async function setup(locked = false) {
@@ -28,7 +28,7 @@ async function setup(locked = false) {
     coordinateSystem: { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true },
     objects: [
       { ...node('parent', 0), metadata: {
-        engineObjectUuid: 'engine', legacyOnlyUuid: 'legacy', unknownExtension: { key: 'leaf' },
+        engineObjectUuid: 'engine', legacyOnlyUuid: 'legacy', unknownExtension: { key: 'opaque-value' },
         interactiveEvent: [{ id: 'action-key', actionList: [action] }],
       } },
       node('second', 2),
@@ -77,7 +77,7 @@ describe('三维子树批量复制', () => {
     const sourceLeaf = before.find((object) => object.id === 'leaf')!
     expect(leaf).toMatchObject({ parentInstanceId: parent.id, order: sourceLeaf.order, asset: sourceLeaf.asset })
     expect(parent.metadata).toEqual({
-      unknownExtension: { key: 'leaf' },
+      unknownExtension: { key: 'opaque-value' },
       interactiveEvent: [{ id: 'action-key', actionList: [{
         ...action,
         actionTargetUuid: leaf.id, sourceModelValue: second.id, targetModelValue: parent.id,
@@ -102,6 +102,48 @@ describe('三维子树批量复制', () => {
     const { host, store, commandBus } = await setup(true)
     await expect(copyEditorSceneSubtrees(host, ['second', 'parent'])).rejects.toThrow('已锁定')
     expect(store.getObjects()).toHaveLength(4)
+    expect(commandBus.getUndoSize()).toBe(0)
+  })
+
+  it('为模型实例配置生成新身份，复用资源并保留源配置', async () => {
+    const { host, store } = await setup()
+    const leaf = store.getObject('leaf')!
+    store.upsertObject({ ...leaf, asset: { ...leaf.asset!, id: '1234' }, metadata: {
+      instanceDefinition: {
+        schemaVersion: 'jtyf.instance-definition.v1',
+        identity: { instanceId: 'leaf', instanceType: 'Model', sceneId },
+        resource: { resourceId: '1234' },
+        pages: { base: { name: 'leaf' }, data: { bindings: [] } },
+      },
+    } })
+    expect(await copyEditorSceneSubtrees(host, ['leaf'])).toBe(true)
+    const copied = store.getObject(store.getSelectedObjectId()!)!
+    expect(copied.metadata?.instanceDefinition).toMatchObject({ identity: { instanceId: copied.id } })
+    expect(store.getObject('leaf')?.metadata?.instanceDefinition).toMatchObject({ identity: { instanceId: 'leaf' } })
+    const saved = JSON.parse(serializeSceneDefinitionToFourPackages(store.getScene()).threeDJson)
+    expect(saved.objects.find((record: { instanceId: string }) => record.instanceId === copied.id)).toMatchObject({
+      resourceRefKeys: ['1234'],
+      contentJson: { metadata: { instanceDefinition: { identity: { instanceId: copied.id }, pages: { base: { name: 'leaf 副本' } } } } },
+    })
+  })
+
+  it.each(['正文私有字段', '结构化依赖', '未声明实例引用'])('整批拒绝无法确认的%s', async (kind) => {
+    const { host, store, commandBus } = await setup()
+    const original = serializeSceneDefinitionToFourPackages(store.getScene())
+    const threeD = JSON.parse(original.threeDJson)
+    const dependencies = JSON.parse(original.dependenciesJson)
+    if (kind === '正文私有字段') {
+      threeD.objects[0].contentJson.vendorPrivate = { target: 'leaf' }
+    } else if (kind === '结构化依赖') {
+      dependencies.behaviors[0].conditionGroups.push({ vendorAction: { target: 'leaf' } })
+    } else {
+      const parent = store.getObject('parent')!
+      store.upsertObject({ ...parent, metadata: { ...parent.metadata, vendor: { target: 'leaf' } } })
+    }
+    retainOriginalScenePackages(sceneId, { ...original, threeDJson: JSON.stringify(threeD), dependenciesJson: JSON.stringify(dependencies) })
+    const before = structuredClone(store.getScene())
+    await expect(copyEditorSceneSubtrees(host, ['parent', 'second'])).rejects.toThrow(/无法完整复制|未声明的实例引用/)
+    expect(store.getScene()).toEqual(before)
     expect(commandBus.getUndoSize()).toBe(0)
   })
 

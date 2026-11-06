@@ -42,6 +42,7 @@ import {
   getSceneStageSizeState,
 } from '@/integrations/scene/sceneStage'
 import { createDefaultSceneStageSize, SCENE_STAGE_SIZE_LIMIT } from '@/utils/sceneStage'
+import { editorSceneOperation, subscribeEditorSceneBeforeOperation } from '@/integrations/scene/editorSceneOperationGate'
 
 defineOptions({ name: 'SceneStageSizePanel' })
 
@@ -64,6 +65,8 @@ const syncStageSizeForm = (size: WidgetCanvasConfig = getCurrentSceneStageSize()
  * 面板只提交草稿尺寸；归一化、Store 写入和历史命令记录统一收敛在场景舞台适配层。
  */
 const applyStageSizeChange = () => {
+  // 保存、换父级等操作先结算输入；随后面板卸载无需穿过该操作的编辑门禁。
+  if (editorSceneOperation.value) return
   syncStageSizeForm(
     commitSceneStageSizeChange({
       width: stageWidth.value,
@@ -71,6 +74,7 @@ const applyStageSizeChange = () => {
     }),
   )
 }
+const stopBeforeOperation = subscribeEditorSceneBeforeOperation(applyStageSizeChange)
 
 watch(
   () => getSceneStageSizeState(),
@@ -83,6 +87,7 @@ watch(
  * 卸载前再提交一次当前表单值，避免发布尺寸回到默认 1920x1080。
  */
 onBeforeUnmount(() => {
+  stopBeforeOperation()
   applyStageSizeChange()
 })
 </script>

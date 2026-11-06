@@ -34,6 +34,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   private readonly unsubscribe: Array<() => void> = []
   private video: HTMLVideoElement | null = null
   private operations = Promise.resolve()
+  private focusSelectionVersion = 0
   private readonly programmaticUpdates = new Set<string>()
   private readonly missingModelAssetIds = new Set<string>()
   // 缺失模型的子节点也暂缓表现，逻辑记录继续留在完整草稿。
@@ -146,6 +147,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
 
   override async loadScene(scene: SceneDefinition): Promise<void> {
     if (!this.unity) throw new Error('Unity 运行时尚未连接')
+    this.focusSelectionVersion++
     this.options.onStatus('正在加载 Unity 场景')
     await this.loadUnityDraft(scene)
     await super.loadScene(scene)
@@ -199,7 +201,9 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   }
 
   override setSelectedObject(objectId: string | null): void {
+    const previous = this.selectedObjectId
     super.setSelectedObject(objectId)
+    if (previous !== this.selectedObjectId) this.focusSelectionVersion++
     const selected = objectId ? this.objectMap.get(objectId) : null
     this.unity?.setSelection(selected && this.isDeferredInUnity(selected) ? null : this.selectedObjectId)
   }
@@ -313,8 +317,11 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     if (!unity?.executeInteractionAction || unity.capabilities?.features['interaction.action'] !== true) {
       return Promise.resolve(false)
     }
+    const focusVersion = this.focusSelectionVersion
     const operation = this.operations.then(async () => {
       if (this.unity !== unity || this.isDisposed) return false
+      // 排队中的旧聚焦不能在改选或重载后才发往引擎。
+      if (action.actionType === 'moveCamera' && focusVersion !== this.focusSelectionVersion) return false
       if (
         'instanceId' in action &&
         (!this.objectMap.has(action.instanceId) || this.isDeferredInUnity(this.objectMap.get(action.instanceId)!))

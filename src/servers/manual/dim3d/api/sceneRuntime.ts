@@ -79,6 +79,7 @@ export interface Dim3dThreeDPackage {
   layers: Dim3dThreeDLayer[]
   streaming: Dim3dThreeDStreaming
   cameraPaths: unknown[]
+  effects?: unknown[]
   vegetation?: Dim3dJsonObject
 }
 

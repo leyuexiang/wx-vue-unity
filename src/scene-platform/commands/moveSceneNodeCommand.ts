@@ -9,7 +9,7 @@ export const isLocalHierarchyNode = (node: SceneObject) =>
   node.transform.kind === 'local' && (node.type === 'model' || node.type === 'primitive' || node.type === 'group')
 
 /** 选中祖先时，后代随子树移动。缓存途经父链，避免重复向根查询。 */
-function getMoveRoots(selected: ReadonlySet<string>, parentById: ReadonlyMap<string, string>) {
+export function getSceneNodeMoveRoots(selected: ReadonlySet<string>, parentById: ReadonlyMap<string, string>) {
   const covered = new Map<string, boolean>()
   return [...selected].filter((id) => {
     const path: string[] = []
@@ -56,11 +56,15 @@ export function createMoveSceneNodesCommand(
   for (const id of selected) {
     if (!nodesById.has(id)) throw new Error(`待移动节点已不存在：${id}`)
   }
-  const rootIds = new Set(getMoveRoots(selected, parentById))
+  const rootIds = new Set(getSceneNodeMoveRoots(selected, parentById))
   // 跨父级移动使用当前草稿顺序，避免按点击先后改变同一批节点的排列。
   const roots = store.getObjects().filter((node) => rootIds.has(node.id))
-  if (siblingIndex !== undefined && (!Number.isInteger(siblingIndex) || roots.length !== 1)) {
-    throw new Error('仅支持为单个节点指定有效的同级顺序')
+  if (siblingIndex !== undefined) {
+    if (!Number.isInteger(siblingIndex)) throw new Error('无效的同级顺序')
+    // 根级顺序按对象图层维护，单个插入下标必须指向同一组同级节点。
+    if (!parentId && roots.some((node) => node.layerId !== roots[0]?.layerId)) {
+      throw new Error('根级排序需要节点属于同一图层')
+    }
   }
   const assertMovePermissions = (active: SceneStore) => {
     const current = active.getNodeIndex()

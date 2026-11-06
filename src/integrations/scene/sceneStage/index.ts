@@ -38,16 +38,16 @@ export const getSceneStageSizeState = () => {
 export const commitSceneStageSizeChange = (
   draftSize: Partial<WidgetCanvasConfig>,
 ): WidgetCanvasConfig => {
-  const commandBus = getActiveSceneViewportHost()?.getCommandBus()
-  if (editorSceneOperation.value || commandBus?.getIsPending()) {
-    throw new Error('场景正在处理其他操作，请完成后再调整舞台')
-  }
   const widgetStore = useSceneWidgetStore()
   const oldSize = widgetStore.getWidgetCanvasConfig()
   const nextSize = normalizeSceneStageSize(draftSize, oldSize)
 
   if (isSameSceneStageSize(oldSize, nextSize)) {
     return nextSize
+  }
+  const commandBus = getActiveSceneViewportHost()?.getCommandBus()
+  if (editorSceneOperation.value || commandBus?.getIsPending()) {
+    throw new Error('场景正在处理其他操作，请完成后再调整舞台')
   }
 
   widgetStore.setWidgetCanvasSizeFromConfig(nextSize)

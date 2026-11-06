@@ -9,15 +9,28 @@ export interface EditorSceneSaveStateSnapshot {
 }
 
 type SaveStateStore = Pick<SceneStore, 'subscribe'>
-type SaveStateBus = Pick<CommandBus, 'subscribeTransaction' | 'subscribeHistory'>
+type SaveStateBus = Pick<CommandBus,
+  'subscribeHistory' | 'getHistoryState' | 'invalidateHistoryState' | 'getIsExecuting' | 'breakHistoryMerge'>
+
+export interface EditorSceneSaveCheckpoint {
+  readonly session: symbol
+  readonly revision: number
+  readonly historyState: number | undefined
+}
+
+export interface EditorSceneSaveAttempt {
+  readonly checkpoint: EditorSceneSaveCheckpoint
+}
 
 export interface EditorSceneSaveStateTracker {
   bindStore: (store: SaveStateStore | null, commandBus?: SaveStateBus | null) => void
-  beginSave: () => EditorSceneSaveStateSnapshot
-  markSaved: () => EditorSceneSaveStateSnapshot
+  captureCheckpoint: () => EditorSceneSaveCheckpoint
+  beginSave: (checkpoint?: EditorSceneSaveCheckpoint) => EditorSceneSaveAttempt
+  isCurrentSave: (attempt: EditorSceneSaveAttempt) => boolean
+  markSaved: (attempt?: EditorSceneSaveAttempt) => EditorSceneSaveStateSnapshot
   /** 整场景导入在宿主刷新完成后显式标为未保存，不能把替换事件当成服务器干净基线。 */
   markDirty: () => EditorSceneSaveStateSnapshot
-  markFailed: (error: unknown) => EditorSceneSaveStateSnapshot
+  markFailed: (error: unknown, attempt?: EditorSceneSaveAttempt) => EditorSceneSaveStateSnapshot
   getSnapshot: () => EditorSceneSaveStateSnapshot
   dispose: () => void
 }
@@ -79,19 +92,19 @@ export const createEditorSceneSaveStateTracker = (
   let revision = 0
   let savedRevision = 0
   let saving = false
-  let saveStartedRevision: number | null = null
+  let savedHistoryState: number | undefined
+  let session = Symbol('editor-save-session')
+  let activeSave: EditorSceneSaveAttempt | undefined
   let lastErrorMessage: string | null = null
   let boundStore: SaveStateStore | null = null
   let boundBus: SaveStateBus | null = null
   let unsubscribeStore: (() => void) | null = null
-  let unsubscribeTransaction: (() => void) | undefined
   let unsubscribeHistory: (() => void) | undefined
-  let pendingTransaction: { changed: boolean } | undefined
 
   const getSnapshot = (): EditorSceneSaveStateSnapshot => ({
     revision,
     savedRevision,
-    dirty: revision !== savedRevision,
+    dirty: boundBus ? boundBus.getHistoryState() !== savedHistoryState : revision !== savedRevision,
     saving,
     lastErrorMessage,
   })
@@ -104,21 +117,25 @@ export const createEditorSceneSaveStateTracker = (
   const resetCleanState = () => {
     revision = 0
     savedRevision = 0
+    savedHistoryState = boundBus?.getHistoryState()
     saving = false
-    saveStartedRevision = null
+    session = Symbol('editor-save-session')
+    activeSave = undefined
     lastErrorMessage = null
-    pendingTransaction = undefined
   }
 
-  const markDirty = () => {
-    if (pendingTransaction) {
-      pendingTransaction.changed = true
-      return getSnapshot()
-    }
+  const advanceRevision = () => {
     revision += 1
     lastErrorMessage = null
     return emit()
   }
+  const markDirty = () => {
+    boundBus?.invalidateHistoryState()
+    return advanceRevision()
+  }
+  const captureCheckpoint = (): EditorSceneSaveCheckpoint => ({
+    session, revision, historyState: boundBus?.getHistoryState(),
+  })
 
   const handleStoreEvent = (event: SceneStoreEvent) => {
     if (event.type === 'sceneLoaded') {
@@ -132,14 +149,13 @@ export const createEditorSceneSaveStateTracker = (
     }
 
     if (!DATA_CHANGE_EVENTS[event.type] || ('origin' in event && event.origin === 'loadNormalization')) return
-    markDirty()
+    // 直接执行及暂存、补偿的事件由最终历史回执代表，失败时没有新的保存身份。
+    if (!boundBus?.getIsExecuting()) markDirty()
   }
 
   const unsubscribe = () => {
-    unsubscribeTransaction?.()
     unsubscribeHistory?.()
     unsubscribeStore?.()
-    unsubscribeTransaction = undefined
     unsubscribeHistory = undefined
     unsubscribeStore = null
   }
@@ -152,18 +168,8 @@ export const createEditorSceneSaveStateTracker = (
       boundStore = store
       boundBus = commandBus
       resetCleanState()
-      unsubscribeTransaction = commandBus?.subscribeTransaction((event) => {
-        if (event === 'begin') pendingTransaction = { changed: false }
-        else {
-          const changed = pendingTransaction?.changed
-          pendingTransaction = undefined
-          // 等待期间的草稿和失败补偿都是暂态，只在确认后推进一次修订。
-          if (event === 'commit' && changed) markDirty()
-        }
-      })
       unsubscribeHistory = commandBus?.subscribeHistory((event) => {
-        // 清栈不修改保存数据。平台命令已有 Store 事件，只补外部仓库的历史操作。
-        if (event.type !== 'clear' && event.command.confirmationScope === 'local') markDirty()
+        if (event.type !== 'clear') advanceRevision()
       })
 
       if (store) {
@@ -172,31 +178,32 @@ export const createEditorSceneSaveStateTracker = (
 
       emit()
     },
-    beginSave: () => {
+    captureCheckpoint,
+    beginSave: (checkpoint = captureCheckpoint()) => {
+      if (checkpoint.session !== session || activeSave) throw new Error('当前草稿保存状态已变化')
+      boundBus?.breakHistoryMerge()
+      const attempt = { checkpoint }
+      activeSave = attempt
       saving = true
-      saveStartedRevision = revision
       lastErrorMessage = null
-      return emit()
+      emit()
+      return attempt
     },
-    markSaved: () => {
-      /**
-       * 保存开始后用户可能继续编辑。
-       * 成功时只把“发起保存那一刻”的修订号标记为已保存，
-       * 这样保存中的新增编辑仍保持 dirty，不会被误清。
-       */
-      // 场景替换会使正在等待的保存失效。
-      if (saveStartedRevision === null) return getSnapshot()
-      savedRevision = saveStartedRevision
+    isCurrentSave: (attempt) => activeSave === attempt,
+    markSaved: (attempt = activeSave) => {
+      if (!attempt || attempt !== activeSave) return getSnapshot()
+      savedRevision = attempt.checkpoint.revision
+      savedHistoryState = attempt.checkpoint.historyState
       saving = false
-      saveStartedRevision = null
+      activeSave = undefined
       lastErrorMessage = null
       return emit()
     },
     markDirty,
-    markFailed: (error) => {
-      if (saveStartedRevision === null) return getSnapshot()
+    markFailed: (error, attempt = activeSave) => {
+      if (!attempt || attempt !== activeSave) return getSnapshot()
       saving = false
-      saveStartedRevision = null
+      activeSave = undefined
       lastErrorMessage = buildEditorSceneSaveFailureMessage(error)
       return emit()
     },

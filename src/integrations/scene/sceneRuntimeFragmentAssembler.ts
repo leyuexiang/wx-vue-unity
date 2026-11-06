@@ -23,7 +23,7 @@ import {
   type SceneStreamingConfig,
   type SceneType,
 } from '@/scene-platform'
-import { getBuiltinSceneAsset, getBuiltinSceneResourceUrl } from './editorBuiltinResourceRegistry'
+import { BUILTIN_SCENE_ASSET_ID_PREFIX, getBuiltinSceneAsset, getBuiltinSceneResourceUrl } from './editorBuiltinResourceRegistry'
 
 /** 真实运行态接口返回的通用发布分片。字段均来自 OpenAPI 的实际声明。 */
 export interface SceneRuntimePublishedFragment {
@@ -1620,7 +1620,22 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
     objects: restoredObjects,
     ...(streaming ? { streaming } : {}),
     layers,
-    effects: Array.isArray(threeDSeed.effects) ? threeDSeed.effects : [],
+    effects: getArray(threeDSeed.effects).map(value => {
+      const effect = getRecord(value)
+      if (!effect || !Array.isArray(effect.assetRefs)) return value
+      return {
+        ...effect,
+        assetRefs: effect.assetRefs.map(value => {
+          const asset = getRecord(value)
+          const id = getString(asset?.id)
+          if (!id) return value
+          // 通过本次资源索引恢复效果引用，兼容仍携带旧地址的历史效果。
+          const resolved = resourceIndex.get(id) ?? (id.startsWith(BUILTIN_SCENE_ASSET_ID_PREFIX)
+            ? getBuiltinSceneAsset(id.slice(BUILTIN_SCENE_ASSET_ID_PREFIX.length)) : undefined)
+          return { ...asset, ...resolved, url: resolved?.url ?? getString(asset?.url) ?? '' }
+        }),
+      }
+    }),
     settings,
     metadata,
     cameraPaths: Array.isArray(threeDSeed.cameraPaths) ? threeDSeed.cameraPaths : [],
