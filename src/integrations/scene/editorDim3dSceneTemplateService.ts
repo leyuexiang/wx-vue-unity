@@ -11,6 +11,7 @@ import {
   type SceneFourPackagePayload,
 } from './sceneFourPackage'
 import {
+  createDim3dSceneClientKey,
   saveDim3dSceneSnapshotAsTemplate,
   type Dim3dSceneSnapshotTemplateBody,
   type Dim3dSceneSnapshotTemplateResponse,
@@ -35,6 +36,7 @@ export interface EditorDim3dSceneTemplateForm {
 }
 
 export interface SaveEditorSceneAsTemplateOptions {
+  sourceRevisionNo?: number
   /** 测试或显式调用可注入场景；生产路径默认读取当前活动 SceneStore。 */
   scene?: SceneDefinition | null
   /** 复用场景面板纯快照，保证相机、天气等尚未保存的修改也进入模板。 */
@@ -110,6 +112,8 @@ const createTemplateRequestBody = (
   )
   const serialized = serializeSceneFourPackageDocuments(templatePackages)
   return {
+    sourceSceneId: scene.id,
+    requestId: createDim3dSceneClientKey(),
     name,
     templateType: form.templateType,
     category,
@@ -172,6 +176,7 @@ export const saveActiveEditorSceneAsTemplate = async (
     ? new Set(scene.objects.filter(object => !isUnityDeferredObject(object)).map(object => object.id))
     : undefined
   const body = createTemplateRequestBody(scene, form, deletedObjectIds, editedHierarchyIds, saveEdits, editableTransformIds, original)
+  body.sourceRevisionNo = options.sourceRevisionNo
   const response = await (options.saveTemplate ?? saveDim3dSceneSnapshotAsTemplate)(body)
   return assertTemplateSaveSucceeded(response, form.saveScope)
 }

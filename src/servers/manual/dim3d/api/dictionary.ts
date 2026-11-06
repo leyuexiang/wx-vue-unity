@@ -151,6 +151,11 @@ export function getDim3dTemplateCategoryDictionary(
   const templateType = hasTemplateType ? templateTypeOrOptions : undefined
   const requestOptions = hasTemplateType ? options : templateTypeOrOptions
   const dictionaryType = templateType || 'dim3d_template_category'
+  if (DIM3D_ADMIN_API) {
+    return getDictionary(dictionaryType, requestOptions).then((response) =>
+      response.code === 0 ? { ...response, code: 200 } : response,
+    )
+  }
 
   return request<Dim3dDictionaryResponse>(
     `${DIM3D_API_PREFIX}/system/dict/data/type/${encodeURIComponent(dictionaryType)}`,

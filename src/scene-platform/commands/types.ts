@@ -11,6 +11,11 @@ export interface SceneCommand {
   execute: (store: SceneStore) => void
   undo: (store: SceneStore) => void
   /**
+   * 场景快照命令的异步副作用恢复钩子。
+   * Store 先同步切换领域快照，再由确认事务恢复二维仓库、相机和请求状态，避免历史先提交而界面仍在加载。
+   */
+  applyAsync?: (action: 'execute' | 'undo' | 'redo') => Promise<void>
+  /**
    * 尝试把后续命令合并到当前命令。
    *
    * 总线先检查会话边界；命令再核对目标并保留首笔基线和末笔结果。

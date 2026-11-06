@@ -16,6 +16,8 @@ import { ensureEditorSceneObjectLayersInStore } from '../editorSceneLayerAdapter
 import { beginEditorSceneOperation, editorSceneOperation, editorSceneRecovery, subscribeEditorSceneBeforeOperation } from '../editorSceneOperationGate'
 import { dispatchEditorHistory, getEditorUndoRedoState } from '../editorSceneUndoRedoAdapter'
 import { commitSceneStageSizeChange } from '../sceneStage'
+import { assembleSceneDefinitionFromRuntimeFragments } from '../sceneRuntimeFragmentAssembler'
+import { serializeSceneDefinitionToFourPackages } from '../sceneFourPackage'
 
 const hosts: ViewportHost[] = []
 const deferred = () => {
@@ -45,6 +47,50 @@ afterEach(() => {
 })
 
 describe('统一历史回放入口', () => {
+  it('异步场景快照副作用在撤销和重做提交前执行', async () => {
+    const options = await setup()
+    const before = options.host.getStore().getScene()
+    const applied = createSceneDefinition({
+      id: 'history', name: '模板快照', type: 'local3d',
+      coordinateSystem: { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true },
+      objects: [],
+    })
+    const appliedActions: string[] = []
+    options.host.getStore().loadScene(applied)
+    options.commandBus.recordExecuted({
+      name: '应用场景模板',
+      confirmationScope: 'runtime',
+      execute: (store) => store.loadScene(applied),
+      undo: (store) => store.loadScene(before),
+      applyAsync: async (action) => { appliedActions.push(action) },
+    })
+
+    expect(await dispatchEditorHistory('undo', options)).toBe(true)
+    expect(appliedActions).toEqual(['undo'])
+    expect(options.host.getStore().getObject('node')).not.toBeNull()
+    const reopenedBeforeRedo = assembleSceneDefinitionFromRuntimeFragments({
+      manifest: {
+        fragmentType: 'manifest',
+        fragmentKey: 'history',
+        contentJson: JSON.stringify(serializeSceneDefinitionToFourPackages(options.host.getStore().getScene())),
+      },
+      options: { sceneId: 'history', sceneType: 'local3d' },
+    })
+    expect(reopenedBeforeRedo.objects).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'node' })]))
+    expect(await dispatchEditorHistory('redo', options)).toBe(true)
+    expect(appliedActions).toEqual(['undo', 'redo'])
+    expect(options.host.getStore().getObject('node')).toBeNull()
+    const reopened = assembleSceneDefinitionFromRuntimeFragments({
+      manifest: {
+        fragmentType: 'manifest',
+        fragmentKey: 'history',
+        contentJson: JSON.stringify(serializeSceneDefinitionToFourPackages(options.host.getStore().getScene())),
+      },
+      options: { sceneId: 'history', sceneType: 'local3d' },
+    })
+    expect(reopened.objects).toEqual([])
+  })
+
   it('两个入口交替撤销重做，等待回放同步后各通知一次', async () => {
     const options = await setup()
     const completion = deferred()

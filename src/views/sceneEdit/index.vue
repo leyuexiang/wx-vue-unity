@@ -1211,7 +1211,10 @@ const handleSaveAsTemplate = async (form: EditorDim3dSceneTemplateForm) => {
   }
   const release = beginEditorSceneOperation('saveTemplate')
   try {
-    return await saveActiveEditorSceneAsTemplate(form, { sceneApi: store.sceneApi })
+    return await saveActiveEditorSceneAsTemplate(form, {
+      sceneApi: store.sceneApi,
+      sourceRevisionNo: sceneBaseRevisionNo.value,
+    })
   } finally {
     release()
   }

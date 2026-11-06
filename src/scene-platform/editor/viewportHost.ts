@@ -16,7 +16,7 @@ export interface ViewportHostOptions {
 }
 export interface ViewportHost {
   mount: () => Promise<void>
-  replaceScene: (scene: SceneDefinition) => Promise<void>
+  replaceScene: (scene: SceneDefinition, options?: { preserveHistory?: boolean }) => Promise<void>
   getStore: () => SceneStore
   getRuntime: () => SceneRuntime
   getCommandBus: () => CommandBus
@@ -40,9 +40,9 @@ export function createViewportHost(options: ViewportHostOptions): ViewportHost {
   let disposed = false
   return {
     async mount() { await runtime.mount(options.container); bridge.start(); await bridge.flush() },
-    async replaceScene(scene) {
+    async replaceScene(scene, replaceOptions) {
       if (disposed) throw new Error('二维宿主已销毁')
-      commandBus.clear()
+      if (!replaceOptions?.preserveHistory) commandBus.clear()
       store.loadScene(scene)
       await bridge.flush()
     },

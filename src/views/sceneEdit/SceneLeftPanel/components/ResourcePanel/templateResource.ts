@@ -6,6 +6,7 @@ import {
 import {
   getDim3dTemplateInfo,
   pageDim3dTemplate,
+  pageDim3dSceneTemplate,
   DIM3D_TEMPLATE_TYPE,
   type Dim3dTemplateDetailVo,
   type Dim3dTemplatePageParams,
@@ -223,26 +224,38 @@ export function createEditorTemplatePageParams(
 
 const loadAllTemplateRows = async (templateType: Dim3dTemplateType) => {
   const pageSize = 100
-  const firstPage = await pageDim3dTemplate(
-    createEditorTemplatePageParams(templateType, 1, pageSize),
-  )
-  const firstRows = Array.isArray(firstPage?.rows) ? firstPage.rows : []
-  const total = Math.max(Number(firstPage?.total) || 0, firstRows.length)
-  const pageCount = Math.ceil(total / pageSize)
-  if (pageCount <= 1) return firstRows
+  const loadRows = async (
+    loader: typeof pageDim3dTemplate,
+  ): Promise<Dim3dTemplatePageVo[]> => {
+    const firstPage = await loader(createEditorTemplatePageParams(templateType, 1, pageSize))
+    const firstRows = Array.isArray(firstPage?.rows) ? firstPage.rows : []
+    const total = Math.max(Number(firstPage?.total) || 0, firstRows.length)
+    const pageCount = Math.ceil(total / pageSize)
+    if (pageCount <= 1) return firstRows
 
-  const rows = [...firstRows]
-  // 分批并行，避免模板数量异常时一次性创建过多请求占满浏览器连接池。
-  const pageConcurrency = 8
-  for (let start = 2; start <= pageCount; start += pageConcurrency) {
-    const pages = await Promise.all(
-      Array.from({ length: Math.min(pageConcurrency, pageCount - start + 1) }, (_, index) =>
-        pageDim3dTemplate(createEditorTemplatePageParams(templateType, start + index, pageSize)),
-      ),
-    )
-    rows.push(...pages.flatMap((page) => (Array.isArray(page?.rows) ? page.rows : [])))
+    const rows = [...firstRows]
+    // 分批并行，避免模板数量异常时一次性创建过多请求占满浏览器连接池。
+    const pageConcurrency = 8
+    for (let start = 2; start <= pageCount; start += pageConcurrency) {
+      const pages = await Promise.all(
+        Array.from({ length: Math.min(pageConcurrency, pageCount - start + 1) }, (_, index) =>
+          loader(createEditorTemplatePageParams(templateType, start + index, pageSize)),
+        ),
+      )
+      rows.push(...pages.flatMap((page) => (Array.isArray(page?.rows) ? page.rows : [])))
+    }
+    return rows
   }
-  return rows
+
+  const legacyRows = await loadRows(pageDim3dTemplate)
+  let snapshotRows: Dim3dTemplatePageVo[] = []
+  try {
+    // 148 尚未部署新路由时保留旧模板列表；部署后自动合并快照模板。
+    snapshotRows = await loadRows(pageDim3dSceneTemplate)
+  } catch {
+    snapshotRows = []
+  }
+  return [...legacyRows, ...snapshotRows]
 }
 
 /**

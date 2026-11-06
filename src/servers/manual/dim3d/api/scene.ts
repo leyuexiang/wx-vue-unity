@@ -104,9 +104,12 @@ export type Dim3dSceneTemplateSaveScope = 'twoD' | 'threeD' | 'all'
 
 /**
  * 当前编辑器快照另存模板请求体。
- * 四包必须是同一时刻生成的 JSON 字符串；接口不接收源场景编号或编辑锁令牌。
+ * 四包来自同一次采集，来源场景及修订用于校验采集基线。
  */
 export interface Dim3dSceneSnapshotTemplateBody {
+  sourceSceneId: string
+  sourceRevisionNo?: number
+  requestId: string
   name: string
   /** 固定模板类型；后端快照另存接口补齐该字段后可直接按此值持久化。 */
   templateType: Dim3dTemplateType
@@ -298,10 +301,15 @@ export const copyDim3dScene = (id: string) =>
  * 将当前编辑器内存中的完整四包快照另存为模板。
  * 新契约使用无路径参数的单请求，禁止回退到已废弃的 saveAsTemplate/{id} 复制接口。
  */
-export const saveDim3dSceneSnapshotAsTemplate = (body: Dim3dSceneSnapshotTemplateBody) =>
-  sceneRequest('/dim3d/scene/saveAsTemplateFromSnapshot', 'POST', {
+export const saveDim3dSceneSnapshotAsTemplate = async (body: Dim3dSceneSnapshotTemplateBody) => {
+  if (DIM3D_ADMIN_API && (!Number.isInteger(body.sourceRevisionNo) || (body.sourceRevisionNo ?? 0) < 1)) {
+    throw new Error('当前场景缺少有效的保存修订，请重新打开后再另存模板')
+  }
+  const response: Dim3dSceneSnapshotTemplateResponse = await sceneRequest('/dim3d/scene/saveAsTemplateFromSnapshot', 'POST', {
     data: body,
-  }) as Promise<Dim3dSceneSnapshotTemplateResponse>
+  })
+  return DIM3D_ADMIN_API && response.code === 0 ? { ...response, code: 200 } : response
+}
 /** 发布最新草稿；accessMode 必填，响应通过 alreadyPublished 区分重复发布与实际发布。 */
 export const publishDim3dScene = (id: string, body: Dim3dScenePublishForm) =>
   sceneRequest(`/dim3d/scene/publish/${encodeURIComponent(id)}`, 'POST', {

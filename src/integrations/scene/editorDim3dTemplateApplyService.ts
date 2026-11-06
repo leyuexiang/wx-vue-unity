@@ -1,4 +1,4 @@
-import { type SceneDefinition, type SceneRepository, type ViewportHost } from '@/scene-platform'
+import { type SceneCommand, type SceneDefinition, type SceneRepository, type ViewportHost } from '@/scene-platform'
 import type { Dim3dTemplateSaveScope } from '@/servers/manual/dim3d/api/template'
 import {
   loadEditorSceneDefinition,
@@ -7,7 +7,8 @@ import {
 } from './editorSceneLoadAdapter'
 import { createDim3dSceneRepository } from './dim3dSceneRepository'
 import { refreshActiveSceneViewportHost } from './editorScenePlatformHost'
-import { createDefaultSceneCoordinateSystem } from './sceneFourPackage'
+import { createDefaultSceneCoordinateSystem, serializeSceneDefinitionToFourPackages } from './sceneFourPackage'
+import { retainOriginalScenePackages } from './twoDPackagePreservation'
 
 export interface ApplyEditorDim3dTemplateInput {
   /** 模板快照对应的场景编号；不能使用模板资源业务编号代替。 */
@@ -85,8 +86,8 @@ export const createEditorSceneFromTemplate = (
 
 /**
  * 请求模板四包、解析并整体覆盖当前编辑场景。
- * 请求与解析完成前不修改当前宿主；解析成功后由 ViewportHost 统一清空上一场景运行时和撤销历史，
- * 再恢复二维仓库、场景级请求状态及相机。
+ * 请求与解析完成前不修改当前宿主；解析成功后由 ViewportHost 替换运行时，
+ * 再恢复二维仓库、场景级请求状态及相机，并登记可异步回放的场景快照命令。
  */
 export const applyEditorDim3dTemplate = async (
   input: ApplyEditorDim3dTemplateInput,
@@ -112,13 +113,62 @@ export const applyEditorDim3dTemplate = async (
     ...templateLoadResult,
     scene: appliedScene,
   }
-  await loadEditorSceneDefinitionIntoHost(currentScene.id, {
-    host: options.host,
-    preloadedResult: appliedResult,
-    applyWidgetFragment: options.applyWidgetFragment,
-    isActive: options.isActive,
-  })
+  let replacementStarted = false
+  try {
+    replacementStarted = true
+    await loadEditorSceneDefinitionIntoHost(currentScene.id, {
+      host: options.host,
+      preloadedResult: appliedResult,
+      applyWidgetFragment: options.applyWidgetFragment,
+      isActive: options.isActive,
+      preserveHistory: true,
+    })
+  } catch (error) {
+    if (replacementStarted && (!options.isActive || options.isActive())) {
+      try {
+        /**
+         * 场景宿主替换和二维仓库恢复是两个异步步骤。二维片段失败时三维宿主可能已经切换，
+         * 必须用应用前的内存草稿回放一次，不能重新读取服务端版本覆盖用户未保存修改。
+         */
+        await loadEditorSceneDefinitionIntoHost(currentScene.id, {
+          host: options.host,
+          preloadedResult: { scene: currentScene, loadedBy: 'scene-definition' },
+          applyWidgetFragment: options.applyWidgetFragment,
+          isActive: options.isActive ?? (() => true),
+        })
+      } catch {
+        // 恢复失败仍保留原始错误，外层操作门禁负责阻止继续编辑并提示重试。
+      }
+    }
+    throw error
+  }
   /** 跨类型二维模板会替换宿主内部运行时，主动通知左右面板重新读取当前能力与场景类型。 */
   refreshActiveSceneViewportHost(options.host)
+
+  const commandBus = options.host.getCommandBus?.()
+  if (commandBus) {
+    const restoreSnapshot = async (action: 'execute' | 'undo' | 'redo') => {
+      const targetScene = action === 'undo' ? currentScene : appliedScene
+      await loadEditorSceneDefinitionIntoHost(currentScene.id, {
+        host: options.host,
+        preloadedResult: { scene: targetScene, loadedBy: 'scene-definition' },
+        skipSceneReplace: true,
+        applyWidgetFragment: options.applyWidgetFragment,
+        isActive: options.isActive,
+      })
+      if (options.isActive && !options.isActive()) throw new Error('模板应用已随页面关闭取消')
+      // 撤销或重做后保存必须以当前回放快照作为原始四包基线，不能继续保留另一个历史端点。
+      retainOriginalScenePackages(currentScene.id, serializeSceneDefinitionToFourPackages(targetScene))
+      refreshActiveSceneViewportHost(options.host)
+    }
+    const command: SceneCommand = {
+      name: '应用场景模板',
+      confirmationScope: 'runtime',
+      execute: (store) => store.loadScene(appliedScene),
+      undo: (store) => store.loadScene(currentScene),
+      applyAsync: restoreSnapshot,
+    }
+    commandBus.recordExecuted(command)
+  }
   return appliedScene
 }

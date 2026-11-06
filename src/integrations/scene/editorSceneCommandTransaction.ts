@@ -30,6 +30,10 @@ export async function runConfirmedEditorCommand(
   const alive = () => sameScene() && transaction.isCurrent()
   try {
     if (transaction.applicationFailed) throw transaction.applicationError
+    if (target.applyAsync) {
+      await target.applyAsync(action)
+      if (!alive()) return false
+    }
     prepare?.()
     if (bridge) await bridge.flush()
     if (!alive()) return false

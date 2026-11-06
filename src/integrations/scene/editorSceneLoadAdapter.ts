@@ -34,6 +34,8 @@ export interface LoadEditorSceneDefinitionIntoHostOptions extends LoadEditorScen
   skipSceneReplace?: boolean
   /** 整场景导入可在异步替换期间卸载；失效后禁止继续恢复二维仓库和相机。 */
   isActive?: () => boolean
+  /** 模板历史命令恢复时保留已有命令栈；普通打开和文件导入仍清空旧场景历史。 */
+  preserveHistory?: boolean
 }
 
 export interface EditorSceneDefinitionLoadResult {
@@ -108,7 +110,7 @@ export const loadEditorSceneDefinitionIntoHost = async (
      * loadScene。流式场景下这会造成重复模型创建和不必要的网络请求，因此仅在未预装时替换场景。
      */
     if (!options.skipSceneReplace) {
-      await host.replaceScene(result.scene)
+      await host.replaceScene(result.scene, { preserveHistory: options.preserveHistory })
     }
     if (options.isActive && !options.isActive()) return result
     /**

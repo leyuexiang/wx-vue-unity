@@ -136,6 +136,7 @@
         </div>
 
         <el-form-item
+          v-if="props.mode !== 'save-as' || !DIM3D_ADMIN_API"
           prop="coverImageId"
           class="template-dialog__field template-dialog__cover-field"
         >
@@ -197,6 +198,7 @@ import {
 } from 'element-plus'
 import { to } from '@/utils/asyncHandler'
 import { getDim3dOssFileById, uploadDim3dOssFile } from '@/servers/manual/dim3d/api/oss'
+import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
 import {
   editDim3dTemplate,
   getDim3dTemplateInfo,

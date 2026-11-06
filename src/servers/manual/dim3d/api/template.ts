@@ -24,6 +24,7 @@ export type Dim3dTemplateSceneType = 'gis' | 'local3d'
 
 /** 模板分页接口的原始查询参数，所有编号均保持字符串，避免大整数在浏览器中失真。 */
 export interface Dim3dTemplatePageParams {
+  includeSnapshots?: boolean
   templateName?: string
   templateType?: Dim3dTemplateType
   category?: string
@@ -111,6 +112,108 @@ export interface Dim3dTemplateVoidResponse {
   code?: number
   msg?: string
   data?: null
+}
+
+/** 场景快照模板另存请求；四包正文来自同一次编辑器采集，编号均按字符串传输。 */
+export interface Dim3dSceneTemplateSnapshotRequest {
+  sourceSceneId: string
+  sourceRevisionNo: number | string
+  requestId: string
+  templateName: string
+  templateDesc?: string
+  templateType: Dim3dTemplateType
+  category: string
+  resourceBelong?: Dim3dTemplateResourceBelong
+  saveScope: Dim3dTemplateSaveScope
+  coverAssetId?: string
+  sceneJson: string
+  threeDJson: string
+  twoDJson: string
+  dependenciesJson: string
+}
+
+/** 场景快照模板另存、目录和回读使用的独立入口，避免改变旧文件型模板协议。 */
+const DIM3D_SCENE_TEMPLATE_API_PREFIX = `${DIM3D_OPERATION_API_PREFIX}/dim3d/scene/template`
+
+export function saveAsDim3dSceneTemplateSnapshot(
+  body: Dim3dSceneTemplateSnapshotRequest,
+  options?: Record<string, unknown>,
+) {
+  return request<{ data?: Dim3dTemplateDetailVo; code?: number; msg?: string }>(
+    `${DIM3D_OPERATION_API_PREFIX}/dim3d/scene/saveAsTemplateFromSnapshot`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
+      data: body,
+      passAuth: true,
+      ...(options || {}),
+    },
+  )
+}
+
+export async function pageDim3dSceneTemplate(
+  params: Dim3dTemplatePageParams,
+  options?: Record<string, unknown>,
+) {
+  const response = await request<Dim3dTemplatePageResponse | Dim3dTemplatePageEnvelope>(
+    `${DIM3D_SCENE_TEMPLATE_API_PREFIX}/page`,
+    {
+      method: 'GET',
+      params,
+      headers: getDim3dHeaders(),
+      passAuth: true,
+      ...(options || {}),
+    },
+  )
+  const payload = response as unknown as { data?: unknown; code?: number; msg?: string }
+  const rootPage = normalizeDim3dTemplatePage(payload)
+  if (rootPage) return rootPage
+  const dataPage = normalizeDim3dTemplatePage(payload.data)
+  if (dataPage) return dataPage
+  throw createDim3dTemplatePageError(
+    typeof payload.code === 'number' ? payload.code : 502,
+    payload.msg || '场景快照模板目录返回格式异常',
+  )
+}
+
+export function getDim3dSceneTemplateInfo(id: string, options?: Record<string, unknown>) {
+  return request<Dim3dTemplateDetailResponse>(
+    `${DIM3D_SCENE_TEMPLATE_API_PREFIX}/info/${encodeURIComponent(id)}`,
+    {
+      method: 'GET',
+      headers: getDim3dHeaders(),
+      passAuth: true,
+      ...(options || {}),
+    },
+  )
+}
+
+export function removeDim3dSceneTemplate(id: string, options?: Record<string, unknown>) {
+  return request<Dim3dTemplateVoidResponse>(
+    `${DIM3D_SCENE_TEMPLATE_API_PREFIX}/remove/${encodeURIComponent(id)}`,
+    {
+      method: 'DELETE',
+      headers: getDim3dHeaders(),
+      passAuth: true,
+      ...(options || {}),
+    },
+  )
+}
+
+export function changeDim3dSceneTemplateStatus(
+  status: Dim3dTemplateStatus,
+  id: string,
+  options?: Record<string, unknown>,
+) {
+  return request<Dim3dTemplateVoidResponse>(
+    `${DIM3D_SCENE_TEMPLATE_API_PREFIX}/${status}/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      headers: getDim3dHeaders(),
+      passAuth: true,
+      ...(options || {}),
+    },
+  )
 }
 
 /**

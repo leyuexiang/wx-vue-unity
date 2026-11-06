@@ -150,7 +150,7 @@
                   class="manage-model-card__more"
                   title="编辑模板"
                   aria-label="编辑模板"
-                  :disabled="isOperationPending(slotProps.record.id)"
+                  :disabled="Boolean(slotProps.record.templateSceneId) || isOperationPending(slotProps.record.id)"
                   @click.stop.prevent="openTemplateEditDialog(slotProps.record)"
                 >
                   <img
@@ -254,8 +254,10 @@ import {
 } from '@/servers/manual/dim3d/api/dictionary'
 import {
   changeDim3dTemplateStatus,
+  changeDim3dSceneTemplateStatus,
   pageDim3dTemplate,
   removeDim3dTemplate,
+  removeDim3dSceneTemplate,
   type Dim3dTemplatePageVo,
   type Dim3dTemplateStatus,
   type Dim3dTemplateType,
@@ -549,7 +551,7 @@ const loadCategoryTotals = async () => {
       currentBatch.map(async (category) => {
         const [error, response] = await to(
           pageDim3dTemplate(
-            { templateType, category: category.value, pageNum: 1, pageSize: 1 },
+            { templateType, category: category.value, pageNum: 1, pageSize: 1, includeSnapshots: true },
             { suppressNotFoundNotification: true },
           ),
         )
@@ -711,6 +713,10 @@ const isOperationPending = (id: string) => pendingOperationIds.value.has(id)
  * 已解析的封面地址一并传入，弹窗会优先复用，避免重复请求同一 OSS 资源。
  */
 const openTemplateEditDialog = (record: TemplateCardRecord) => {
+  if (String(record.templateSceneId ?? '').trim()) {
+    ElMessage.info('场景快照模板暂不支持编辑模板文件字段')
+    return
+  }
   if (!isTemplateBusinessId(record.id)) {
     ElMessage.warning('当前模板缺少有效编号，无法编辑')
     return
@@ -755,7 +761,11 @@ const toggleTemplateStatus = async (record: TemplateCardRecord) => {
   }
 
   setOperationPending(record.id, true)
-  const [error] = await to(changeDim3dTemplateStatus(targetStatus, record.id))
+  const [error] = await to(
+    String(record.templateSceneId ?? '').trim()
+      ? changeDim3dSceneTemplateStatus(targetStatus, record.id)
+      : changeDim3dTemplateStatus(targetStatus, record.id),
+  )
   setOperationPending(record.id, false)
   if (error) {
     ElMessage.error(`${targetStatus === 'ONLINE' ? '上线' : '下线'}模板失败，请稍后重试`)
@@ -778,7 +788,11 @@ const removeTemplate = async (record: TemplateCardRecord) => {
   }
 
   setOperationPending(record.id, true)
-  const [error] = await to(removeDim3dTemplate(record.id))
+  const [error] = await to(
+    String(record.templateSceneId ?? '').trim()
+      ? removeDim3dSceneTemplate(record.id)
+      : removeDim3dTemplate(record.id),
+  )
   setOperationPending(record.id, false)
   if (error) {
     ElMessage.error('模板删除失败，请稍后重试')

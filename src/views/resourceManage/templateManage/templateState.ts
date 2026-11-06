@@ -26,6 +26,7 @@ export function createTemplateListRequestParams(
   state: TemplateListRequestState,
 ): Dim3dTemplatePageParams {
   return {
+    includeSnapshots: true,
     pageNum: state.pageNum,
     pageSize: state.pageSize,
     templateName: state.search.trim() || undefined,
