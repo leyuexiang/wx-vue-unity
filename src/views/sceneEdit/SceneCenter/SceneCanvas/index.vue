@@ -124,10 +124,18 @@ const drop = async (event: DragEvent) => {
   cancelDrag()
   try {
     if (templateItem) {
-      if (templateItem.saveScope !== 'twoD') { ElMessage.warning('含三维内容的模板待 Unity 接入后应用'); return }
+      // 未选择三维渲染方式时不能应用含三维内容的模板，避免只更新内存快照而没有运行端投影。
+      // 已配置 Unity 渲染方式后统一进入模板应用服务，由服务负责类型校验、回放和失败补偿。
+      if (templateItem.saveScope !== 'twoD' && !props.renderMode) {
+        ElMessage.warning('含三维内容的模板需要先选择三维渲染方式')
+        return
+      }
       releaseOperation = beginEditorSceneOperation('template')
       releaseCanvasOperation = releaseOperation
-      await ElMessageBox.confirm('应用二维模板将按来源规则覆盖当前场景，并清空原有三维内容，是否继续？', '应用模板', { type: 'warning' })
+      const confirmationMessage = templateItem.saveScope === 'twoD'
+        ? '应用二维模板将按来源规则覆盖当前场景，并清空原有三维内容，是否继续？'
+        : '应用模板将按来源规则覆盖当前场景，是否继续？'
+      await ElMessageBox.confirm(confirmationMessage, '应用模板', { type: 'warning' })
       stopSceneDataPolling()
       const appliedScene = await applyEditorDim3dTemplate(templateItem, { host, isActive: () => !disposed })
       if (disposed) return
