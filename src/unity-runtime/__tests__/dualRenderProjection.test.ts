@@ -2,9 +2,23 @@ import { describe, expect, it } from 'vitest'
 import { createSceneDefinition } from '@/scene-platform'
 import { serializeSceneDefinitionToFourPackages } from '@/integrations/scene/sceneFourPackage'
 import { decodeUnityRpcResponse } from '../connection/decodeUnityRpcResponse'
-import { fromUnityTransform, getUnityDeferredRenderWarnings, projectObjectForUnity, projectSceneForUnity } from '../runtime/projectSceneForUnity'
+import { fromUnityTransform, getUnityDeferredRenderWarnings, projectObjectForUnity, projectSceneForUnity, projectSceneForUnityLoadedInstances } from '../runtime/projectSceneForUnity'
 
 describe('dual Unity render contract', () => {
+  it('只读分片投影补齐父级链，但不改写完整场景', () => {
+    const scene = createSceneDefinition({ id: 'chunk-scene', name: 'Chunk scene', type: 'local3d',
+      coordinateSystem: { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true } })
+    const transform = { kind: 'local' as const, position: [0, 0, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: 1 }
+    scene.objects = [
+      { id: 'parent', name: 'Parent', type: 'group', visible: true, locked: false, order: 0, transform },
+      { id: 'child', name: 'Child', type: 'primitive', visible: true, locked: false, order: 0, parentInstanceId: 'parent', transform, metadata: { editorGeometryType: 'BoxGeometry' } },
+      { id: 'other', name: 'Other', type: 'primitive', visible: true, locked: false, order: 1, transform, metadata: { editorGeometryType: 'BoxGeometry' } },
+    ]
+    const projected = projectSceneForUnityLoadedInstances(scene, new Set(['child']))
+    expect(projected.objects.map((object) => object.instanceId)).toEqual(['parent', 'child'])
+    expect(scene.objects.map((object) => object.id)).toEqual(['parent', 'child', 'other'])
+  })
+
   it.each(['gis', 'local3d'] as const)('loads a mixed %s scene without losing deferred cameras or other objects from save packages', (type) => {
     const scene = createSceneDefinition({ id: 'mixed', name: 'Mixed', type,
       coordinateSystem: type === 'gis' ? { kind: 'wgs84', defaultLongitude: 110, defaultLatitude: 19, defaultHeight: 0, terrainEnabled: false }

@@ -166,3 +166,28 @@ export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
     dependencies: { dataBindings: [], behaviors: [], deviceBindings: [] },
   }
 }
+
+/**
+ * 为固定修订的只读分片生成 Unity 表现快照。
+ *
+ * <p>运行时只接收已加载实例及其父级链，原始 SceneDefinition 不会被裁剪或改写。
+ * 未加载实例继续留在 Web 完整草稿中，避免运行端卸载被误认为业务删除。</p>
+ */
+export const projectSceneForUnityLoadedInstances = (
+  scene: EditorScene,
+  loadedInstanceIds: ReadonlySet<string>,
+): UnityScene => {
+  const index = buildSceneNodeIndex(scene.objects)
+  const projectedIds = new Set<string>()
+  loadedInstanceIds.forEach((instanceId) => {
+    let current: string | undefined = instanceId
+    while (current && !projectedIds.has(current)) {
+      projectedIds.add(current)
+      current = index.parentById.get(current)
+    }
+  })
+  return projectSceneForUnity({
+    ...scene,
+    objects: scene.objects.filter((object) => projectedIds.has(object.id)),
+  })
+}
