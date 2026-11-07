@@ -90,6 +90,50 @@ export interface Dim3dSceneDetailResponse {
   data?: Dim3dSceneDetailVo
 }
 
+/** 固定修订的分片读取参数；分片读取不允许省略 revisionNo。 */
+export interface Dim3dSceneChunkReadParams {
+  revisionNo: number
+  chunkId?: string
+  pageNum?: number
+  pageSize?: number
+  includeRelations?: boolean
+}
+
+/** 分片结果中的只读父级关系，不代表本次结果包含父级正文。 */
+export interface Dim3dSceneChunkRelation {
+  instanceId: string
+  parentInstanceId?: string
+  relationType: 'parent'
+}
+
+/** 分片中的实例正文沿用三维四包原始字段，读取适配器不净化扩展字段。 */
+export interface Dim3dSceneChunkRow {
+  chunkId: string
+  instanceIds: string[]
+  instances: Record<string, unknown>[]
+  relations: Dim3dSceneChunkRelation[]
+}
+
+export interface Dim3dSceneChunkReadData {
+  sceneId: string
+  sceneType?: 'local3d' | 'gis'
+  revisionNo: number
+  indexVersion: number
+  sourceHash: string
+  completeBaseline: { sceneId: string; revisionNo: number }
+  pageNum: number
+  pageSize: number
+  total: number
+  hasMore: boolean
+  rows: Dim3dSceneChunkRow[]
+}
+
+export interface Dim3dSceneChunkReadResponse {
+  code?: number
+  msg?: string
+  data?: Dim3dSceneChunkReadData
+}
+
 export interface Dim3dSceneForm {
   name: string
   sceneDesc?: string
@@ -320,6 +364,13 @@ export const getDim3dSceneInfo = (id: string) =>
     `/dim3d/scene/info/${encodeURIComponent(id)}`,
     'GET',
   ) as Promise<Dim3dSceneDetailResponse>
+/** 读取固定修订的只读区块；调用方必须显式传入修订号，避免读取最新草稿产生书签漂移。 */
+export const getDim3dSceneChunks = (id: string, params: Dim3dSceneChunkReadParams) =>
+  sceneRequest(
+    `/dim3d/scene/chunks/${encodeURIComponent(id)}`,
+    'GET',
+    { params },
+  ) as Promise<Dim3dSceneChunkReadResponse>
 export const removeDim3dScene = (id: string) =>
   sceneRequest(`/dim3d/scene/remove/${encodeURIComponent(id)}`, 'DELETE')
 export const copyDim3dScene = (id: string) =>
