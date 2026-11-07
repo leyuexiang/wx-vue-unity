@@ -158,6 +158,30 @@ export interface Dim3dSceneSnapshotTemplateResponse {
   data?: Dim3dSceneTemplateVo
 }
 
+/** 从快照模板创建独立场景的请求；模板场景编号和请求编号均按字符串传输。 */
+export interface Dim3dSceneFromTemplateBody {
+  templateSceneId: string
+  requestId: string
+  name: string
+  sceneDesc?: string
+  sceneCategory?: string
+}
+
+export interface Dim3dSceneFromTemplateResult {
+  sceneId?: string
+  templateSceneId?: string
+  sceneKind?: 'INSTANCE'
+  sceneType?: 'local3d' | 'gis'
+  revisionId?: string
+  revisionNo?: number
+}
+
+export interface Dim3dSceneFromTemplateResponse {
+  code?: number
+  msg?: string
+  data?: Dim3dSceneFromTemplateResult
+}
+
 export interface Dim3dSceneVoidResponse {
   code?: number
   msg?: string
@@ -285,6 +309,9 @@ export async function pageDim3dScene(
 
 export const addDim3dScene = (body: Dim3dSceneForm) =>
   sceneRequest('/dim3d/scene/add', 'POST', { data: body })
+/** 从在线快照模板创建独立场景，后端负责四包复制和内部编号映射。 */
+export const createDim3dSceneFromTemplate = (body: Dim3dSceneFromTemplateBody) =>
+  sceneRequest('/dim3d/scene/fromTemplate', 'POST', { data: body }) as Promise<Dim3dSceneFromTemplateResponse>
 export const editDim3dScene = (id: string, body: Dim3dSceneForm) =>
   sceneRequest(`/dim3d/scene/edit/${encodeURIComponent(id)}`, 'PUT', { data: body })
 /** 按字符串场景编号读取新接口详情，禁止经过旧接口的 Integer 参数转换。 */
