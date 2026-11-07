@@ -14,6 +14,23 @@ export type Dim3dSceneChunkRequest = (
   params: Dim3dSceneChunkReadParams,
 ) => Promise<Dim3dSceneChunkReadResponse>
 
+export interface Dim3dSceneChunkReadSessionOptions {
+  sceneId: string
+  revisionNo: number
+  /** 已由完整四包基线知道的实例编号，用于计算当前尚未读取的实例集合。 */
+  knownInstanceIds?: readonly string[]
+}
+
+export interface Dim3dSceneChunkReadSessionSnapshot {
+  sceneId: string
+  revisionNo: number
+  sourceHash?: string
+  totalChunks?: number
+  loadedChunkIds: readonly string[]
+  loadedInstanceIds: readonly string[]
+  unloadedInstanceIds: readonly string[]
+}
+
 const validateOptions = (options: Dim3dSceneChunkReaderOptions) => {
   if (!options.sceneId.trim()) throw new Error('分片读取缺少场景编号')
   if (!Number.isInteger(options.revisionNo) || options.revisionNo < 1) throw new Error('分片读取修订号无效')
@@ -46,4 +63,54 @@ export const readDim3dSceneChunkPage = async (
     throw new Error('分片读取返回了不匹配的完整基线')
   }
   return response.data
+}
+
+/**
+ * 为只读页面维护固定书签下的分片读取状态。
+ *
+ * <p>会话只记录已读取区块和实例编号，不修改 SceneStore，也不把未读取集合当作删除集合。
+ * 重新打开或切换修订时由调用方丢弃旧会话并创建新会话。</p>
+ */
+export const createDim3dSceneChunkReadSession = (
+  options: Dim3dSceneChunkReadSessionOptions,
+  request: Dim3dSceneChunkRequest = getDim3dSceneChunks,
+) => {
+  const knownInstanceIds = new Set(options.knownInstanceIds ?? [])
+  const loadedChunkIds = new Set<string>()
+  const loadedInstanceIds = new Set<string>()
+  let sourceHash: string | undefined
+  let totalChunks: number | undefined
+
+  const snapshot = (): Dim3dSceneChunkReadSessionSnapshot => ({
+    sceneId: options.sceneId,
+    revisionNo: options.revisionNo,
+    ...(sourceHash ? { sourceHash } : {}),
+    ...(totalChunks === undefined ? {} : { totalChunks }),
+    loadedChunkIds: [...loadedChunkIds],
+    loadedInstanceIds: [...loadedInstanceIds],
+    unloadedInstanceIds: [...knownInstanceIds].filter((id) => !loadedInstanceIds.has(id)),
+  })
+
+  return {
+    readPage: async (params: Omit<Dim3dSceneChunkReadParams, 'revisionNo'> = {}) => {
+      const data = await readDim3dSceneChunkPage(
+        { sceneId: options.sceneId, revisionNo: options.revisionNo, ...params },
+        request,
+      )
+      sourceHash = data.sourceHash
+      totalChunks = data.total
+      data.rows.forEach((row) => {
+        loadedChunkIds.add(row.chunkId)
+        row.instanceIds.forEach((id) => loadedInstanceIds.add(id))
+      })
+      return { data, state: snapshot() }
+    },
+    snapshot,
+    reset: () => {
+      sourceHash = undefined
+      totalChunks = undefined
+      loadedChunkIds.clear()
+      loadedInstanceIds.clear()
+    },
+  }
 }
