@@ -130,8 +130,17 @@
             </div>
 
             <div class="manage-model-card__footer">
-              <!-- 进入动作没有模板转场景契约，保持 Figma 按钮尺寸并提供悬停说明。 -->
-              <el-tooltip content="模板进入功能暂未开放" placement="top">
+              <!-- 快照模板进入独立场景创建流程；旧文件型模板继续保留禁用状态。 -->
+              <el-button
+                v-if="String(slotProps.record.templateSceneId ?? '').trim()"
+                class="manage-model-card__edit manage-scene-card__enter"
+                title="从模板创建场景"
+                :loading="isOperationPending(slotProps.record.id)"
+                @click.stop.prevent="createSceneFromTemplate(slotProps.record)"
+              >
+                创建场景
+              </el-button>
+              <el-tooltip v-else content="模板进入功能暂未开放" placement="top">
                 <span>
                   <el-button
                     class="manage-model-card__edit manage-scene-card__enter"
@@ -241,7 +250,8 @@ import manageCardPublishLightIcon from '@/assets/icons/manage-card-publish-light
 import manageCardSendLightIcon from '@/assets/icons/manage-card-send-light.svg'
 import manageCardWriteLightIcon from '@/assets/icons/manage-card-write-light.svg'
 import { to, toData } from '@/utils/asyncHandler'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 import {
   openManageDeleteConfirm,
   openManageResourceStatusConfirm,
@@ -262,6 +272,10 @@ import {
   type Dim3dTemplateStatus,
   type Dim3dTemplateType,
 } from '@/servers/manual/dim3d/api/template'
+import {
+  createDim3dSceneClientKey,
+  createDim3dSceneFromTemplate,
+} from '@/servers/manual/dim3d/api/scene'
 import ManageFilterBar from '../../manageShared/ManageFilterBar.vue'
 import ManagePageTopBar from '../../manageShared/ManagePageTopBar.vue'
 import { useManageTheme } from '../../manageShared/manageTheme'
@@ -321,6 +335,7 @@ const formatTemplateDateTime = (value?: string) => {
 defineOptions({ name: 'TemplateManage' })
 
 const { theme: manageTheme } = useManageTheme()
+const router = useRouter()
 
 /**
  * 模板页与场景页共用卡片操作图标：暗色主题选用已校准镂空颜色的亮色 SVG，
@@ -707,6 +722,47 @@ const getStatusActionTitle = (record: TemplateCardRecord) => {
 }
 
 const isOperationPending = (id: string) => pendingOperationIds.value.has(id)
+
+/** 从在线快照模板创建独立场景，创建成功后回到场景管理页读取新实例。 */
+const createSceneFromTemplate = async (record: TemplateCardRecord) => {
+  const templateSceneId = String(record.templateSceneId ?? '').trim()
+  if (!templateSceneId || isOperationPending(record.id)) {
+    ElMessage.warning('当前模板缺少有效场景编号或操作正在进行，请稍后重试')
+    return
+  }
+
+  let name = ''
+  try {
+    const result = await ElMessageBox.prompt('请输入新场景名称', '从模板创建场景', {
+      inputValue: `${record.name}实例`,
+      inputPlaceholder: '场景名称',
+      inputValidator: (value) => (value.trim() ? true : '场景名称不能为空'),
+      confirmButtonText: '创建',
+      cancelButtonText: '取消',
+    })
+    name = result.value.trim()
+  } catch {
+    return
+  }
+
+  setOperationPending(record.id, true)
+  try {
+    const response = await createDim3dSceneFromTemplate({
+      templateSceneId,
+      requestId: `tpl6-${createDim3dSceneClientKey()}`,
+      name,
+      sceneDesc: record.description === '--' ? undefined : record.description,
+    })
+    const sceneId = String(response.data?.sceneId ?? '').trim()
+    if (!sceneId) throw new Error(response.msg || '接口未返回新场景编号')
+    ElMessage.success('场景创建成功')
+    await router.push({ name: 'sceneManage' })
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '从模板创建场景失败，请稍后重试')
+  } finally {
+    setOperationPending(record.id, false)
+  }
+}
 
 /**
  * 编辑入口只接受真实业务编号；列表缺主键时生成的渲染回退键绝不能用于详情或编辑请求。
