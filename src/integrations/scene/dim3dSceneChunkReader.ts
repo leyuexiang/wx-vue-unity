@@ -78,6 +78,7 @@ export const createDim3dSceneChunkReadSession = (
   const knownInstanceIds = new Set(options.knownInstanceIds ?? [])
   const loadedChunkIds = new Set<string>()
   const loadedInstanceIds = new Set<string>()
+  const listeners = new Set<(state: Dim3dSceneChunkReadSessionSnapshot) => void>()
   let sourceHash: string | undefined
   let totalChunks: number | undefined
 
@@ -91,6 +92,11 @@ export const createDim3dSceneChunkReadSession = (
     unloadedInstanceIds: [...knownInstanceIds].filter((id) => !loadedInstanceIds.has(id)),
   })
 
+  const publish = () => {
+    const current = snapshot()
+    listeners.forEach((listener) => listener(current))
+  }
+
   return {
     readPage: async (params: Omit<Dim3dSceneChunkReadParams, 'revisionNo'> = {}) => {
       const data = await readDim3dSceneChunkPage(
@@ -103,14 +109,20 @@ export const createDim3dSceneChunkReadSession = (
         loadedChunkIds.add(row.chunkId)
         row.instanceIds.forEach((id) => loadedInstanceIds.add(id))
       })
+      publish()
       return { data, state: snapshot() }
     },
     snapshot,
+    subscribe: (listener: (state: Dim3dSceneChunkReadSessionSnapshot) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
     reset: () => {
       sourceHash = undefined
       totalChunks = undefined
       loadedChunkIds.clear()
       loadedInstanceIds.clear()
+      publish()
     },
   }
 }
