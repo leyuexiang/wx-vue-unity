@@ -81,6 +81,7 @@
         </div>
 
         <div class="template-dialog__row">
+          <!-- 下拉浮层保留在弹窗内，避免传送到 body 后被模态弹窗遮挡并拦截点击。 -->
           <!-- 模板类型为两个固定产品枚举，编辑和另存模式共用同一必填下拉，不请求字典接口。 -->
           <el-form-item
             prop="templateType"
@@ -94,6 +95,7 @@
                 popper-class="manage-dropdown-popper manage-select-popper"
                 placeholder="请选择类型"
                 :options="TEMPLATE_TYPE_OPTIONS"
+                :teleported="false"
                 :disabled="detailLoading || submitting"
                 @change="handleTemplateTypeChange"
               />
@@ -109,6 +111,7 @@
                 popper-class="manage-dropdown-popper manage-select-popper"
                 placeholder="请选择分类"
                 :options="categories"
+                :teleported="false"
                 :disabled="detailLoading || submitting"
               />
             </div>
