@@ -316,6 +316,9 @@ const sceneRequest = (path: string, method: string, options: Record<string, unkn
     method,
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     passAuth: true,
+    // 三维服务常量已经包含完整管理 API 根路径，不能在 Unity Web 会话建立后再次插入平台段。
+    skipPlatformPath: true,
+    preserveConfiguredHeaders: true,
     ...options,
   })
 
