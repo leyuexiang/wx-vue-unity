@@ -101,6 +101,7 @@
       ref="sceneCanvasRef"
       v-if="sceneLockReady && splitPanesReady"
       :render-mode="renderMode"
+      :revision-no="sceneBaseRevisionNo"
       @scene-load-state-change="handleSceneLoadStateChange"
       @renderer-disconnected="handleRendererDisconnected"
     />

@@ -38,6 +38,7 @@ export interface Dim3dSceneChunkReadSession {
   }>
   snapshot: () => Dim3dSceneChunkReadSessionSnapshot
   subscribe: (listener: (state: Dim3dSceneChunkReadSessionSnapshot) => void) => () => boolean
+  unloadChunk: (chunkId: string) => void
   reset: () => void
 }
 
@@ -88,6 +89,7 @@ export const createDim3dSceneChunkReadSession = (
   const knownInstanceIds = new Set(options.knownInstanceIds ?? [])
   const loadedChunkIds = new Set<string>()
   const loadedInstanceIds = new Set<string>()
+  const instanceIdsByChunk = new Map<string, Set<string>>()
   const listeners = new Set<(state: Dim3dSceneChunkReadSessionSnapshot) => void>()
   let sourceHash: string | undefined
   let totalChunks: number | undefined
@@ -116,8 +118,12 @@ export const createDim3dSceneChunkReadSession = (
       sourceHash = data.sourceHash
       totalChunks = data.total
       data.rows.forEach((row) => {
+        const previousIds = instanceIdsByChunk.get(row.chunkId)
+        previousIds?.forEach((id) => loadedInstanceIds.delete(id))
         loadedChunkIds.add(row.chunkId)
-        row.instanceIds.forEach((id) => loadedInstanceIds.add(id))
+        const currentIds = new Set(row.instanceIds)
+        instanceIdsByChunk.set(row.chunkId, currentIds)
+        currentIds.forEach((id) => loadedInstanceIds.add(id))
       })
       publish()
       return { data, state: snapshot() }
@@ -127,11 +133,20 @@ export const createDim3dSceneChunkReadSession = (
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    unloadChunk: (chunkId: string) => {
+      const currentIds = instanceIdsByChunk.get(chunkId)
+      if (!currentIds) return
+      currentIds.forEach((id) => loadedInstanceIds.delete(id))
+      instanceIdsByChunk.delete(chunkId)
+      loadedChunkIds.delete(chunkId)
+      publish()
+    },
     reset: () => {
       sourceHash = undefined
       totalChunks = undefined
       loadedChunkIds.clear()
       loadedInstanceIds.clear()
+      instanceIdsByChunk.clear()
       publish()
     },
   }

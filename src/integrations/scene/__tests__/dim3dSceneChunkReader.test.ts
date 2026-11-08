@@ -56,9 +56,12 @@ describe('dim3dSceneChunkReader', () => {
     const second = await session.readPage({ pageNum: 2, pageSize: 1 })
     expect(second.state.loadedInstanceIds).toEqual(['a', 'b'])
     expect(second.state.unloadedInstanceIds).toEqual(['c'])
+    session.unloadChunk('chunk-1')
+    expect(session.snapshot().loadedChunkIds).toEqual(['chunk-2'])
+    expect(session.snapshot().loadedInstanceIds).toEqual(['b'])
     session.reset()
     expect(session.snapshot().loadedInstanceIds).toEqual([])
-    expect(updates).toEqual([['a'], ['a', 'b'], []])
+    expect(updates).toEqual([['a'], ['a', 'b'], ['b'], []])
     unsubscribe()
   })
 

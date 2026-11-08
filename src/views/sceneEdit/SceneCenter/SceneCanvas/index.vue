@@ -28,6 +28,8 @@ import { dispatchEditorHistory } from '@/integrations/scene/editorSceneUndoRedoA
 import { beginEditorSceneOperation, editorSceneOperation } from '@/integrations/scene/editorSceneOperationGate'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
 import { isUnityRenderModeConfigured, unityRenderConfig, type UnityRenderMode } from '@/unity-runtime/renderMode'
+import { createDim3dSceneChunkReadSession, type Dim3dSceneChunkReadSession } from '@/integrations/scene/dim3dSceneChunkReader'
+import { bindDim3dSceneChunkProjection } from '@/integrations/scene/dim3dSceneChunkProjection'
 
 /** 画布编排二维覆盖层与双端三维运行时，资源创建统一进入各自的命令链路。 */
 const emit = defineEmits<{
@@ -35,7 +37,7 @@ const emit = defineEmits<{
   /** 仅转发当前画布的异常断开，由持锁的编辑页统一解锁并关闭页签。 */
   rendererDisconnected: [message: string]
 }>()
-const props = defineProps<{ renderMode: UnityRenderMode | null }>()
+const props = defineProps<{ renderMode: UnityRenderMode | null; revisionNo?: number }>()
 const route = useRoute()
 const widgetStore = useSceneWidgetStore()
 const sceneStore = useSceneStore()
@@ -60,6 +62,8 @@ let template: ApplyEditorDim3dTemplateInput | null = null
 let observer: ResizeObserver | null = null
 // 模板覆盖与模型创建共用操作门禁；卸载时立即释放，迟到任务不能阻塞下一编辑页。
 let releaseCanvasOperation: (() => void) | null = null
+let chunkSession: Dim3dSceneChunkReadSession | null = null
+let chunkProjectionBinding: ReturnType<typeof bindDim3dSceneChunkProjection> | null = null
 const sceneId = String(route.query.id ?? '')
 const layout = computed(() => calculateSceneStageLayout(dimensions.value.width, dimensions.value.height, widgetStore.getWidgetCanvasConfig()))
 const stageStyle = computed(() => ({ width: `${layout.value.width}px`, height: `${layout.value.height}px`,
@@ -85,6 +89,47 @@ const restartSceneDataPolling = async () => {
     onSceneObjectUpdated: (object) => objectBehaviorRuntime?.observeSceneObject(object),
   })
   await polling.start()
+}
+
+const stopChunkProjection = () => {
+  chunkProjectionBinding?.dispose()
+  chunkProjectionBinding = null
+  chunkSession = null
+}
+
+/**
+ * 为当前固定修订建立只读分片会话。会话只在显式调用 loadSceneChunk 时请求后端，
+ * 避免打开编辑页时把完整场景再次分页读取。
+ */
+const setupChunkProjection = (scene: ReturnType<typeof createSceneDefinition>) => {
+  stopChunkProjection()
+  const runtime = host?.getRuntime()
+  const revisionNo = props.revisionNo
+  if (!runtime?.applyLoadedInstanceProjection || typeof revisionNo !== 'number' || !Number.isInteger(revisionNo) || revisionNo < 1) return
+  chunkSession = createDim3dSceneChunkReadSession({
+    sceneId: scene.id,
+    revisionNo,
+    knownInstanceIds: scene.objects.map((object) => object.id),
+  })
+  chunkProjectionBinding = bindDim3dSceneChunkProjection(chunkSession, runtime)
+}
+
+/** 显式读取一个固定修订区块，并等待 Unity 表现投影完成。 */
+const loadSceneChunk = async (chunkId: string) => {
+  if (!chunkSession || !chunkProjectionBinding) throw new Error('当前场景未建立分片读取会话')
+  if (!chunkId.trim()) throw new Error('区块编号不能为空')
+  const result = await chunkSession.readPage({ chunkId: chunkId.trim(), includeRelations: true })
+  await chunkProjectionBinding.flush()
+  return result.state
+}
+
+/** 卸载一个已读取区块，只更新 Unity 表现集合，不修改 SceneStore。 */
+const unloadSceneChunk = async (chunkId: string) => {
+  if (!chunkSession || !chunkProjectionBinding) throw new Error('当前场景未建立分片读取会话')
+  if (!chunkId.trim()) throw new Error('区块编号不能为空')
+  chunkSession.unloadChunk(chunkId.trim())
+  await chunkProjectionBinding.flush()
+  return chunkSession.snapshot()
 }
 
 /**
@@ -137,6 +182,7 @@ const drop = async (event: DragEvent) => {
         : '应用模板将按来源规则覆盖当前场景，是否继续？'
       await ElMessageBox.confirm(confirmationMessage, '应用模板', { type: 'warning' })
       stopSceneDataPolling()
+      stopChunkProjection()
       const appliedScene = await applyEditorDim3dTemplate(templateItem, { host, isActive: () => !disposed })
       if (disposed) return
       // 用户明确选择整场景模板覆盖后，原三维包不再是当前编辑基线，不能在保存时恢复旧三维内容。
@@ -286,6 +332,7 @@ onMounted(async () => {
     })
     await loadEditorSceneDefinitionIntoHost(sceneId, { host, preloadedResult: result, skipSceneReplace: true, isActive: () => !disposed })
     if (disposed) return
+    setupChunkProjection(scene)
     await restartSceneDataPolling()
     if (disposed) return
     host.getCommandBus().clear()
@@ -305,11 +352,13 @@ onMounted(async () => {
   } finally { if (!disposed) loading.value = false }
 })
 watch(() => [widgetStore.widgetCanvasSize, layout.value.scale], refreshLayout, { deep: true })
+watch(() => props.revisionNo, () => stopChunkProjection())
 onBeforeUnmount(() => {
   disposed = true
   releaseCanvasOperation?.()
   releaseCanvasOperation = null
   stopSceneDataPolling()
+  stopChunkProjection()
   observer?.disconnect()
   cancelAnimationFrame(layoutFrame)
   window.removeEventListener('keydown', handleKey)
@@ -326,7 +375,7 @@ onBeforeUnmount(() => {
   void widgetStore.loadSavedWidgets([], [])
   releaseOriginalScenePackages(sceneId)
 })
-defineExpose({ stopSceneDataPolling, restartSceneDataPolling })
+defineExpose({ stopSceneDataPolling, restartSceneDataPolling, loadSceneChunk, unloadSceneChunk })
 </script>
 <template>
   <div ref="viewport" class="scene-edit-canvas-viewport" @mousedown.self="clearSelectionFromViewportBlank" @drop="drop" @dragover.prevent>
