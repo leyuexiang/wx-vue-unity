@@ -87,4 +87,20 @@ describe('dim3dSceneChunkReader', () => {
     await binding.flush()
     expect(apply).toHaveBeenCalledTimes(1)
   })
+
+  it('保留Runtime投影方法的调用上下文', async () => {
+    const request = vi.fn(async () => ({ code: 200, data: { ...data, rows: [{ chunkId: 'chunk-a', instanceIds: ['a'], instances: [], relations: [] }] } }))
+    const session = createDim3dSceneChunkReadSession({ sceneId: 'scene-1', revisionNo: 2 }, request)
+    const runtime = {
+      calls: [] as string[],
+      applyLoadedInstanceProjection(this: { calls: string[] }, ids: ReadonlySet<string>) {
+        this.calls.push([...ids].join(','))
+        return Promise.resolve()
+      },
+    }
+    const binding = bindDim3dSceneChunkProjection(session, runtime as never)
+    await session.readPage({ chunkId: 'chunk-a' })
+    await binding.flush()
+    expect(runtime.calls).toEqual(['a'])
+  })
 })

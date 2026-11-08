@@ -20,10 +20,9 @@ export const bindDim3dSceneChunkProjection = (
 
   const apply = (state: Dim3dSceneChunkReadSessionSnapshot) => {
     if (disposed || !runtime.applyLoadedInstanceProjection) return
-    const projection = runtime.applyLoadedInstanceProjection
     pending = pending.catch(() => undefined).then(async () => {
       try {
-        await projection(new Set(state.loadedInstanceIds))
+        await runtime.applyLoadedInstanceProjection!(new Set(state.loadedInstanceIds))
       } catch (error) {
         lastError = error
         throw error
