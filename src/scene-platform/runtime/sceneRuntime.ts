@@ -188,6 +188,11 @@ export interface SceneRuntime {
 
   loadScene: (scene: SceneDefinition) => Promise<void>
   /**
+   * 只替换引擎表现中的驻留实例集合，不改变完整场景快照或保存数据。
+   * 不支持分片表现的旧 Runtime 保持未实现，由调用方继续使用完整场景加载。
+   */
+  applyLoadedInstanceProjection?: (loadedInstanceIds: ReadonlySet<string>) => Promise<void>
+  /**
    * 场景设置增量应用。旧 Runtime 可以暂不实现，桥接层会安全跳过；
    * 已接入的 Runtime 必须避免把单个表单输入退化为完整 loadScene。
    */

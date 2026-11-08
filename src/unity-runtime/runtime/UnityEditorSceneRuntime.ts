@@ -6,7 +6,15 @@ import { LegacyUnityTransport, type LegacySessionConfig } from '../connection/Le
 import { waitForCloudRuntimeReady } from '../connection/waitForCloudRuntimeReady'
 import { WebUnityTransport } from '../connection/WebUnityTransport'
 import { JsonRpcUnityCloudRuntime } from './JsonRpcUnityCloudRuntime'
-import { fromUnityTransform, getUnityDeferredRenderWarnings, getUnityModelAssetId, isUnityDeferredObject, projectObjectForUnity, projectSceneForUnity } from './projectSceneForUnity'
+import {
+  fromUnityTransform,
+  getUnityDeferredRenderWarnings,
+  getUnityModelAssetId,
+  isUnityDeferredObject,
+  projectObjectForUnity,
+  projectSceneForUnity,
+  projectSceneForUnityLoadedInstances,
+} from './projectSceneForUnity'
 import type { UnityRenderMode } from '../renderMode'
 import type { SceneObjectInteractionEvent } from '@/scene-platform/runtime/sceneRuntime'
 import type {
@@ -39,6 +47,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   private readonly missingModelAssetIds = new Set<string>()
   // 缺失模型的子节点也暂缓表现，逻辑记录继续留在完整草稿。
   private deferredDescendants = new Set<string>()
+  // 分片读取只改变 Unity 表现快照，完整 SceneStore 和 Runtime 对象缓存继续保留全部节点。
+  private projectedInstanceIds: Set<string> | null = null
   /** 只用于把画布逻辑像素换成相机视口比例，不在 Runtime 保存临时拖放事件。 */
   private renderContainer: HTMLElement | null = null
   /** 三维事件订阅与场景同寿命；卸载时清空，避免旧编辑页继续执行动作。 */
@@ -147,6 +157,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
 
   override async loadScene(scene: SceneDefinition): Promise<void> {
     if (!this.unity) throw new Error('Unity 运行时尚未连接')
+    this.projectedInstanceIds = null
     this.focusSelectionVersion++
     this.options.onStatus('正在加载 Unity 场景')
     await this.loadUnityDraft(scene)
@@ -177,6 +188,35 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.programmaticUpdates.add(object.id)
     try { await this.unity.updateObject(projectObjectForUnity(object)) }
     finally { this.programmaticUpdates.delete(object.id) }
+  }
+
+  /**
+   * 只更新 Unity 的表现投影，不替换完整场景快照。
+   *
+   * 分片会话可以反复调用该入口完成卸载和恢复。未包含在投影中的对象仍留在
+   * `objectMap` 与 Web 完整草稿中，因此不会被误判为业务删除，也不会改变保存脏状态。
+   */
+  async applyLoadedInstanceProjection(loadedInstanceIds: ReadonlySet<string>): Promise<void> {
+    if (!this.unity) throw new Error('Unity 运行时尚未连接')
+    if (!this.scene) throw new Error('Unity 场景尚未加载')
+    const previous = this.projectedInstanceIds
+    const projected = projectSceneForUnityLoadedInstances(this.scene, loadedInstanceIds)
+    // 将父级链纳入驻留集合，避免父节点虽被投影却被交互层误判为未加载。
+    const next = new Set(projected.objects.map((object) => object.instanceId))
+    const operation = this.operations.then(async () => {
+      if (this.disposed || !this.scene || !this.unity) throw new Error('Unity 运行时已关闭')
+      this.projectedInstanceIds = next
+      try {
+        await this.loadUnityDraft(this.scene)
+        this.reportDeferredObjects()
+        this.options.onStatus('Unity 分片表现已更新')
+      } catch (error) {
+        this.projectedInstanceIds = previous
+        throw error
+      }
+    })
+    this.operations = operation.then(() => undefined, () => undefined)
+    return operation
   }
 
   async updateSceneLayers(layers: SceneLayer[]): Promise<void> {
@@ -356,12 +396,16 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   }
 
   private isDeferredInUnity(object: SceneObject): boolean {
-    return this.deferredDescendants.has(object.id) || isUnityDeferredObject(object) || (object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
+    return (this.projectedInstanceIds !== null && !this.projectedInstanceIds.has(object.id)) ||
+      this.deferredDescendants.has(object.id) || isUnityDeferredObject(object) ||
+      (object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
   }
 
   private async loadUnityDraft(scene: SceneDefinition): Promise<void> {
     if (!this.unity) throw new Error('Unity 运行时尚未连接')
-    const draft = projectSceneForUnity(scene)
+    const draft = this.projectedInstanceIds === null
+      ? projectSceneForUnity(scene)
+      : projectSceneForUnityLoadedInstances(scene, this.projectedInstanceIds)
     const childrenByParent = new Map<string, string[]>()
     for (const object of draft.objects) {
       if (!object.parentInstanceId) continue
@@ -417,6 +461,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.transport = null
     this.missingModelAssetIds.clear()
     this.deferredDescendants.clear()
+    this.projectedInstanceIds = null
     this.objectInteractionListeners.clear()
     this.video?.remove()
     this.video = null

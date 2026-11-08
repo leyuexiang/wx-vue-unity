@@ -31,6 +31,16 @@ export interface Dim3dSceneChunkReadSessionSnapshot {
   unloadedInstanceIds: readonly string[]
 }
 
+export interface Dim3dSceneChunkReadSession {
+  readPage: (params?: Omit<Dim3dSceneChunkReadParams, 'revisionNo'>) => Promise<{
+    data: Dim3dSceneChunkReadData
+    state: Dim3dSceneChunkReadSessionSnapshot
+  }>
+  snapshot: () => Dim3dSceneChunkReadSessionSnapshot
+  subscribe: (listener: (state: Dim3dSceneChunkReadSessionSnapshot) => void) => () => boolean
+  reset: () => void
+}
+
 const validateOptions = (options: Dim3dSceneChunkReaderOptions) => {
   if (!options.sceneId.trim()) throw new Error('分片读取缺少场景编号')
   if (!Number.isInteger(options.revisionNo) || options.revisionNo < 1) throw new Error('分片读取修订号无效')
@@ -74,7 +84,7 @@ export const readDim3dSceneChunkPage = async (
 export const createDim3dSceneChunkReadSession = (
   options: Dim3dSceneChunkReadSessionOptions,
   request: Dim3dSceneChunkRequest = getDim3dSceneChunks,
-) => {
+): Dim3dSceneChunkReadSession => {
   const knownInstanceIds = new Set(options.knownInstanceIds ?? [])
   const loadedChunkIds = new Set<string>()
   const loadedInstanceIds = new Set<string>()

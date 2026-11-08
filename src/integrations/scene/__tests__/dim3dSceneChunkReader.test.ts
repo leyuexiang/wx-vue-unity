@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { SceneRuntime } from '@/scene-platform/runtime/sceneRuntime'
 import { createDim3dSceneChunkReadSession, readDim3dSceneChunkPage } from '../dim3dSceneChunkReader'
+import { bindDim3dSceneChunkProjection } from '../dim3dSceneChunkProjection'
 
 const data = {
   sceneId: 'scene-1',
@@ -58,5 +60,28 @@ describe('dim3dSceneChunkReader', () => {
     expect(session.snapshot().loadedInstanceIds).toEqual([])
     expect(updates).toEqual([['a'], ['a', 'b'], []])
     unsubscribe()
+  })
+
+  it('串行把会话驻留状态交给支持投影的Runtime', async () => {
+    const request = vi.fn(async (_sceneId: string, params: { revisionNo: number; chunkId?: string }) => ({
+      code: 200,
+      data: {
+        ...data,
+        rows: [{ chunkId: params.chunkId ?? 'chunk-a', instanceIds: ['a'], instances: [], relations: [] }],
+      },
+    }))
+    const session = createDim3dSceneChunkReadSession({ sceneId: 'scene-1', revisionNo: 2 }, request)
+    const apply = vi.fn(async () => undefined)
+    const runtime = { applyLoadedInstanceProjection: apply } as unknown as SceneRuntime
+    const binding = bindDim3dSceneChunkProjection(session, runtime)
+
+    await session.readPage({ chunkId: 'chunk-a' })
+    await binding.flush()
+
+    expect(apply).toHaveBeenCalledWith(new Set(['a']))
+    binding.dispose()
+    await session.readPage({ chunkId: 'chunk-b' })
+    await binding.flush()
+    expect(apply).toHaveBeenCalledTimes(1)
   })
 })

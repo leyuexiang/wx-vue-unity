@@ -100,6 +100,36 @@ describe('missing models in a Unity art release', () => {
     expect(unity.loadScene.mock.calls[2]![0].objects.map((object) => object.instanceId)).toEqual(['box'])
   })
 
+  it('只重载已加载分片并保留完整对象缓存', async () => {
+    const unity = { loadScene: vi.fn(async () => {}), updateObject: vi.fn(async () => {}), setSelection: vi.fn() }
+    const runtime = new UnityEditorSceneRuntime('local3d', { mode: 'webgpu', getHost: () => null, onStatus: vi.fn() })
+    const scene = createSceneDefinition({ id: 'local', name: '分片投影', type: 'local3d',
+      coordinateSystem: { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true } })
+    const transform: SceneObject['transform'] = { kind: 'local', position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 }
+    scene.objects = [
+      { id: 'root', name: '根', type: 'primitive', visible: true, locked: false, order: 0, transform,
+        metadata: { editorGeometryType: 'BoxGeometry' } },
+      { id: 'loaded', name: '已加载', type: 'primitive', visible: true, locked: false, order: 0, parentInstanceId: 'root', transform,
+        metadata: { editorGeometryType: 'BoxGeometry' } },
+      { id: 'unloaded', name: '未加载', type: 'primitive', visible: true, locked: false, order: 1, parentInstanceId: 'root', transform,
+        metadata: { editorGeometryType: 'SphereGeometry' } },
+    ]
+    Object.assign(runtime, { unity })
+    const before = JSON.stringify(scene)
+
+    await runtime.loadScene(scene)
+    await runtime.applyLoadedInstanceProjection(new Set(['loaded']))
+
+    expect(unity.loadScene.mock.calls.at(-1)![0].objects.map((object) => object.instanceId)).toEqual(['root', 'loaded'])
+    expect(runtime.hasObject('unloaded')).toBe(true)
+    expect(JSON.stringify(scene)).toBe(before)
+
+    runtime.setSelectedObject('unloaded')
+    expect(unity.setSelection).toHaveBeenLastCalledWith(null)
+    await runtime.applyLoadedInstanceProjection(new Set(['unloaded']))
+    expect(unity.loadScene.mock.calls.at(-1)![0].objects.map((object) => object.instanceId)).toEqual(['root', 'unloaded'])
+  })
+
   it('reloads a model when its resource mapping changes and can restore a previously missing model', async () => {
     const { runtime, scene, unity, onWarnings } = createFixture()
     await runtime.loadScene(scene)
