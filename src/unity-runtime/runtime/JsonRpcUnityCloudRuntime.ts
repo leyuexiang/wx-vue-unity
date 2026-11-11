@@ -1,3 +1,8 @@
+import { WeatherSyncQueue } from './WeatherSyncQueue'
+import type { VegetationSystemDefinition } from '@/scene-platform/core/types'
+import type { CameraPath, GeoCameraPathWaypoint } from '@/scene-platform'
+import type { UnityCameraConfig, UnityCameraState } from '../protocol/types'
+import type { RuntimeWeatherConfig, WeatherDescription, WeatherState } from '../protocol/weather'
 import type { SceneDefinition, SceneObject } from '@/scene-core'
 import type { PickWorldPoint, ScreenPoint } from '@/scene-platform'
 import type { UnityTransport } from '@/unity-runtime/connection/UnityTransport'
@@ -17,11 +22,68 @@ import { normalizeAccessToken } from '@/auth/accessToken'
 
 const randomId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 
+export type UnityCameraAction =
+  | { action: 'get' }
+  | { action: 'apply'; config: UnityCameraConfig }
+  | { action: 'play'; path: CameraPath }
+  | { action: 'stop'; rewind?: boolean }
+  | { action: 'visit'; waypoint: GeoCameraPathWaypoint }
+
 export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
+  async controlVegetation(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.schedule(async () => {
+      if (!this.capabilities?.features['vegetation.instanced']) throw new Error('当前播放器需要更新后才能使用原生植被')
+      const response = await this.send<Record<string, unknown>, Record<string, unknown>>('editor.v1.vegetation.control', payload)
+      this.assertSuccess(response)
+      return response.payload ?? {}
+    })
+  }
   capabilities: UnityRuntimeCapabilities | null = null
+  weatherDescription: WeatherDescription | null = null
+  private lifecycle: Promise<unknown> = Promise.resolve()
+  readonly weather = new WeatherSyncQueue((config, weatherRevision) => this.schedule(async () => {
+    if (!this.capabilities?.features['weather.enviro3']) throw new Error('当前播放器缺少 Enviro 天气能力')
+    const response = await this.send<{ config: RuntimeWeatherConfig | null; weatherRevision: number; reason: string }, WeatherState>(
+      'editor.v1.weather.apply', { config, weatherRevision, reason: 'edit' })
+    this.assertSuccess(response)
+    if (response.payload?.acceptedRevision !== weatherRevision || response.payload.weatherRevision !== weatherRevision) throw new Error('天气回执版本与当前请求不一致')
+    return response.payload!
+  }))
+  private schedule<T>(operation: () => Promise<T>): Promise<T> {
+    const task = this.lifecycle.then(operation)
+    this.lifecycle = task.catch(() => undefined)
+    return task
+  }
+  controlCamera(action: UnityCameraAction): Promise<UnityCameraState> {
+    const operation = async () => {
+      if (!this.capabilities?.features['camera.control']) throw new Error('当前 Unity 播放器需要更新后才能操控相机')
+      const response = await this.send<UnityCameraAction, UnityCameraState>('editor.v1.camera.control', action)
+      this.assertSuccess(response)
+      if (!response.payload) throw new Error('Unity 未返回相机状态')
+      return response.payload
+    }
+    // Reads wait for queued writes. A stalled camera sample must never delay the next edit or scene load.
+    return action.action === 'get' ? this.lifecycle.then(operation) : this.schedule(operation)
+  }
+  async describeWeather(): Promise<WeatherDescription | null> {
+    if (!this.capabilities?.features['weather.enviro3']) return null
+    return this.schedule(async () => {
+      const response = await this.send<Record<string, never>, WeatherDescription>('editor.v1.weather.describe', {})
+      this.assertSuccess(response); this.weatherDescription = response.payload!; return this.weatherDescription
+    })
+  }
+  async getWeatherState(): Promise<WeatherState | null> {
+    if (!this.capabilities?.features['weather.enviro3']) return null
+    return this.schedule(async () => {
+      const response = await this.send<Record<string, never>, WeatherState>('editor.v1.weather.getState', {})
+      this.assertSuccess(response); this.weather.acceptEvent(response.payload!); return response.payload!
+    })
+  }
+
   private sceneId = ''
   private sceneGeneration = 0
   private sequence = 0
+  private weatherRetryEnvelope: ReturnType<JsonRpcUnityCloudRuntime['envelope']> | null = null
   private readonly sessionId = randomId()
   private readonly listeners = new Map<keyof UnityRuntimeEventMap, Set<(payload: never) => void>>()
   private unsubscribeEvents: Array<() => void> = []
@@ -85,18 +147,31 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
     } }
   }
 
-  async disconnect(): Promise<void> {
+  async disconnect(options: { keepTransport?: boolean } = {}): Promise<void> {
+    this.weather.dispose()
+    await this.lifecycle
+    if (this.sceneId) { try { await this.clearScene() } catch { /* Transport may already be closed. */ } }
     this.unsubscribeEvents.splice(0).forEach((unsubscribe) => unsubscribe())
     this.capabilities = null
-    await this.transport.disconnect()
+    if (!options.keepTransport) await this.transport.disconnect()
   }
 
   async loadScene(scene: SceneDefinition): Promise<void> {
+    this.weather.suspend()
+    const queuedRevision = this.weather.currentRevision
+    return this.schedule(async () => { try { await this.loadSceneCore(scene, queuedRevision) } finally { if (this.capabilities?.features['weather.enviro3']) this.weather.resume() } })
+  }
+  private async loadSceneCore(scene: SceneDefinition, queuedRevision: number): Promise<void> {
     if (this.capabilities?.features['scene.loadDraft'] === false) throw new Error('当前 Unity 播放器尚未支持网页场景对象加载，请更新播放器')
     if (this.capabilities && !this.capabilities.sceneTypes.includes(scene.type)) {
       throw new Error(`当前 Unity 播放器不支持 ${scene.type} 场景，请更新对应端的播放器`)
     }
+    const changedScene = this.sceneId !== scene.id
+    if (changedScene) this.weather.reset()
     this.sceneId = scene.id
+    this.weatherRetryEnvelope = null
+    const weatherRevision = changedScene || this.weather.currentRevision === queuedRevision
+      ? this.weather.set((scene.settings.weather as RuntimeWeatherConfig | null) ?? null, false) : this.weather.currentRevision
     this.sceneGeneration += 1
     // Unity 只接收三维投影；二维组件和业务设置继续由 Web 保存，减少通道负载。
     const snapshot: UnitySceneSnapshotDto = {
@@ -105,11 +180,16 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
       sceneType: scene.type,
       objects: scene.objects,
       resources: scene.resources,
+      ...(this.capabilities?.features['vegetation.instanced']
+        ? { vegetation: (scene.settings.vegetation as VegetationSystemDefinition | null) ?? null } : {}),
+      ...(this.capabilities?.features['weather.enviro3'] ? { environment: { weather: this.weather.config, weatherRevision } } : {}),
       ...(scene.geospatial ? { geospatial: scene.geospatial } : {}),
       ...(scene.streaming ? { streaming: scene.streaming } : {}),
+      ...(scene.camera && this.capabilities?.features['camera.control'] ? { camera: scene.camera } : {}),
     }
-    const response = await this.send<UnitySceneSnapshotDto, unknown>('editor.v1.scene.loadDraft', snapshot)
+    const response = await this.send<UnitySceneSnapshotDto, { weatherState?: WeatherState }>('editor.v1.scene.loadDraft', snapshot)
     this.assertSuccess(response)
+    if (this.capabilities?.features['weather.enviro3'] && response.payload?.weatherState?.acceptedRevision === weatherRevision) this.weather.acknowledge(weatherRevision, response.payload.weatherState)
   }
 
   /** 将画布逻辑像素归一化后交给 Unity 相机射线，读取 GIS 拖放点的地理落点。 */
@@ -128,6 +208,11 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
   }
 
   async clearScene(): Promise<void> {
+    this.weather.suspend()
+    return this.schedule(() => this.clearSceneCore())
+  }
+  private async clearSceneCore(): Promise<void> {
+    this.weather.suspend(); this.weather.reset()
     // 清场也开启新代次，使尚未结束的加载和主动事件立即过期。
     this.sceneGeneration += 1
     const response = await this.send<Record<string, never>, unknown>('editor.v1.scene.clear', {})
@@ -203,6 +288,9 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
   private bindEvents(): void {
     if (this.unsubscribeEvents.length) return
     this.unsubscribeEvents.push(
+      this.transport.subscribe<WeatherState>('editor.v1.weather.state.changed', (event) => {
+        if (this.acceptEvent(event)) this.weather.acceptEvent(event.payload)
+      }),
       this.transport.subscribe<{ instanceId: string | null }>('editor.v1.selection.changed', (event) => {
         if (this.acceptEvent(event)) this.emit('selectionChanged', event.payload)
       }),
@@ -253,8 +341,14 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
     method: Parameters<UnityTransport['request']>[0],
     payload: TRequest,
   ) {
-    const envelope = this.envelope(payload)
+    const isWeather = method === 'editor.v1.weather.apply'
+    const retry = this.weatherRetryEnvelope
+    const envelope = isWeather && retry && this.acceptEvent(retry) && JSON.stringify(retry.payload) === JSON.stringify(payload)
+      ? retry as ReturnType<typeof this.envelope<TRequest>> : this.envelope(payload)
+    if (isWeather) this.weatherRetryEnvelope = envelope
     const response = await this.transport.request<TRequest, TResponse>(method, envelope)
+    if (isWeather && this.weatherRetryEnvelope === envelope) this.weatherRetryEnvelope = null
+    if (method !== 'editor.v1.session.initialize' && !this.acceptEvent(envelope)) throw new Error('Unity 响应已属于过期场景')
     if (response.protocolVersion !== UNITY_EDITOR_PROTOCOL_VERSION) {
       throw new Error(`Unity 响应协议版本不兼容：${response.protocolVersion}`)
     }

@@ -5,6 +5,7 @@ import {
   normalizeWeatherV2Params,
   type WeatherV2EffectParams,
 } from '@/scene-platform'
+import { hasWeatherProvider } from '@/scene-platform/effects/weather/enviroWeatherValidation'
 
 type WeatherEffectOverrides = Parameters<typeof createDefaultWeatherV2Effect>[0]
 
@@ -203,6 +204,7 @@ function matchesCloudShadow(
 
 export function isLegacyEditorDefaultVolumetricCloudEffect(effect: EffectSpec): boolean {
   if (effect.id !== MAIN_WEATHER_EFFECT_ID || effect.type !== 'weather') return false
+  if (hasWeatherProvider(effect.params)) return false
 
   const params = normalizeWeatherV2Params(effect.params)
   const isOldOvercastDefault =

@@ -30,6 +30,8 @@ import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorScen
 import { isUnityRenderModeConfigured, unityRenderConfig, type UnityRenderMode } from '@/unity-runtime/renderMode'
 import { createDim3dSceneChunkReadSession, type Dim3dSceneChunkReadSession } from '@/integrations/scene/dim3dSceneChunkReader'
 import { bindDim3dSceneChunkProjection } from '@/integrations/scene/dim3dSceneChunkProjection'
+import { ensureEnabledEditorSceneWeather } from '@/integrations/scene/editorSceneWeatherAdapter'
+import { useVegetationViewportSelection } from '../../vegetationStructure'
 
 /** 画布编排二维覆盖层与双端三维运行时，资源创建统一进入各自的命令链路。 */
 const emit = defineEmits<{
@@ -45,6 +47,7 @@ const eventBus = getCurrentInstance()?.proxy?.$eventBus
 const viewport = ref<HTMLElement>()
 const stage = ref<HTMLElement>()
 const renderSurface = ref<HTMLElement>()
+const vegetationViewport = useVegetationViewportSelection(stage, renderSurface)
 const dimensions = ref({ width: 0, height: 0 })
 const loading = ref(true)
 const runtimeMessage = ref('')
@@ -269,6 +272,7 @@ onMounted(async () => {
     let scene = result.scene ?? createSceneDefinition({ id: sceneId, name: '未命名场景', type: isGis ? 'gis' : 'local3d',
       coordinateSystem: isGis ? { kind: 'wgs84', defaultLongitude: 104.0668, defaultLatitude: 30.5728, defaultHeight: 0, terrainEnabled: false }
         : { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true } })
+    if (props.renderMode) scene = ensureEnabledEditorSceneWeather(scene)
     if (props.renderMode && scene.type === 'gis') scene = await ensureEditorGisDefaultImageryLayer(scene)
     if (disposed) return
     if (props.renderMode && !isUnityRenderModeConfigured(props.renderMode)) {
@@ -378,7 +382,18 @@ onBeforeUnmount(() => {
 defineExpose({ stopSceneDataPolling, restartSceneDataPolling, loadSceneChunk, unloadSceneChunk })
 </script>
 <template>
-  <div ref="viewport" class="scene-edit-canvas-viewport" @mousedown.self="clearSelectionFromViewportBlank" @drop="drop" @dragover.prevent>
+  <div
+    ref="viewport"
+    class="scene-edit-canvas-viewport"
+    @mousedown.self="clearSelectionFromViewportBlank"
+    @drop="drop"
+    @dragover.prevent
+    @pointerdown.capture="vegetationViewport.pointerDown"
+    @pointermove.capture="vegetationViewport.pointerMove"
+    @pointerup.capture="vegetationViewport.pointerUp"
+    @pointercancel.capture="vegetationViewport.cancel"
+    @pointerleave="vegetationViewport.cancel"
+  >
     <div id="scene-render" ref="stage" class="scene-edit-canvas-stage" :style="stageStyle">
       <div ref="renderSurface" class="scene-edit-render-surface" />
       <LayerDOM />

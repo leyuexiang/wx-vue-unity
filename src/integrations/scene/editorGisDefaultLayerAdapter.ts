@@ -259,7 +259,7 @@ const createDefaultLocalImageryLayer = (tile: GisTileRecord): SceneLayer => {
 }
 
 const isLocalImageryLayer = (layer: SceneLayer): boolean =>
-  layer.type === 'imagery' && layer.provider === 'local'
+  layer.type === 'imagery' && layer.provider === 'local' && !layer.metadata?.imageryPresetId
 
 const normalizeTileId = (value: unknown): string | null => {
   if (typeof value === 'string') return value.trim() || null

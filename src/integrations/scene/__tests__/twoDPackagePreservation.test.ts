@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { preserveUneditedThreeDDomain, releaseOriginalScenePackages, retainOriginalScenePackages } from '../twoDPackagePreservation'
-import type { SceneFourPackagePayload } from '../sceneFourPackage'
+import { createCommandBus, createDefaultEnviroWeatherConfig, createEnviroWeatherEffect, createSceneDefinition, createSceneStore } from '@/scene-platform'
+import { serializeSceneDefinitionToFourPackages, type SceneFourPackagePayload } from '../sceneFourPackage'
+import { assembleSceneDefinitionFromRuntimeFragments } from '../sceneRuntimeFragmentAssembler'
+import { updateEditorSceneGis } from '../editorSceneGisAdapter'
 
 const sceneId = 'migration-preservation'
 const payload = (dependencies: object): SceneFourPackagePayload => ({
@@ -30,6 +33,53 @@ describe('二维编辑的三维无损保存保护', () => {
     ], customRenderer: { version: 9 } })
     expect(JSON.parse(saved.dependenciesJson).resources).toEqual(JSON.parse(before.dependenciesJson).resources)
     expect(preserveUneditedThreeDDomain(sceneId, generated).threeDJson).toBe(before.threeDJson)
+  })
+  it('persists Enviro edits and deletion through the production preservation path without replacing GIS or extensions', () => {
+    const original = payload({ resources: [] })
+    const originalThreeD = { ...JSON.parse(original.threeDJson), baseConfig: { weather: {}, gisLayers: [{ vendor: 'cesium' }], future: { keep: true } } }
+    original.threeDJson = JSON.stringify(originalThreeD)
+    retainOriginalScenePackages(sceneId, original)
+    const config = createDefaultEnviroWeatherConfig(); config.presetId = 'snow'; config.overrides.clouds.enabled = false
+    const scene = createSceneDefinition({ id: sceneId, name: '天气', type: 'local3d',
+      coordinateSystem: { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true }, effects: [createEnviroWeatherEffect(config)] })
+    const result = preserveUneditedThreeDDomain(sceneId, serializeSceneDefinitionToFourPackages(scene))
+    expect(JSON.parse(result.threeDJson)).toEqual({ ...originalThreeD, baseConfig: { ...originalThreeD.baseConfig, weather: config } })
+    const restored = assembleSceneDefinitionFromRuntimeFragments({ manifest: { fragmentType: 'manifest', contentJson: JSON.stringify(result) }, options: { sceneId } })
+    expect(restored.effects[0]?.params).toEqual(config)
+    retainOriginalScenePackages(sceneId, result)
+    scene.effects = []
+    const deleted = preserveUneditedThreeDDomain(sceneId, serializeSceneDefinitionToFourPackages(scene))
+    expect(JSON.parse(deleted.threeDJson).baseConfig.weather).toEqual({})
+    expect(JSON.parse(deleted.threeDJson).objects).toEqual(originalThreeD.objects)
+  })
+
+  it('保存 GIS 改动时从两处图层记录移除旧底图，并保留其他图层和扩展', () => {
+    const scene = createSceneDefinition({ id: sceneId, name: 'GIS', type: 'gis',
+      coordinateSystem: { kind: 'wgs84', defaultLongitude: 110, defaultLatitude: 19, defaultHeight: 0, terrainEnabled: true } })
+    const layer = { type: 'imagery' as const, visible: true, locked: true, provider: 'xyz', url: 'https://example.test/{z}/{x}/{y}' }
+    scene.layers = [
+      { ...layer, id: 'base', name: '底图', order: 0 },
+      { ...layer, id: 'overlay', name: '叠加图层', order: 1 },
+    ]
+    const original = serializeSceneDefinitionToFourPackages(scene)
+    const originalThreeD = JSON.parse(original.threeDJson)
+    originalThreeD.baseConfig.future = { keep: true }
+    originalThreeD.layers[1].futureLayer = 'keep'
+    original.threeDJson = JSON.stringify(originalThreeD)
+    retainOriginalScenePackages(sceneId, original)
+    const store = createSceneStore(scene)
+    const bus = createCommandBus(store)
+    updateEditorSceneGis({ store, execute: bus.execute, canEdit: () => true,
+      source: { kind: 'imagery', tile: null }, origin: { longitude: 111, latitude: 20 }, appearance: { contrast: 1.3 } })
+
+    const saved = preserveUneditedThreeDDomain(sceneId, serializeSceneDefinitionToFourPackages(store.getScene()),
+      undefined, undefined, undefined, store.captureSaveEdits())
+    const threeD = JSON.parse(saved.threeDJson)
+    expect(threeD.baseConfig).toMatchObject({ future: { keep: true }, settings: { three: { gis: { contrast: 1.3, imagerySourceId: null } } } })
+    expect(threeD.layers).toMatchObject([{ layerKey: 'overlay', futureLayer: 'keep' }])
+    const restored = assembleSceneDefinitionFromRuntimeFragments({ manifest: { fragmentType: 'manifest', contentJson: JSON.stringify(saved) }, options: { sceneId } })
+    expect(restored.coordinateSystem).toMatchObject({ defaultLongitude: 111, defaultLatitude: 20 })
+    expect(restored.layers.map(layer => layer.id)).toEqual(['overlay'])
   })
 
   it('三维原文和未知扩展字段不受二维修改影响', () => {

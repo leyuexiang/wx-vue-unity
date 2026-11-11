@@ -39,6 +39,7 @@ export type SceneStoreEvent =
   | { type: 'sceneLoaded'; scene: SceneDefinition }
   /** 场景级设置的增量更新，不触发对象和效果的全量重建。 */
   | { type: 'sceneSettingsUpdated'; settings: SceneSettings }
+  | { type: 'sceneGisUpdated' }
   /** 区块和流式分组的可持久化元数据变更。 */
   | { type: 'sceneStreamingUpdated'; streaming: SceneStreamingConfig | undefined; origin?: 'loadNormalization' }
   /** 显隐和锁定标记只描述派生传播范围，不是后代的持久化编辑。 */
@@ -93,6 +94,8 @@ export interface SceneStore {
   loadScene: (scene: SceneDefinition) => void
   /** 更新可序列化场景设置，并向 Runtime 发送增量同步事件。 */
   updateSceneSettings: (settings: SceneSettings) => SceneSettings
+  /** GIS 基础配置原子提交；保留当前对象选择和其它编辑状态。 */
+  updateSceneGisConfig: (config: Pick<SceneDefinition, 'coordinateSystem' | 'layers' | 'settings'>) => void
   /** 原子替换场景流式元数据，供资源实例创建后补齐区块归属。 */
   updateSceneStreaming: (
     streaming: SceneStreamingConfig | undefined,
@@ -772,6 +775,11 @@ export function createSceneStore(initialScene: SceneDefinition): SceneStore {
       emit({ type: 'cameraPathWaypointSelectionChanged', selection: null })
     },
     updateSceneSettings,
+    updateSceneGisConfig: (config) => {
+      markDomainEdited('gis')
+      scene = { ...scene, ...config }
+      emit({ type: 'sceneGisUpdated' })
+    },
     updateSceneStreaming,
     updateCameraPaths,
     updateVegetation,

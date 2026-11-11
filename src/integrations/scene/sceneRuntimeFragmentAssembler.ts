@@ -24,6 +24,9 @@ import {
   type SceneType,
 } from '@/scene-platform'
 import { BUILTIN_SCENE_ASSET_ID_PREFIX, getBuiltinSceneAsset, getBuiltinSceneResourceUrl } from './editorBuiltinResourceRegistry'
+import { readImportedVegetationAddress } from './importVegetationPublication'
+import { restorePersistedWeatherEffects } from './editorSceneWeatherAdapter'
+import { hasWeatherProvider } from '@/scene-platform/effects/weather'
 
 /** 真实运行态接口返回的通用发布分片。字段均来自 OpenAPI 的实际声明。 */
 export interface SceneRuntimePublishedFragment {
@@ -418,11 +421,22 @@ const hydrateVegetationAsset = (
   const resourceKey = getString(record?.id) ?? getString(record?.resourceKey)
   if (!record || !resourceKey) return undefined
   const indexed = resourceIndex.get(resourceKey)
-  const resolvedUrl = getString(resolvedAssetUrls[resourceKey]) ?? indexed?.url
+  const nativeMetadata = getRecord(record.metadata)
+  const nativeUrl = resourceKey.startsWith('unity-model:') && nativeMetadata?.source === 'unity-catalog' && getString(nativeMetadata.assetId)
+    ? `unity-resource:model/${encodeURIComponent(String(nativeMetadata.assetId))}` : undefined
+  const importedUrl = readImportedVegetationAddress(nativeMetadata?.publicVegetationSource)
+  const resolvedUrl = importedUrl ?? getString(resolvedAssetUrls[resourceKey]) ?? indexed?.url ?? nativeUrl
   if (!resolvedUrl) return record
   return {
     ...record,
     url: resolvedUrl,
+    ...(Array.isArray(record.modelLodVariants)
+      ? { modelLodVariants: record.modelLodVariants.map(value => {
+          const variant = getRecord(value)
+          const id = getString(variant?.id)
+          return variant && id && resolvedAssetUrls[id] ? { ...variant, url: resolvedAssetUrls[id] } : value
+        }) }
+      : {}),
     ...(indexed?.kind ? { kind: indexed.kind } : {}),
     ...(getString(record.version)
       ? { version: record.version }
@@ -1606,7 +1620,7 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
     },
     ...(getRecord(baseConfig.scene) ? { scene: baseConfig.scene } : {}),
     ...(getRecord(baseConfig.camera) ? { camera: baseConfig.camera } : {}),
-    ...(getRecord(baseConfig.weather) ? { weather: baseConfig.weather } : {}),
+    ...(getRecord(baseConfig.weather) && !hasWeatherProvider(baseConfig.weather) ? { weather: baseConfig.weather } : {}),
   }
 
   const coordinateSystem =
@@ -1620,7 +1634,7 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
     objects: restoredObjects,
     ...(streaming ? { streaming } : {}),
     layers,
-    effects: getArray(threeDSeed.effects).map(value => {
+    effects: restorePersistedWeatherEffects(getArray(threeDSeed.effects).map(value => {
       const effect = getRecord(value)
       if (!effect || !Array.isArray(effect.assetRefs)) return value
       return {
@@ -1635,7 +1649,7 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
           return { ...asset, ...resolved, url: resolved?.url ?? getString(asset?.url) ?? '' }
         }),
       }
-    }),
+    }).filter(value => getRecord(value)) as SceneDefinition['effects'], baseConfig.weather),
     settings,
     metadata,
     cameraPaths: Array.isArray(threeDSeed.cameraPaths) ? threeDSeed.cameraPaths : [],

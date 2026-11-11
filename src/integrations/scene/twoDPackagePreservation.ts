@@ -1,3 +1,5 @@
+import { hasWeatherProvider } from '@/scene-platform/effects/weather'
+import { CURRENT_VEGETATION_SCHEMA_VERSION } from '@/scene-platform/core/vegetation'
 import { projectThreeDObjectForCopyCheck, type SceneFourPackagePayload } from './sceneFourPackage'
 import type { SceneStore } from '@/scene-platform'
 import type { SceneSaveEdits } from '@/scene-platform/core/sceneSaveEdits'
@@ -235,6 +237,11 @@ const mergeOrderedRows = (original: unknown, current: unknown, merge = mergeReco
   }), ...previous.filter(row => !rowId(row))]
 }
 
+const isGisLayer = (value: unknown): value is JsonRecord => isRecord(value) &&
+  ['imagery', 'terrain', 'tileset', 'vector'].includes(String(value.layerType ?? value.type))
+
+const isWeatherEffect = (value: unknown): value is JsonRecord => isRecord(value) && value.type === 'weather'
+
 export function preserveUneditedThreeDDomain(
   sceneId: string,
   generated: SceneFourPackagePayload,
@@ -339,6 +346,62 @@ export function preserveUneditedThreeDDomain(
     }
   }
   if (domains?.has('settings')) threeD.baseConfig = mergeRecords(originalThreeD.baseConfig, generatedThreeD.baseConfig)
+  const originalBase = isRecord(originalThreeD.baseConfig) ? originalThreeD.baseConfig : {}
+  const generatedBase = isRecord(generatedThreeD.baseConfig) ? generatedThreeD.baseConfig : {}
+  const gisChanged = domains?.has('gis') === true
+  const originalGisLayerIds = new Set<string>()
+  const currentGisLayerIds = new Set<string>()
+  if (gisChanged) {
+    const baseConfig = isRecord(threeD.baseConfig) ? threeD.baseConfig : {}
+    const settings = isRecord(baseConfig.settings) ? { ...baseConfig.settings } : {}
+    const three = isRecord(settings.three) ? { ...settings.three } : {}
+    const nextSettings = isRecord(generatedBase.settings) ? generatedBase.settings : {}
+    const nextThree = isRecord(nextSettings.three) ? nextSettings.three : {}
+    if (nextThree.gis === undefined) delete three.gis
+    else three.gis = nextThree.gis
+    if (Object.keys(three).length) settings.three = three
+    else delete settings.three
+    const currentGisLayers = records(generatedBase.gisLayers).filter(isGisLayer)
+    const mergeGisLayers = (original: unknown) => {
+      const previousById = new Map<string, JsonRecord>()
+      const preserved = (Array.isArray(original) ? original : []).filter(layer => {
+        const id = isGisLayer(layer) ? layerIdOf(layer) : undefined
+        if (!id) return true
+        previousById.set(id, layer)
+        originalGisLayerIds.add(id)
+        return false
+      })
+      return [...preserved, ...currentGisLayers.map(layer => {
+        const id = layerIdOf(layer)
+        if (!id) return layer
+        currentGisLayerIds.add(id)
+        const previous = previousById.get(id)
+        const merged = { ...previous, ...layer }
+        const sourceChanged = previous?.url !== layer.url || previous?.provider !== layer.provider ||
+          JSON.stringify(previous?.resourceRefKeys) !== JSON.stringify(layer.resourceRefKeys)
+        if (sourceChanged) {
+          for (const field of ['url', 'resourceRefKeys', 'options', 'metadata'] as const) {
+            if (!(field in layer)) delete merged[field]
+          }
+        }
+        return merged
+      })]
+    }
+    threeD.baseConfig = {
+      ...baseConfig, settings,
+      coordinateSystem: mergeRecords(baseConfig.coordinateSystem, generatedBase.coordinateSystem),
+      gisLayers: mergeGisLayers(originalBase.gisLayers),
+    }
+    threeD.layers = mergeGisLayers(originalThreeD.layers)
+  }
+  const originalEffects = Array.isArray(originalThreeD.effects) ? originalThreeD.effects : []
+  const weatherChanged = ((hasWeatherProvider(originalBase.weather) || hasWeatherProvider(generatedBase.weather)) &&
+    JSON.stringify(originalBase.weather) !== JSON.stringify(generatedBase.weather)) ||
+    originalEffects.some(effect => isWeatherEffect(effect) && hasWeatherProvider(effect.params) &&
+      JSON.stringify(effect.params) !== JSON.stringify(generatedBase.weather))
+  if (weatherChanged) {
+    threeD.baseConfig = { ...(isRecord(threeD.baseConfig) ? threeD.baseConfig : {}), weather: generatedBase.weather ?? {} }
+  }
   if (domains?.has('cameraPaths')) {
     threeD.cameraPaths = mergeOrderedRows(originalThreeD.cameraPaths, generatedThreeD.cameraPaths, (before, after) => {
       const path = mergeRecords(before, after)
@@ -347,7 +410,11 @@ export function preserveUneditedThreeDDomain(
       return path
     })
   }
-  if (domains?.has('vegetation')) {
+  const vegetation = generatedThreeD.vegetation
+  const vegetationChanged = domains?.has('vegetation') === true ||
+    (isRecord(vegetation) && vegetation.schemaVersion === CURRENT_VEGETATION_SCHEMA_VERSION &&
+      JSON.stringify(originalThreeD.vegetation) !== JSON.stringify(vegetation))
+  if (vegetationChanged) {
     if (generatedThreeD.vegetation === undefined) delete threeD.vegetation
     else threeD.vegetation = mergeRecords(originalThreeD.vegetation, generatedThreeD.vegetation)
   }
@@ -360,12 +427,13 @@ export function preserveUneditedThreeDDomain(
       streaming[key] = mergeOrderedRows(before[key], after[key])
     threeD.streaming = streaming
   }
-  if (editedEffects?.size) {
+  if (editedEffects?.size || (weatherChanged && Array.isArray(originalThreeD.effects))) {
     const after = new Map(records(generatedThreeD.effects).map(effect => [rowId(effect), effect]))
-    const before = Array.isArray(originalThreeD.effects) ? originalThreeD.effects : []
-    const effects = before.flatMap(effect => {
+    const effects = originalEffects.flatMap(effect => {
       const id = rowId(effect)
-      if (!id || !editedEffects.has(id)) return [effect]
+      if (!id || !editedEffects?.has(id)) {
+        return weatherChanged && isWeatherEffect(effect) ? [] : [effect]
+      }
       const next = after.get(id)
       after.delete(id)
       if (!next) return []
@@ -373,13 +441,13 @@ export function preserveUneditedThreeDDomain(
       if (!Array.isArray(next.assetRefs)) delete merged.assetRefs
       return [merged]
     })
-    for (const id of editedEffects) {
+    for (const id of editedEffects ?? []) {
       const next = after.get(id)
       if (next) effects.push(next)
     }
     threeD.effects = effects
   }
-  const originalLayers = Array.isArray(originalThreeD.layers) ? originalThreeD.layers : []
+  const originalLayers = Array.isArray(threeD.layers) ? threeD.layers : []
   const currentLayers = new Map(records(generatedThreeD.layers).map(layer => [layerIdOf(layer), layer]))
   const originalLayerKeys = new Set(records(originalLayers).map(layerIdOf))
   const removedLayers = new Set<string>()
@@ -429,10 +497,14 @@ export function preserveUneditedThreeDDomain(
     typeof value.ownerKey === 'string' && ids.has(value.ownerKey)
   const isEditedEffectOwner = (value: unknown) => isRecord(value) && value.domain === 'threeD' &&
     value.ownerType === 'effect' && typeof value.ownerKey === 'string' && editedEffects?.has(value.ownerKey)
+  const isVegetationOwner = (value: unknown) => vegetationChanged && isRecord(value) && value.domain === 'threeD' &&
+    value.ownerType === 'vegetation-native-species'
   const isRemovedOwner = (value: unknown) => isDeletedThreeDOwner(value, deleted) ||
-    isLayerOwner(value, removedLayers) || isEditedEffectOwner(value)
+    isLayerOwner(value, removedLayers) || isEditedEffectOwner(value) || isVegetationOwner(value) ||
+    (gisChanged && isLayerOwner(value, originalGisLayerIds))
   const isCurrentOwner = (value: unknown) => isTwoDOwner(value) ||
-    isLayerOwner(value, newLayerKeys) || isEditedEffectOwner(value) ||
+    isLayerOwner(value, newLayerKeys) || isEditedEffectOwner(value) || isVegetationOwner(value) ||
+    (gisChanged && isLayerOwner(value, currentGisLayerIds)) ||
     (isRecord(value) && value.domain === 'threeD' && newIds.has(String(value.instanceId)))
   const isGeneratedCurrent = (value: unknown) => isGeneratedTwoD(value) ||
     (isRecord(value) && (isCurrentOwner(value.owner) ||
@@ -496,7 +568,8 @@ export function preserveUneditedThreeDDomain(
   }
   const result = {
     sceneJson: JSON.stringify(scene),
-    threeDJson: newIds.size || targetsChanged || layersChanged || deleted.size || domains?.size || editedEffects?.size
+    threeDJson: newIds.size || targetsChanged || layersChanged || deleted.size || domains?.size || editedEffects?.size ||
+      weatherChanged || vegetationChanged
       ? JSON.stringify(threeD) : original.threeDJson,
     twoDJson: JSON.stringify({ ...originalTwoD, ...generatedTwoD, components,
       ...(isRecord(originalTwoD.canvas) || isRecord(generatedTwoD.canvas)

@@ -974,6 +974,18 @@ function validatePlantingRules(
       ruleIds.add(rule.id)
     }
     if (!isNonEmptyString(rule.name)) issues.push(`${prefix} name is required.`)
+    if (rule.kind === 'polygon' && rule.imageryRegion !== undefined) {
+      const region = rule.imageryRegion
+      if (!isPlainRecord(region) || !isNonEmptyString(region.id) || !isNonEmptyString(region.name)) {
+        issues.push(`${prefix} imageryRegion must have an id and name.`)
+      } else if (region.corners !== undefined) {
+        if (!Array.isArray(region.corners) || region.corners.length !== 2) {
+          issues.push(`${prefix} imageryRegion must have two corners.`)
+        } else {
+          for (const corner of region.corners) validateGeoPosition(corner, `${prefix} imageryRegion corner`, issues)
+        }
+      }
+    }
     if (typeof rule.enabled !== 'boolean') issues.push(`${prefix} enabled must be boolean.`)
     if (!isNonEmptyString(rule.layerId)) {
       issues.push(`${prefix} layerId is required.`)
@@ -1055,6 +1067,9 @@ function validatePlantingRules(
     }
 
     if (rule.kind === 'polygon') {
+      if (rule.targetCount !== undefined && (!Number.isSafeInteger(rule.targetCount) || (rule.targetCount as number) < 1 || (rule.targetCount as number) > 10_000_000)) {
+        issues.push(`${prefix} targetCount must be an integer within [1, 10000000].`)
+      }
       validateSpeciesMix(rule.speciesMix, prefix, speciesIds, layerSpeciesIds, issues)
       validateGeoPolygon(rule.polygon, `${prefix} polygon`, issues)
       if (
@@ -1155,6 +1170,9 @@ function validateStreamingOptions(value: unknown, issues: string[]): void {
   }
 
   const options = value as Partial<VegetationStreamingOptions>
+  if (options.renderMode !== undefined && !['instanced', 'published-tiles'].includes(options.renderMode)) {
+    issues.push(`${prefix} renderMode must be instanced or published-tiles.`)
+  }
   if (typeof options.enabled !== 'boolean') issues.push(`${prefix} enabled must be boolean.`)
   if (!SUPPORTED_QUALITY_PRESETS.has(options.qualityPreset as VegetationQualityPreset)) {
     issues.push(`${prefix} qualityPreset must be high, balanced or performance.`)
@@ -1429,6 +1447,11 @@ export function validateVegetationSystemDefinition(
   }
 
   validatePlantingRules(draft.rules, layerIds, layerSpeciesById, speciesIds, elevationKind, issues)
+  if (draft.imageryExclusions !== undefined && (!Array.isArray(draft.imageryExclusions) ||
+    !draft.imageryExclusions.every(box => Array.isArray(box) && box.length === 4 &&
+      box.every(isFiniteNumber) && box[0] >= -180 && box[2] <= 180 &&
+      box[1] >= -90 && box[3] <= 90 && box[0] < box[2] && box[1] < box[3] && box[2] - box[0] <= 180)))
+    issues.push('影像禁种范围必须是有效的地理矩形。')
 
   /**
    * 未知垂直基准只影响结果可复现性，不应阻断浏览器编辑预览；一旦携带发布引用，就必须在发布前确认
@@ -1450,6 +1473,27 @@ export function validateVegetationSystemDefinition(
 
   validateStreamingOptions(draft.streaming, issues)
   validateEditingOptions(draft.editing, issues)
+  if (isPlainRecord(draft.streaming) && draft.streaming.renderMode === 'instanced') {
+    if (sceneType !== 'gis') issues.push('原生植被需要 GIS 场景。')
+    if ((draft.streaming.memoryBudgetMB as number) < 16) issues.push('原生植被内存预算至少为 16 MB。')
+    if (isPlainRecord(draft.elevationSource) && draft.elevationSource.kind === 'external-dem')
+      issues.push('原生植被请使用场景地形或固定椭球高程。')
+    if (isPlainRecord(draft.elevationSource) && draft.elevationSource.verticalDatum === 'orthometric')
+      issues.push('原生植被高程采用椭球高，请转换正常高后导入。')
+    if (Array.isArray(draft.speciesCatalog) && draft.speciesCatalog.length > 64)
+      issues.push('原生植被最多支持 64 个物种。')
+    if (Array.isArray(draft.rules)) for (const rule of draft.rules) {
+      if (!isPlainRecord(rule)) continue
+      const spacing = rule.kind === 'corridor' ? rule.spacingM : rule.minimumSpacingM
+      if (typeof spacing === 'number' && spacing < 1) issues.push('原生植被的最小株距为 1 米。')
+      const settings = rule.kind === 'altitude-zonation' && Array.isArray(rule.zones) ? rule.zones : [rule]
+      for (const zone of settings) if (isPlainRecord(zone)) {
+        if (typeof zone.minimumSpacingM === 'number' && zone.minimumSpacingM < 1) issues.push('原生植被的最小株距为 1 米。')
+        if (typeof zone.densityPerHectare === 'number' && zone.densityPerHectare > 10000)
+          issues.push('原生植被密度上限为每公顷 10,000 株。')
+      }
+    }
+  }
   if (draft.publication !== undefined) {
     validatePublication(draft.publication, sceneType, issues, requireAssetUrls)
   }

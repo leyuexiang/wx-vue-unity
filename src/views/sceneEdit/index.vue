@@ -139,6 +139,9 @@
 </template>
 
 <script setup lang="ts">
+import { setEditorWeatherEditGuard } from '@/integrations/scene/editorSceneWeatherAdapter'
+import { setEditorGisEditGuard } from '@/integrations/scene/editorSceneGisAdapter'
+import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import SceneHeader from './SceneHeader/index.vue'
@@ -150,6 +153,7 @@ import EditDialog from '../resourceManage/templateManage/EditDialog.vue'
 import { useSceneStore } from '@/stores/sceneEditStore'
 import { useRoute, useRouter } from 'vue-router'
 import { ref, onMounted, onUnmounted, getCurrentInstance, computed, nextTick } from 'vue'
+import { provideVegetationStructure } from './vegetationStructure'
 import { MITT_ON_KEY_ENUM } from '@/enums'
 import {
   heartbeatDim3dScene,
@@ -225,6 +229,7 @@ const previewFirstPersonCollisionMessage = ref('')
 let previewFirstPersonRuntime: SceneRuntime | null = null
 let previewFirstPersonController: FirstPersonPreviewController | null = null
 let previewPreviousCamera: SceneCameraState | null = null
+let previewPathRuntime: UnityEditorSceneRuntime | null = null
 let previewFirstPersonFrame: number | null = null
 let previewFirstPersonLastFrameTime = 0
 let editorPreviewGeneration = 0
@@ -346,6 +351,9 @@ const toggleEditorFirstPersonPreview = () => {
 const teleportTo = ref('#scene')
 const activeLeftPanel = ref(LEFT_SCENE_PANEL_ENUM.Resource)
 const activeInspectorPanel = ref(RIGHT_SCENE_PANEL_ENUM.Base)
+provideVegetationStructure(() => {
+  activeInspectorPanel.value = RIGHT_SCENE_PANEL_ENUM.Vegetation
+})
 const sceneOperationRef = ref<InstanceType<typeof SceneOperation> | null>(null)
 const sceneEditRootRef = ref<HTMLElement | null>(null)
 let leftPaneResizeObserver: ResizeObserver | undefined
@@ -373,6 +381,10 @@ let activeSceneLock:
 const sceneLockReady = ref(false)
 /** 后端当前编辑修订未恢复成功前禁止保存，避免把初始化空场景覆盖到服务端。 */
 const sceneDataLoadState = ref<'loading' | 'ready' | 'failed'>('loading')
+const releaseWeatherEditGuard = setEditorWeatherEditGuard(() => sceneLockReady.value && !sceneLockLost.value && sceneDataLoadState.value === 'ready' && !isPreviewScene.value)
+onBeforeUnmount(releaseWeatherEditGuard)
+const releaseGisEditGuard = setEditorGisEditGuard(() => sceneLockReady.value && !sceneLockLost.value && sceneDataLoadState.value === 'ready' && !isPreviewScene.value)
+onBeforeUnmount(releaseGisEditGuard)
 /** 当前编辑数据的后端基准修订；保存成功后更新，供下一次 saveAll 做并发校验。 */
 const sceneBaseRevisionNo = ref<number | undefined>()
 /** 最近一次真实保存书签只保留在当前页内存，不写入浏览器本地场景数据。 */
@@ -912,6 +924,14 @@ onMounted(async () => {
     void Promise.resolve().then(() => {
       if (generation !== editorPreviewGeneration || !isPreviewScene.value) return
       const entering = getWidgetOverlayHostPort().enterPreview()
+      const runtime = host?.getRuntime()
+      const path = host?.getStore().getCameraPaths().find(item => item.enabled && item.autoPlay)
+      if (path && runtime instanceof UnityEditorSceneRuntime && runtime.cameraAvailable) {
+        previewPathRuntime = runtime
+        void runtime.controlCamera({ action: 'play', path }).catch(error => {
+          if (generation === editorPreviewGeneration) ElMessage.error(error instanceof Error ? error.message : '相机路径播放失败')
+        })
+      }
       if (generation === editorPreviewGeneration && isPreviewScene.value) startEditorFirstPersonPreview()
       return entering
     }).catch((error) => {
@@ -1078,6 +1098,12 @@ const syncRightCardNavWidth = () => {
 // 关闭预览场景
 const closePreviewScene = () => {
   editorPreviewGeneration += 1
+  if (previewPathRuntime) {
+    void previewPathRuntime.controlCamera({ action: 'stop' }).catch(error => {
+      appLogger.error('SceneEdit', '停止预览相机路径失败', error)
+    })
+    previewPathRuntime = null
+  }
   stopEditorFirstPersonPreview()
   previewFirstPersonObject.value = null
   previewFirstPersonRuntime = null

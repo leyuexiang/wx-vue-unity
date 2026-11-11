@@ -14,6 +14,7 @@ import type renderScene from '@/utils/renderScene'
 import { createEditorSceneInteractionActionRuntimePort } from './editorSceneInteractionActionRuntime'
 import { getLegacyRenderSceneApiFromRuntime } from './editorLegacyRenderSceneAccess'
 import { loadEditorSceneDefinition } from './editorSceneLoadAdapter'
+import { readImportedVegetationAddress } from './importVegetationPublication'
 import { applyEditorSceneCameraToRuntime } from './editorSceneSettingsAdapter'
 import { readSceneGlobalStateFromDefinition } from './editorSceneGlobalStateAdapter'
 import { SceneDataPollingRuntime } from './widgetRuntime'
@@ -161,7 +162,11 @@ const stripUnpublishedVegetationDraft = (content: unknown): unknown => {
   const hasEnabledRule =
     Array.isArray(vegetation.rules) &&
     vegetation.rules.some((rule) => isRecord(rule) && rule.enabled === true)
-  if (vegetation.enabled === true && hasEnabledRule) return content
+  const hasImportedTiles = Array.isArray(vegetation.layers) && vegetation.layers.some((layer) =>
+    isRecord(layer) && isRecord(layer.tilesetAsset) && isRecord(layer.tilesetAsset.metadata) &&
+    readImportedVegetationAddress(layer.tilesetAsset.metadata.publicVegetationSource),
+  )
+  if (vegetation.enabled === true && (hasEnabledRule || hasImportedTiles || isRecord(vegetation.publication))) return content
 
   const { vegetation: _unusedVegetation, ...withoutVegetation } = content
   return withoutVegetation

@@ -72,8 +72,11 @@ export class LegacyInputEncoder {
     if (x < 0 || x > width || y < 0 || y > height) return null
     this.lastPosition = { x, y }
     this.buttons = event.buttons
+    // Unity's native mouse uses positive, normalized steps for scrolling up.
+    // Browser wheel deltas use the opposite sign and pixel/line/page units.
+    const wheelScale = 'deltaMode' in event ? (event.deltaMode === 1 ? 1 / 3 : event.deltaMode === 2 ? 1 : 1 / 100) : 0
     return this.mouseState(x, y, event.movementX / scale, -event.movementY / scale,
-      'deltaX' in event ? event.deltaX : 0, 'deltaY' in event ? event.deltaY : 0, event.buttons)
+      'deltaX' in event ? -event.deltaX * wheelScale : 0, 'deltaY' in event ? -event.deltaY * wheelScale : 0, event.buttons)
   }
   private mouseState(x: number, y: number, dx: number, dy: number, sx: number, sy: number, buttons: number): ArrayBuffer {
     const state = new Uint8Array(30), view = new DataView(state.buffer)

@@ -43,10 +43,10 @@ export type GisTileDataType = 'ELEVATION' | 'SATELLITE'
  * @param dataType - 数据类型：ELEVATION 表示高程，SATELLITE 表示影像
  * @returns
  */
-export function listGisTile(dataType: GisTileDataType): Promise<ListGisTileRes> {
+export function listGisTile(dataType: GisTileDataType, signal?: AbortSignal): Promise<ListGisTileRes> {
   /**
    * 以 `/api` 作为接口根路径；统一请求拦截器会按当前平台补齐路径段，
    * 运营端最终请求 `/api/operation/webgis/info/list`，并保留传入的数据类型。
    */
-  return request.get(`/api/webgis/info/list?dataType=${encodeURIComponent(dataType)}`)
+  return request.get(`/api/webgis/info/list?dataType=${encodeURIComponent(dataType)}`, { signal })
 }

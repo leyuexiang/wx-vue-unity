@@ -1,11 +1,13 @@
-import type { FrameTarget, PickWorldPoint, SceneDefinition, SceneLayer, SceneObject, ScreenPoint, ViewportHost } from '@/scene-platform'
+import { getRuntimeEnviroWeatherConfig } from '@/integrations/scene/editorSceneWeatherAdapter'
+import { getEditorGisBaseLayer, getEditorGisImageryCameraTarget } from '@/integrations/scene/editorSceneGisAdapter'
+import type { FrameTarget, PickWorldPoint, SceneDefinition, SceneLayer, SceneObject, SceneSettings, ScreenPoint, ViewportHost } from '@/scene-platform'
 import { createUpdateObjectTransformCommand } from '@/scene-platform'
 import { BaseSceneRuntime } from '@/scene-platform/runtime/baseSceneRuntime'
 import type { UnityTransport } from '../connection/UnityTransport'
 import { LegacyUnityTransport, type LegacySessionConfig } from '../connection/LegacyUnityTransport'
 import { waitForCloudRuntimeReady } from '../connection/waitForCloudRuntimeReady'
 import { WebUnityTransport } from '../connection/WebUnityTransport'
-import { JsonRpcUnityCloudRuntime } from './JsonRpcUnityCloudRuntime'
+import { JsonRpcUnityCloudRuntime, type UnityCameraAction } from './JsonRpcUnityCloudRuntime'
 import {
   fromUnityTransform,
   getUnityDeferredRenderWarnings,
@@ -23,6 +25,12 @@ import type {
   ObjectInteractionSwitchViewOptions,
 } from '@/scene-platform/runtime/sceneRuntime'
 import type { UnityInteractionActionDto } from '../protocol/types'
+import { getUnityCameraConfig } from './editorCameraConfig'
+import type { VegetationSystemDefinition } from '@/scene-platform/core/types'
+import { checkVegetationTilesForUnity } from './vegetationTilesPreflight'
+
+type VegetationSurfacePoint = [longitude: number, latitude: number, height: number]
+type ViewportPoint = [x: number, y: number]
 
 export interface UnityEditorSceneRuntimeOptions {
   mode: UnityRenderMode
@@ -55,6 +63,144 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   private readonly objectInteractionListeners = new Set<(event: SceneObjectInteractionEvent) => void>()
   private modeOperation = Promise.resolve()
   private remoteMode: 'edit' | 'preview' = 'edit'
+  private reconnecting: Promise<void> | null = null
+  private sceneEpoch = 0
+  private appliedCameraConfig = ''
+  private cancelVegetationPick: (() => void) | null = null
+
+  cancelVegetationPointPick(): void {
+    this.cancelVegetationPick?.()
+  }
+
+  async listVegetationModels() {
+    return this.transport instanceof WebUnityTransport ? this.transport.listVegetationModels() : null
+  }
+
+  pickVegetationPoint(): Promise<VegetationSurfacePoint> {
+    const container = this.container
+    if (!container || !this.vegetationAvailable) return Promise.reject(new Error('原生植被运行时尚未就绪'))
+    this.cancelVegetationPick?.()
+    return new Promise((resolve, reject) => {
+      const epoch = this.sceneEpoch
+      const overlay = document.createElement('button')
+      overlay.type = 'button'
+      overlay.setAttribute('aria-label', '在地表单击添加植被控制点，Escape 取消')
+      Object.assign(overlay.style, {
+        position: 'absolute', inset: '0', zIndex: '30', background: 'transparent',
+        border: '1px solid #5ab2a5', cursor: 'crosshair', touchAction: 'none',
+      })
+      const cleanup = () => {
+        overlay.remove()
+        document.removeEventListener('keydown', onKey, true)
+        if (this.cancelVegetationPick === cancel) this.cancelVegetationPick = null
+      }
+      const cancel = () => { cleanup(); reject(new Error('已取消地表拾取')) }
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel() }
+      }
+      const toViewportPoint = (event: PointerEvent): ViewportPoint | null => {
+        const video = this.video
+        const bounds = (video ?? overlay).getBoundingClientRect()
+        let { left, top, width, height } = bounds
+        if (video?.videoWidth && video.videoHeight) {
+          const scale = Math.min(width / video.videoWidth, height / video.videoHeight)
+          left += (width - video.videoWidth * scale) / 2
+          top += (height - video.videoHeight * scale) / 2
+          width = video.videoWidth * scale
+          height = video.videoHeight * scale
+        }
+        const x = (event.clientX - left) / width
+        const y = (event.clientY - top) / height
+        return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? [x, y] : null
+      }
+      const readPosition = async (point: ViewportPoint): Promise<VegetationSurfacePoint> => {
+        const { position } = await this.controlVegetation({ action: 'pick', point })
+        if (epoch !== this.sceneEpoch) throw new Error('场景已切换')
+        if (!Array.isArray(position) || position.length !== 3 || !position.every(value => typeof value === 'number' && Number.isFinite(value))) {
+          throw new Error('Unity 未返回有效地表坐标')
+        }
+        return position as VegetationSurfacePoint
+      }
+      overlay.addEventListener('pointerdown', async event => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.button !== 0) { cancel(); return }
+        if (overlay.disabled) return
+        const point = toViewportPoint(event)
+        if (!point) return
+        overlay.disabled = true
+        try {
+          const position = await readPosition(point)
+          cleanup()
+          resolve(position)
+        } catch (error) { cleanup(); reject(error) }
+      })
+      this.cancelVegetationPick = cancel
+      document.addEventListener('keydown', onKey, true)
+      container.append(overlay)
+    })
+  }
+
+  get cameraAvailable(): boolean { return this.unity?.capabilities?.features['camera.control'] === true }
+  get vegetationAvailable(): boolean { return this.unity?.capabilities?.features['vegetation.instanced'] === true }
+
+  async controlVegetation(payload: Record<string, unknown>) {
+    await this.operations
+    if (!this.unity || !this.scene) throw new Error('Unity 场景尚未就绪')
+    const unity = this.unity
+    const epoch = this.sceneEpoch
+    if (payload.action === 'apply') {
+      await checkVegetationTilesForUnity(payload.config as VegetationSystemDefinition | null, this.options.mode,
+        unity.capabilities?.features['vegetation.publishedInstancing.v3'] === true)
+    }
+    if (unity !== this.unity || epoch !== this.sceneEpoch || this.disposed) throw new Error('植被所在场景已切换')
+    return unity.controlVegetation(payload)
+  }
+
+  async applyVegetationDraft(scene: SceneDefinition, vegetation: VegetationSystemDefinition): Promise<void> {
+    // A saved legacy count can fail the first strict-capacity load. Let a corrected
+    // draft retry that load before committing it, even when no scene is ready yet.
+    if (this.scene?.id !== scene.id) {
+      await this.loadScene({ ...scene, vegetation })
+      return
+    }
+    await this.controlVegetation({ action: 'apply', config: vegetation })
+  }
+
+  async updateVegetation(vegetation: VegetationSystemDefinition | undefined): Promise<void> {
+    if (!this.scene) return
+    const epoch = this.sceneEpoch
+    await this.controlVegetation({ action: 'apply', config: vegetation ?? null })
+    if (epoch === this.sceneEpoch && this.scene) this.scene = { ...this.scene, vegetation }
+  }
+
+  async updateVegetationPreview(vegetation: VegetationSystemDefinition | undefined): Promise<void> {
+    await this.updateVegetation(vegetation)
+  }
+
+  async controlCamera(action: UnityCameraAction) {
+    const unity = this.unity
+    if (!unity || !this.scene) throw new Error('Unity 场景尚未就绪')
+    await this.operations
+    if (unity !== this.unity || this.disposed) throw new Error('Unity 会话已切换')
+    return unity.controlCamera(action)
+  }
+
+  async updateSceneSettings(settings: SceneSettings): Promise<void> {
+    if (!this.scene) return
+    const config = getUnityCameraConfig(settings, this.type)
+    this.scene = { ...this.scene, settings }
+    const signature = JSON.stringify(config)
+    if (this.cameraAvailable && this.appliedCameraConfig !== signature) {
+      try {
+        await this.controlCamera({ action: 'apply', config })
+        this.appliedCameraConfig = signature
+      } catch (error) {
+        this.options.onStatus(error instanceof Error ? error.message : 'Unity 相机同步失败')
+        throw error
+      }
+    }
+  }
 
   constructor(type: SceneDefinition['type'], private readonly options: UnityEditorSceneRuntimeOptions) {
     super(type, `unity-${options.mode}-${type}`)
@@ -121,7 +267,11 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       this.transport = new WebUnityTransport(container, this.options.webBootstrapUrl, this.options.onStatus)
       await this.transport.connect()
     }
-    if (this.disposed) throw new Error('Unity 视口已关闭')
+    await this.connectProtocol()
+  }
+
+  private async connectProtocol(): Promise<void> {
+    if (this.disposed || !this.transport) throw new Error('Unity 视口已关闭')
     const unity = new JsonRpcUnityCloudRuntime(this.transport)
     this.unity = unity
     await unity.connect()
@@ -131,6 +281,11 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.capabilities.rendering.tileset = this.type === 'gis' && unity.capabilities.features['gis.tileset'] === true
     // 资源面板根据真实协商结果开放模型入口；这里表示可加载已发布模型，不表示按网页地址直接导入文件。
     this.capabilities.assets.glb = unity.capabilities.objectTypes.includes('model') && unity.capabilities.features['scene.loadDraft'] !== false
+    this.capabilities.effects.weather = unity.capabilities.features['weather.enviro3'] === true
+    this.capabilities.effects.weatherRuntime = this.capabilities.effects.weather
+    this.capabilities.effects.atmosphere = this.capabilities.effects.weather
+    this.capabilities.effects.clouds = unity.capabilities.features['weather.clouds'] === true
+    this.capabilities.effects.fog = this.type !== 'gis' && unity.capabilities.features['weather.fog'] === true
     this.capabilities.streaming.nativeTileStreaming = this.type === 'gis'
     this.capabilities.culling.nativeTileFrustum = this.type === 'gis'
     this.unsubscribe.push(unity.on('runtimeError', ({ message }) => this.options.onStatus(`Unity 渲染异常：${message}`)))
@@ -156,14 +311,43 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   }
 
   override async loadScene(scene: SceneDefinition): Promise<void> {
+    this.cancelVegetationPick?.()
     if (!this.unity) throw new Error('Unity 运行时尚未连接')
     this.projectedInstanceIds = null
     this.focusSelectionVersion++
+    const openingScene = this.scene?.id !== scene.id
+    const previousImagery = this.scene && getEditorGisBaseLayer(this.scene, 'imagery')
+    const nextImagery = getEditorGisBaseLayer(scene, 'imagery')
+    const imageryTarget = !openingScene && previousImagery?.url !== nextImagery?.url
+      ? getEditorGisImageryCameraTarget(nextImagery) : null
+    const connection = this.unity
+    const epoch = ++this.sceneEpoch
     this.options.onStatus('正在加载 Unity 场景')
-    await this.loadUnityDraft(scene)
+    await this.loadUnityDraft(scene, false)
+    if (this.disposed || this.unity !== connection || epoch !== this.sceneEpoch) return
     await super.loadScene(scene)
+    await this.unity.describeWeather?.()
+    if (this.disposed || this.unity !== connection || epoch !== this.sceneEpoch) return
+    if (imageryTarget && this.cameraAvailable) {
+      await this.controlCamera({ action: 'visit', waypoint: imageryTarget })
+      if (this.disposed || this.unity !== connection || epoch !== this.sceneEpoch) return
+    }
     this.reportDeferredObjects()
     this.options.onStatus('Unity 场景已就绪')
+    const autoPlayPath = openingScene && scene.type === 'gis' && scene.cameraPaths?.find(path => path.enabled && path.autoPlay)
+    if (autoPlayPath && this.cameraAvailable) {
+      void this.controlCamera({ action: 'play', path: autoPlayPath }).catch(error => {
+        if (epoch === this.sceneEpoch) this.options.onStatus(error instanceof Error ? error.message : '自动播放相机路径失败')
+      })
+    }
+  }
+
+  override clearScene(): void {
+    this.sceneEpoch++
+    super.clearScene()
+    const unity = this.unity
+    this.operations = this.operations.then(async () => { await unity?.clearScene() })
+      .catch(error => this.options.onStatus(error instanceof Error ? error.message : 'Unity 清场失败'))
   }
 
   override async upsertObject(object: SceneObject): Promise<void> {
@@ -223,7 +407,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     if (!this.scene || this.type !== 'gis') return
     await this.operations
     const selection = this.selectedObjectId
-    await this.loadScene({ ...this.scene, layers })
+    await this.loadScene({ ...this.scene, layers, effects: [...this.effectMap.values()] })
     this.setSelectedObject(selection)
   }
 
@@ -233,8 +417,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.reportDeferredObjects()
     if (!previous || this.isDeferredInUnity(previous)) return
     if (!this.scene || !this.unity) return
-    const scene = this.scene
-    this.operations = this.operations.then(() => this.loadUnityDraft(scene))
+    const scene = this.scene, connection = this.unity
+    this.operations = this.operations.then(() => this.unity === connection && !this.disposed ? this.loadUnityDraft(scene) : undefined)
       .catch((error) => { this.options.onStatus(error instanceof Error ? error.message : 'Unity 对象删除同步失败') })
     // 桥接层需等待实际删除完成，保证撤销、创建失败补偿与随后重做不会交叉重载旧草稿。
     return this.operations
@@ -377,17 +561,55 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
 
   override async upsertEffect(effect: SceneDefinition['effects'][number]): Promise<void> {
     await super.upsertEffect(effect)
+    this.syncWeather()
     this.reportDeferredObjects()
   }
 
   override removeEffect(effectId: string): void {
     super.removeEffect(effectId)
+    this.syncWeather()
     this.reportDeferredObjects()
   }
 
+  canEditWeather(): boolean { return this.editingEnabled && this.scene?.settings.readOnly !== true }
+  get weatherRuntime() { return this.unity }
+  flushWeather(): void { this.unity?.weather.flush() }
+  retryWeather(): void { this.unity?.weather.retry() }
+  reconnectWeather(): Promise<void> {
+    if (this.reconnecting) return this.reconnecting
+    const container = this.container
+    const scene = this.options.getHost()?.getStore().getScene() ?? this.scene
+    if (!container || !scene || this.disposed) return Promise.reject(new Error('场景已关闭'))
+    this.reconnecting = (async () => {
+      this.unsubscribe.splice(0).forEach(stop => stop())
+      const previous = this.unity; this.unity = null
+      const keepPlayer = this.transport instanceof WebUnityTransport && previous !== null
+      if (previous) { try { await previous.disconnect({ keepTransport: keepPlayer }) } catch { /* A broken channel may not acknowledge clear. */ } }
+      else await this.transport?.disconnect()
+      if (this.disposed) return
+      if (keepPlayer) await this.connectProtocol()
+      else {
+        this.transport = null; this.video?.remove(); this.video = null
+        await this.mount(container)
+      }
+      if (this.disposed) return
+      // Read after connection: edits during reconnection must replay the latest Store snapshot.
+      await this.loadScene(this.options.getHost()?.getStore().getScene() ?? scene)
+    })().finally(() => { this.reconnecting = null })
+    return this.reconnecting
+  }
+  private syncWeather(): void {
+    if (!this.scene || !this.unity?.capabilities?.features['weather.enviro3']) return
+    this.unity.weather.set(getRuntimeEnviroWeatherConfig({ ...this.scene, effects: [...this.effectMap.values()] }))
+  }
   private reportDeferredObjects(): void {
     if (!this.scene) return
-    const warnings = getUnityDeferredRenderWarnings({ ...this.scene, effects: [...this.effectMap.values()] })
+    const warnings = getUnityDeferredRenderWarnings({ ...this.scene, effects: [...this.effectMap.values()] }, this.capabilities.effects.weather)
+    if (this.scene.vegetation?.enabled && !this.vegetationAvailable)
+      warnings.push('当前播放器需要更新后才能显示植被，种植配置已保存在场景中。')
+    if (this.type === 'gis' && (this.scene.settings.three as Record<string, unknown> | undefined)?.gis &&
+      this.unity?.capabilities?.features['gis.surfaceSettings'] !== true)
+      warnings.push('当前 Unity 播放器需更新后才能应用高程夸张、影像调色和场景原点；配置已保留。')
     const missing = this.scene.objects.filter((object) => object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
     if (missing.length) {
       warnings.push(`以下模型未在当前 Unity 美术版本发布，暂未显示，配置仍保留：${missing.slice(0, 6).map((object) => `${object.name}（资源 ${getUnityModelAssetId(object)}）`).join('、')}${missing.length > 6 ? `等 ${missing.length} 项` : ''}。请发布对应 Unity 资源后重新进入场景。`)
@@ -401,11 +623,21 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       (object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
   }
 
-  private async loadUnityDraft(scene: SceneDefinition): Promise<void> {
+  private async loadUnityDraft(scene: SceneDefinition, useCurrentEffects = true): Promise<void> {
     if (!this.unity) throw new Error('Unity 运行时尚未连接')
+    const unity = this.unity
+    const epoch = this.sceneEpoch
+    await checkVegetationTilesForUnity(scene.vegetation, this.options.mode,
+      unity.capabilities?.features['vegetation.publishedInstancing.v3'] === true)
+    if (unity !== this.unity || epoch !== this.sceneEpoch || this.disposed) throw new Error('植被所在场景已切换')
+    const storeScene = this.options.getHost()?.getStore().getScene()
+    const effects = storeScene?.id === scene.id ? storeScene.effects : [...this.effectMap.values()]
+    const current = storeScene?.id === scene.id ? storeScene : scene
+    const projectionScene = useCurrentEffects && scene.id === this.scene?.id
+      ? { ...scene, effects, settings: current.settings } : scene
     const draft = this.projectedInstanceIds === null
-      ? projectSceneForUnity(scene)
-      : projectSceneForUnityLoadedInstances(scene, this.projectedInstanceIds)
+      ? projectSceneForUnity(projectionScene)
+      : projectSceneForUnityLoadedInstances(projectionScene, this.projectedInstanceIds)
     const childrenByParent = new Map<string, string[]>()
     for (const object of draft.objects) {
       if (!object.parentInstanceId) continue
@@ -434,8 +666,9 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       }
       const objects = omitted.size ? draft.objects.filter((object) => !omitted.has(object.instanceId)) : draft.objects
       try {
-        await this.unity.loadScene({ ...draft, objects, resources })
+        await unity.loadScene({ ...draft, objects, resources })
         this.deferredDescendants = descendants
+        this.appliedCameraConfig = JSON.stringify(draft.camera)
         return
       }
       catch (error) {
@@ -454,6 +687,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   }
 
   override dispose(): void {
+    this.cancelVegetationPick?.()
+    this.sceneEpoch++
     this.unsubscribe.splice(0).forEach((stop) => stop())
     const unity = this.unity
     const transport = this.transport
@@ -466,8 +701,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.video?.remove()
     this.video = null
     this.renderContainer = null
-    if (unity) void unity.disconnect()
-    else void transport?.disconnect()
+    if (unity) void unity.disconnect().catch(() => undefined)
+    else void transport?.disconnect().catch(() => undefined)
     super.dispose()
   }
 }

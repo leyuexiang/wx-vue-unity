@@ -1,5 +1,5 @@
-import { toRaw, computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
-import { Search, Delete, Hide, View, Lock, Unlock } from '@element-plus/icons-vue'
+import { computed, inject, nextTick, toRaw, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { Connection, Search, Delete, Hide, View, Lock, Unlock } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { runConfirmedEditorCommand } from '@/integrations/scene/editorSceneCommandTransaction'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -20,6 +20,8 @@ import {
 } from '@/utils/renderScene/sceneModules'
 import { updateWidgetVisibleById } from '@/integrations/scene/widgetStructure'
 import { getWidgetRuntimePort } from '@/integrations/scene/widgetRuntime'
+import { listVegetationRegions } from '@/integrations/scene/editorVegetationRegions'
+import { VEGETATION_STRUCTURE_KEY } from '../../../vegetationStructure'
 import {
   getActiveSceneViewportHost,
   subscribeActiveSceneViewportHost,
@@ -132,10 +134,11 @@ export const useStructurePanel = () => {
     displayCount?: number
     searchHit?: boolean
   }
-  type StructureCategory = 'model' | 'three-dimensional-component' | 'widget'
+  type StructureCategory = SceneObjectStructureCategory | 'widget' | 'vegetation'
 
   const store = useSceneStore()
   const sceneWidgetStore = useSceneWidgetStore()
+  const vegetationStructure = inject(VEGETATION_STRUCTURE_KEY, null)
 
   const searchValue = ref('')
   const activeStructureCategory = ref<StructureCategory>('model')
@@ -197,6 +200,36 @@ export const useStructurePanel = () => {
     const timer = setTimeout(() => { hierarchySearchKeyword.value = keyword }, 180)
     onCleanup(() => clearTimeout(timer))
   })
+  const showVegetationCategory = computed(() => {
+    void scenePlatformStoreRevision.value
+    return !!vegetationStructure && scenePlatformStore.value?.getScene().type === 'gis'
+  })
+  const vegetationRegions = computed(() => {
+    void scenePlatformStoreRevision.value
+    if (!showVegetationCategory.value) return []
+    return vegetationStructure?.draft.value?.regions ?? listVegetationRegions(scenePlatformStore.value?.getVegetation()?.rules ?? [])
+  })
+  const filteredVegetationRegions = computed(() => {
+    const counts = new Map<string, number>()
+    const occurrences = new Map<string, number>()
+    const labels = { imagery: '影像种植', polygon: '多边形', corridor: '行道树', 'altitude-zonation': '海拔带' }
+    for (const region of vegetationRegions.value) {
+      const name = region.name.trim() || '未命名种植区域'
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+    return vegetationRegions.value.map((region) => {
+      const name = region.name.trim() || '未命名种植区域'
+      const occurrence = (occurrences.get(name) ?? 0) + 1
+      occurrences.set(name, occurrence)
+      return {
+        id: region.id,
+        name: (counts.get(name) ?? 0) > 1 ? `${name} (${occurrence})` : name,
+        kindLabel: labels[region.kind],
+      }
+    }).filter((region) => `${region.name} ${region.kindLabel}`.toLowerCase().includes(searchKeyword.value))
+  })
+  const selectedVegetationRegionId = computed(() => vegetationStructure?.draft.value?.selectedRegionId)
+  const vegetationSelectionDisabled = computed(() => vegetationStructure?.draft.value?.selectionDisabled ?? false)
   const currentTransformMaterialUuid = computed(() => store.currentTransformMaterialUuid)
   const transformMaterialRandomId = computed(() => store.transformMaterialRandomId)
 
@@ -408,7 +441,7 @@ export const useStructurePanel = () => {
   const hierarchyVisibleRows = computed(() => {
     const layout = hierarchyLayout.value
     const category = activeStructureCategory.value
-    if (!layout || category === 'widget') return null
+    if (!layout || category === 'widget' || category === 'vegetation') return null
     const section = layout.sections[category]
     const keyword = hierarchySearchKeyword.value
     const matches = hierarchyMatches.value?.pathIds
@@ -525,8 +558,8 @@ export const useStructurePanel = () => {
   }
 
   const autoSelectSceneObjectCategory = () => {
-    if (activeStructureCategory.value === 'widget') return
-    const currentCategory = activeStructureCategory.value as SceneObjectStructureCategory
+    const currentCategory = activeStructureCategory.value
+    if (currentCategory === 'widget' || currentCategory === 'vegetation') return
     const nextCategory = resolveAutomaticSceneObjectCategory(
       currentCategory,
       sceneObjectCategoryCounts.value.model,
@@ -751,6 +784,12 @@ export const useStructurePanel = () => {
       activeIcon: structureThreeDimensionalComponentActiveIcon,
       count: sceneObjectCategoryCounts.value['three-dimensional-component'],
     },
+    ...(showVegetationCategory.value ? [{
+      label: '种植区域',
+      value: 'vegetation' as const,
+      iconComponent: Connection,
+      count: vegetationRegions.value.length,
+    }] : []),
   ])
 
   watch(
@@ -827,8 +866,7 @@ export const useStructurePanel = () => {
     hideContextMenu()
   }
 
-  const clearSelectionFromBlank = (event: MouseEvent) => {
-    if (event.target !== event.currentTarget) return
+  const clearStructureSelection = () => {
     hideContextMenu()
     store.setCurrentObjectLayerId(null)
     store.setSelectedThreeMapObjectId(null)
@@ -847,8 +885,28 @@ export const useStructurePanel = () => {
       clearLegacySceneObjectSelection: () => getWidgetRuntimePort().clearSceneObjectSelection(),
       clearWidgetSelection: () => sceneWidgetStore.clearCurrentWidgetSelection(),
     }).catch((error) => {
-      appLogger.warn('StructurePanel', '空白点击同步场景选中态失败', error)
+      appLogger.warn('StructurePanel', '清除场景选中态失败', error)
     })
+  }
+
+  const clearSelectionFromBlank = (event: MouseEvent) => {
+    if (activeStructureCategory.value !== 'vegetation' && event.target === event.currentTarget) {
+      clearStructureSelection()
+    }
+  }
+
+  const clearVegetationSelectionFromBlank = (event: MouseEvent) => {
+    if (activeStructureCategory.value !== 'vegetation') return
+    const target = event.target
+    if (!(target instanceof Element) ||
+      target.closest('[data-structure-item], .el-input, .el-scrollbar__bar, button')) return
+    vegetationStructure?.clearRegionSelection()
+  }
+
+  const selectVegetationRegion = (id: string) => {
+    if (!vegetationStructure || vegetationSelectionDisabled.value) return
+    clearStructureSelection()
+    vegetationStructure.openRegion(id)
   }
 
   /**
@@ -2222,6 +2280,10 @@ export const useStructurePanel = () => {
     filteredWidgetLayerNodes,
     widgetLayerNodeCount,
     structureCategoryItems,
+    filteredVegetationRegions,
+    selectedVegetationRegionId,
+    vegetationSelectionDisabled,
+    selectVegetationRegion,
     selectStructureCategory,
     isGroupExpanded,
     isSceneLayerExpanded,
@@ -2232,6 +2294,7 @@ export const useStructurePanel = () => {
     adjustContextMenuPosition,
     handleGlobalPointerDown,
     clearSelectionFromBlank,
+    clearVegetationSelectionFromBlank,
     chooseMesh,
     focusMesh,
     resetSelectionBeforeWidgetPick,

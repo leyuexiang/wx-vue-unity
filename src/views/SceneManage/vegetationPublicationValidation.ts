@@ -1,5 +1,6 @@
 import type { Dim3dSceneDetailResponse } from '@/servers/manual/dim3d/api/scene'
 import type { Dim3dVegetationPublicationResponse } from '@/servers/manual/dim3d/api/vegetation'
+import { normalizeVegetationSystemDefinition, validateVegetationSystemDefinition } from '@/scene-platform/core/vegetation'
 
 /** 发布前只比较植被稳定身份，避免把地址、统计量等运行时字段当成版本依据。 */
 export interface SavedVegetationPublicationIdentity {
@@ -59,6 +60,12 @@ export function readSavedVegetationPublicationIdentity(
   }
 
   const publication = vegetation.publication
+  if (isJsonRecord(vegetation.streaming) && vegetation.streaming.renderMode === 'instanced') {
+    const native = normalizeVegetationSystemDefinition(vegetation)
+    const result = validateVegetationSystemDefinition(native, 'gis', { requireAssetUrls: false })
+    if (result.issues.length) throw new Error(`原生植被配置无效：${result.issues[0]}`)
+    return null
+  }
   if (publication === undefined || publication === null) {
     // 空植被草稿只表示用户打开过/编辑过植被入口，并没有可发布的生成结果。
     // 与编辑器生成按钮的门禁保持一致：只有启用规则才需要正式植被版本。
@@ -73,10 +80,14 @@ export function readSavedVegetationPublicationIdentity(
     throw new Error('场景保存的植被发布引用格式异常，无法校验植被版本。')
   }
 
+  const ruleVersion = requireIdentityString(publication.ruleVersion, '规则版本')
+  if (vegetation.enabled === true && typeof vegetation.ruleSetVersion === 'string' && vegetation.ruleSetVersion !== ruleVersion) {
+    throw new Error('已保存的植被规则有更新，请重新生成并发布植被后再发布场景。')
+  }
   return {
     version: requireIdentityString(publication.version, 'version'),
     // ruleVersion 是前端版本校验的必要组成；旧引用缺失时必须明确提示重新保存。
-    ruleVersion: requireIdentityString(publication.ruleVersion, 'ruleVersion'),
+    ruleVersion,
     sourceHash: requireIdentityString(publication.sourceHash, 'sourceHash'),
   }
 }

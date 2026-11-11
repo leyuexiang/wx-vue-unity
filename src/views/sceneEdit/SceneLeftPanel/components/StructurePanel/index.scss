@@ -50,6 +50,7 @@
   width: 48px;
   height: 42px;
   padding: 0;
+  color: var(--scene-edit-text-2);
   cursor: var(--scene-edit-cursor-pointer, pointer);
   background: transparent;
   border: 0;
@@ -62,6 +63,7 @@
   background: rgb(29 42 53 / 60%);
 }
 .scene-edit-structure-panel__nav-item.is-active {
+  color: var(--scene-edit-accent);
   background: #1d2a35;
   border-left-color: #5ab2a5;
 }
@@ -260,6 +262,19 @@
   background: rgb(96 196 184 / 10%);
   border-color: transparent;
   box-shadow: inset 2px 0 0 var(--scene-edit-accent);
+}
+.scene-edit-structure-item--vegetation {
+  gap: 8px;
+  text-align: left;
+}
+.scene-edit-structure-item--vegetation:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.scene-edit-structure-item__kind {
+  flex-shrink: 0;
+  color: var(--scene-edit-text-3);
+  font-size: 12px;
 }
 .scene-edit-structure-item--group {
   font-weight: 500;
