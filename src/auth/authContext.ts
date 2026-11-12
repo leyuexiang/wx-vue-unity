@@ -1,4 +1,5 @@
 import type { AuthContext, PlatformType } from './authTypes'
+import { parseManagementMenus } from './iotNavigation'
 
 /**
  * 鉴权上下文的最小读写契约。
@@ -26,6 +27,13 @@ export interface AuthContextStore {
  */
 export class MemoryAuthContext implements AuthContextStore {
   private context: Readonly<AuthContext> | null = null
+  private readonly listeners = new Set<() => void>()
+
+  /** 只通知身份快照变化；布局自行管理订阅生命周期，不把Vue或浏览器存储引入认证核心。 */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
 
   get(): Readonly<AuthContext> | null {
     return this.context
@@ -40,18 +48,21 @@ export class MemoryAuthContext implements AuthContextStore {
       clientId: context.clientId,
       permissions: Object.freeze([...context.permissions]),
       roles: Object.freeze([...context.roles]),
+      ...(context.menus === undefined ? {} : { menus: parseManagementMenus(context.menus) }),
       platformType: context.platformType,
       ...(context.tenantId === undefined ? {} : { tenantId: context.tenantId }),
       ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }),
       ...(context.traceId === undefined ? {} : { traceId: context.traceId }),
     }
     this.context = Object.freeze(snapshot)
+    this.listeners.forEach(listener => listener())
     return this.context
   }
 
   clear(): void {
     // 不向日志输出令牌或上下文内容，避免失效处理时把凭据泄露到控制台或埋点。
     this.context = null
+    this.listeners.forEach(listener => listener())
   }
 
   hasValidContext(now = Date.now()): boolean {

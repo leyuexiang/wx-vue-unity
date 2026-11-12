@@ -202,7 +202,7 @@ import { SCENE_PANEL_ENUM as LEFT_SCENE_PANEL_ENUM } from './enum'
 import { SCENE_PANEL_ENUM as RIGHT_SCENE_PANEL_ENUM } from '@/enums/scenePanelEnum'
 import { getCurrentManagementCapabilities } from '@/auth/capabilities'
 import './theme.scss'
-import { beginEditorSceneOperation, editorSceneOperation, holdEditorSceneForLeaseLoss } from '@/integrations/scene/editorSceneOperationGate'
+import { beginEditorSceneOperation, editorSceneOperation, flushEditorSceneEdits, holdEditorSceneForLeaseLoss } from '@/integrations/scene/editorSceneOperationGate'
 import { isUnityRenderMode } from '@/unity-runtime/renderMode'
 import { createEditorSceneExitController } from '@/integrations/scene/editorSceneExitController'
 
@@ -1258,6 +1258,8 @@ const handlePreviewScene = () => {
     ElMessage.warning('场景数据尚未成功加载，暂不能预览')
     return
   }
+  // 预览切换会清空选中态；先结算数据面板的防抖草稿，避免运行时读到旧温度或旧映射。
+  flushEditorSceneEdits()
   sceneOperationRef.value?.handlePreviewScene()
 }
 

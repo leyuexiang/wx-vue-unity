@@ -9,6 +9,7 @@
     :class="{ 'is-error': Boolean(errorMessage) }"
   >
     <el-input-number
+      ref="control"
       v-model="model"
       v-bind="$attrs"
       :controls="controls"
@@ -36,6 +37,8 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, onUpdated, ref } from 'vue'
+
 defineOptions({
   /** 关闭属性继承，保证传入的 Element Plus 属性只落在内部数字输入框上。 */
   inheritAttrs: false,
@@ -56,6 +59,17 @@ withDefaults(
     controls: false,
   },
 )
+
+// 依赖控件只在挂载时登记禁用语义；命令执行结束后需与实际输入状态同步，避免仍被辅助技术视为禁用。
+const control = ref<{ $el: HTMLElement } | null>(null)
+const syncNativeDisabledState = () => {
+  const input = control.value?.$el.querySelector('input')
+  if (!input) return
+  const value = String(input.disabled)
+  if (input.getAttribute('aria-disabled') !== value) input.setAttribute('aria-disabled', value)
+}
+onMounted(syncNativeDisabledState)
+onUpdated(syncNativeDisabledState)
 
 /** 图表字号等数字字段只向 Element Plus 传递数字或空值，避免控件内部出现字符串类型分支。 */
 const model = defineModel<number | null | undefined>()

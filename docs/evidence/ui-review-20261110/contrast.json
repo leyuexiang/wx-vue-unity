@@ -1,0 +1,94 @@
+{
+  "date": "2026-11-10",
+  "task": "UI-REVIEW-01",
+  "method": "依据样式值按相对亮度计算；透明文字先与指定纯色底混合。不含背景水印、渐变、抗锯齿或实际浏览器计算样式。",
+  "pairs": [
+    {
+      "label": "主正文",
+      "foreground": [
+        89,
+        89,
+        89
+      ],
+      "background": [
+        255,
+        255,
+        255
+      ],
+      "contrast": 7
+    },
+    {
+      "label": "次级正文",
+      "foreground": [
+        142,
+        142,
+        142
+      ],
+      "background": [
+        255,
+        255,
+        255
+      ],
+      "contrast": 3.28
+    },
+    {
+      "label": "面包屑",
+      "foreground": [
+        184,
+        185,
+        187
+      ],
+      "background": [
+        246,
+        248,
+        249
+      ],
+      "contrast": 1.84
+    },
+    {
+      "label": "主色白字",
+      "foreground": [
+        255,
+        255,
+        255
+      ],
+      "background": [
+        81,
+        161,
+        149
+      ],
+      "contrast": 3.05
+    },
+    {
+      "label": "一级分类60%白",
+      "foreground": [
+        185,
+        217,
+        213
+      ],
+      "background": [
+        81,
+        161,
+        149
+      ],
+      "contrast": 2.03
+    },
+    {
+      "label": "建议深绿按钮白字",
+      "foreground": [
+        255,
+        255,
+        255
+      ],
+      "background": [
+        40,
+        120,
+        109
+      ],
+      "contrast": 5.25
+    }
+  ],
+  "source": "https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html",
+  "runtime_styles_changed": false,
+  "live_browser_audit": false
+}

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IoT 管理 · 交互设计稿</title>
+  <style>
+    /* 沿用现有管理端的主色和布局节奏，正式接入时改用 manageShared 主题变量。 */
+    :root{--accent:#51a195;--accent-dark:#3b8278;--bg:#f4f7f8;--panel:#fff;--line:#e7ecef;--text:#34444b;--muted:#89979e;--soft:#edf6f4;--input:#fff;--good:#428d73;--warn:#be8131;--bad:#c96363;--shadow:0 12px 48px #243b4d17;color-scheme:light}
+    [data-theme=dark]{--bg:#15212a;--panel:#1d2c36;--line:#30414b;--text:#e1eaee;--muted:#93a7b1;--soft:#253e3e;--input:#17252e;--good:#8ad4ad;--warn:#edb56a;--bad:#ed9797;--shadow:0 12px 48px #0005;color-scheme:dark}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 "Microsoft YaHei","PingFang SC",sans-serif}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid #79bfb6;outline-offset:3px}svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;vertical-align:middle}button svg{margin-right:6px}.mono{font-family:Consolas,monospace;letter-spacing:.1px}.muted{color:var(--muted)}.small{font-size:12px}.hidden,[hidden]{display:none!important}
+    .sidebar{position:fixed;inset:0 auto 0 0;width:248px;background:var(--accent);color:white;display:flex;flex-direction:column;border-radius:0 16px 16px 0;overflow:hidden;z-index:5}.sidebar:before{content:"";position:absolute;width:420px;height:420px;left:-275px;top:43%;border:60px solid #ffffff0d;border-radius:50%;transform:rotate(32deg);pointer-events:none}.brand{display:flex;gap:10px;align-items:center;height:76px;padding:0 30px;font-size:18px;font-weight:600;letter-spacing:1px}.brand b{border:1px solid #ffffff70;width:27px;height:27px;display:grid;place-items:center;border-radius:7px;font-size:15px}.nav{padding:0 16px;overflow-y:auto;flex:1;position:relative}.category{padding:17px 16px 8px;color:#e1f0e8b8;font-size:12px;letter-spacing:1px}.nav button{width:100%;display:flex;align-items:center;gap:14px;padding:13px 18px;margin:3px 0;border:0;border-radius:8px;background:transparent;color:#eef9f6;font-size:15px;text-align:left;white-space:nowrap}.nav button svg{flex:none}.nav button[aria-current=page]{background:#ffffff35;box-shadow:inset 3px 0 0 #ffffffbd}.nav button:hover{background:#ffffff20}.nav button:disabled{opacity:.68}.bottom{border-top:1px solid #ffffff24;display:flex;justify-content:space-between;align-items:center;padding:18px 26px;font-size:12px}.bottom button{border:0;background:none;color:inherit;padding:3px}.bottom svg{margin:0}
+    main{margin-left:248px;padding:23px 28px 20px;min-height:100vh;display:flex;flex-direction:column;gap:18px}.topbar{display:flex;justify-content:space-between;align-items:center;gap:16px}.page-title{display:flex;align-items:baseline;gap:20px}h1{font-size:19px;color:var(--accent);margin:0;font-weight:600}.crumb{font-size:12px;color:var(--muted)}.btn{background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:7px 15px;line-height:1.5;white-space:nowrap}.btn:hover{border-color:var(--accent);color:var(--accent)}.primary{background:var(--accent);border-color:var(--accent);color:#fff}.primary:hover{background:var(--accent-dark);color:white}.link{border:0;background:none;color:var(--accent);padding:4px 8px;font-size:13px}.link:hover{text-decoration:underline}.danger{color:var(--bad)}.prototype{display:flex;align-items:center;gap:15px;font-size:11px;color:var(--muted);padding-bottom:2px}.prototype .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}.prototype span:last-child{margin-left:auto}.filters{display:flex;align-items:flex-end;gap:20px;background:var(--panel);border-radius:9px;padding:19px 20px;flex-wrap:wrap}.field{display:flex;flex-direction:column;gap:7px;flex:1;min-width:150px}.field label{font-size:12px;color:var(--muted)}input,select,textarea{width:100%;background:var(--input);border:1px solid var(--line);border-radius:5px;padding:8px 11px;line-height:1.5}input::placeholder,textarea::placeholder{color:#a5afb4}textarea{resize:vertical;min-height:100px}.filter-actions{display:flex;gap:10px;padding-bottom:1px}.table-panel{background:var(--panel);border-radius:9px;min-height:580px;flex:1;display:flex;flex-direction:column}.table-heading{padding:19px 20px 16px;display:flex;justify-content:space-between;align-items:center}.table-heading b{font-size:15px;font-weight:500}.table-heading small{color:var(--muted);font-weight:400;margin-left:9px;font-size:12px}.table-scroll{overflow:auto;padding:0 20px;flex:1}table{width:100%;border-collapse:collapse;text-align:left;white-space:nowrap}thead{background:var(--bg);color:var(--muted);font-size:12px}th{font-weight:400;padding:12px 14px}td{padding:18px 14px;border-bottom:1px solid var(--line);height:79px}tbody tr:hover{background:var(--soft)}td:first-child{min-width:205px}.name{font-weight:500;margin-bottom:3px}.tag{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:4px;font-size:12px;border:1px solid var(--line);color:var(--muted);background:var(--bg)}.tag.good{color:var(--good);background:color-mix(in srgb,var(--good) 8%,var(--panel));border-color:color-mix(in srgb,var(--good) 22%,var(--panel))}.tag.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 7%,var(--panel));border-color:color-mix(in srgb,var(--warn) 20%,var(--panel))}.tag.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 6%,var(--panel))}.tag .dot{width:5px;height:5px;border-radius:50%;background:currentColor}.protocol{font-size:11px;letter-spacing:.6px;font-family:Consolas,monospace}.row-actions{display:flex;align-items:center;gap:1px}.count-line{display:flex;gap:14px;color:var(--muted);font-size:12px}.count-line strong{font-weight:500;color:var(--text)}.tip{margin:18px 20px 0;padding:10px 12px;background:var(--bg);color:var(--muted);font-size:12px;border-radius:5px}.tip svg{width:15px;height:15px;margin-right:7px}.pagination{display:flex;justify-content:space-between;align-items:center;padding:20px;color:var(--muted);font-size:12px;gap:16px}.page-controls{display:flex;gap:8px;align-items:center}.page-controls .btn{padding:5px 10px}.page-controls select{width:100px;font-size:12px;padding:5px 8px}.copyright{text-align:center;font-size:11px;color:#b4bfc5;padding:0 0 6px}.scenario{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}.scenario button{padding:3px 9px;border:1px solid var(--line);border-radius:4px;background:var(--panel);font-size:11px}.scenario button.active{color:var(--accent);background:var(--soft);border-color:var(--accent)}.state{padding:90px 20px;text-align:center;color:var(--muted)}.state svg{width:44px;height:44px;margin-bottom:16px;stroke-width:1}.state h2{font-size:16px;font-weight:500;color:var(--text);margin:0 0 8px}.state p{font-size:12px;margin:0 0 20px}.loading{display:grid;gap:18px;padding:28px 20px}.skeleton{height:36px;border-radius:5px;background:linear-gradient(90deg,var(--bg),var(--line),var(--bg));background-size:200%;animation:pulse 1.8s infinite}@keyframes pulse{to{background-position:200% 0}}@media(prefers-reduced-motion:reduce){.skeleton{animation:none}}
+    .overlay{position:fixed;inset:0;z-index:20;background:#142b3842;display:flex;justify-content:flex-end}.drawer{width:570px;max-width:100%;background:var(--panel);height:100%;display:flex;flex-direction:column;box-shadow:var(--shadow)}.drawer-head{display:flex;align-items:flex-start;justify-content:space-between;padding:23px 26px 18px;border-bottom:1px solid var(--line)}.drawer-head h2{margin:0 0 4px;font-size:18px;font-weight:500}.icon-btn{background:transparent;border:0;padding:4px;color:var(--muted)}.icon-btn svg{margin:0}.drawer-body{padding:24px 26px;overflow-y:auto;flex:1}.drawer-foot{padding:17px 26px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}.drawer .field{margin-bottom:18px}.drawer .hint{color:var(--muted);font-size:11px;margin-top:4px}.section-label{font-size:12px;color:var(--muted);margin:20px 0 12px;display:flex;align-items:center;gap:8px}.section-label:after{content:"";flex:1;height:1px;background:var(--line)}.details{display:grid;grid-template-columns:115px 1fr;gap:18px 12px;font-size:13px}.details dt{color:var(--muted)}.details dd{margin:0;overflow-wrap:anywhere}.tabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin-bottom:24px}.tabs button{background:none;border:0;padding:0 0 10px;color:var(--muted);font-size:13px}.tabs button.active{color:var(--accent);border-bottom:2px solid var(--accent)}.notice{padding:12px 14px;border:1px solid var(--line);border-radius:5px;font-size:12px;color:var(--muted);background:var(--bg);margin:18px 0}.notice.warn{border-color:#cda05f60;color:var(--warn)}.check-result{font-size:12px;color:var(--good);margin-bottom:8px}.conflict{background:color-mix(in srgb,var(--warn) 9%,var(--panel));padding:12px;color:var(--warn);font-size:12px;border-radius:5px;margin-bottom:20px}.toast{position:fixed;bottom:25px;left:calc(50% + 90px);transform:translateX(-50%);z-index:40;padding:12px 22px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:6px;color:var(--text);font-size:13px}.confirm{margin:auto;width:430px;max-width:calc(100% - 32px);padding:25px;background:var(--panel);border-radius:9px;box-shadow:var(--shadow)}.confirm h2{margin:0;font-size:18px;font-weight:500}.confirm p{color:var(--muted);font-size:13px;margin:15px 0 24px}.confirm .actions{display:flex;justify-content:flex-end;gap:10px}.role-select{width:auto;background:transparent;border:0;font-size:11px;padding:1px;color:var(--muted)}
+    @media(min-width:1750px){main{padding:24px 34px}.table-panel{min-height:680px}.table-scroll th,.table-scroll td{padding-left:20px;padding-right:20px}}
+    @media(max-width:1100px){.sidebar{width:200px}.brand{padding:0 22px}.nav button{padding:12px}.category{padding-left:12px}main{margin-left:200px;padding:20px}.crumb{display:none}.count-line{gap:8px}.table-panel{min-height:520px}}
+    @media(max-width:760px){.sidebar{width:68px;border-radius:0 10px 10px 0}.brand{padding:22px}.brand span,.nav button span,.category,.bottom .username{display:none}.brand b{width:25px}.nav{padding:5px 9px}.nav button{padding:13px;justify-content:center}.nav button svg{width:20px}.bottom{padding:18px;justify-content:center}.bottom .more{display:none}main{margin-left:68px;padding:17px 14px;gap:14px}.page-title{gap:0}h1{font-size:18px}.topbar .btn{padding:7px 10px}.prototype span:last-child{display:none}.filters{padding:16px;gap:12px}.field{min-width:125px}.filters .field:first-child{flex-basis:100%}.table-heading{display:block}.count-line{margin-top:8px}.scenario{flex-wrap:wrap}.pagination{align-items:flex-start;flex-direction:column}.drawer{width:100%}.table-panel{min-height:480px}.toast{left:50%;width:80%;text-align:center}.drawer-head,.drawer-body,.drawer-foot{padding-left:20px;padding-right:20px}.tip{line-height:1.8}}
+  </style>
+</head>
+<body>
+  <aside class="sidebar" aria-label="管理导航">
+    <div class="brand"><b aria-hidden="true">Z</b><span>ZonSU Platform</span></div>
+    <nav class="nav">
+      <div class="category">资源管理</div>
+      <button type="button" disabled><i data-icon="box"></i><span>模型管理</span></button>
+      <button type="button" disabled><i data-icon="image"></i><span>图片管理</span></button>
+      <button type="button" disabled><i data-icon="layout"></i><span>模板管理</span></button>
+      <div class="category">场景管理</div>
+      <button type="button" disabled><i data-icon="scene"></i><span>场景列表</span></button>
+      <div class="category">物联网管理</div>
+      <button type="button" data-page="connectors" aria-current="page" title="连接器管理"><i data-icon="connection"></i><span>连接器管理</span></button>
+      <button type="button" data-page="bindings" title="设备绑定"><i data-icon="device"></i><span>设备绑定</span></button>
+      <button type="button" data-page="messages" title="接收记录"><i data-icon="records"></i><span>接收记录</span></button>
+    </nav>
+    <div class="bottom"><button type="button" id="theme" aria-label="切换暗色主题"><i data-icon="moon"></i></button><span class="username">◇　测试用户</span><span class="more">☰</span></div>
+  </aside>
+  <main>
+    <header class="topbar"><div class="page-title"><h1 id="title">连接器管理</h1><span class="crumb" id="crumb">物联网管理 / 连接器管理</span></div><button type="button" class="btn primary" id="create"><i data-icon="plus"></i>新增连接器</button></header>
+    <div class="prototype"><span class="dot"></span><span>交互设计稿 · 示例数据</span><span>未连接真实服务</span><span>视角：<select id="role" class="role-select" aria-label="预览权限"><option value="admin">管理员</option><option value="viewer">只读用户</option></select></span></div>
+    <form id="filters" class="filters">
+      <div class="field"><label for="keyword" id="keyword-label">连接器名称 / 编号</label><input id="keyword" placeholder="输入名称或连接器编号" autocomplete="off"></div>
+      <div class="field"><label for="protocol" id="protocol-label">连接协议</label><select id="protocol"><option value="">全部协议</option><option>MQTT</option><option>HTTPS</option><option>MOCK</option></select></div>
+      <div class="field"><label for="status" id="status-label">启用状态</label><select id="status"><option value="">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option></select></div>
+      <div class="filter-actions"><button class="btn primary" type="submit">查询</button><button class="btn" id="reset" type="button">重置</button></div>
+    </form>
+    <section class="table-panel" aria-label="管理列表">
+      <div class="table-heading"><b id="list-title">全部连接器<small id="list-total">共 4 个</small></b><div class="count-line" id="counts"></div></div>
+      <div id="data-region" class="table-scroll" aria-live="polite"></div>
+      <div class="tip" id="tip"><i data-icon="info"></i>启用状态代表管理员的配置意图；运行情况请在详情中查看，列表不会自动逐行探测。</div>
+      <footer class="pagination"><span id="total">共 4 条记录</span><div class="page-controls"><button type="button" class="btn" disabled aria-label="上一页">‹</button><button type="button" class="btn primary" aria-current="page">1</button><button type="button" class="btn" disabled aria-label="下一页">›</button><select aria-label="每页条数"><option>10 条/页</option></select></div></footer>
+    </section>
+    <div class="scenario" role="group" aria-label="设计状态预览"><span>状态预览</span><button type="button" data-state="default" class="active">默认</button><button type="button" data-state="empty">空数据</button><button type="button" data-state="loading">加载中</button><button type="button" data-state="error">加载失败</button><button type="button" data-state="forbidden">无权限</button><button type="button" data-state="conflict">版本冲突</button></div>
+    <div class="copyright">© 2026 ZonSU Platform. All rights reserved.</div>
+  </main>
+  <div id="overlay" class="overlay" hidden>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <header class="drawer-head"><div><h2 id="drawer-title"></h2><div class="small muted" id="drawer-subtitle"></div></div><button class="icon-btn" id="close" type="button" aria-label="关闭抽屉"><i data-icon="close"></i></button></header>
+      <div class="drawer-body" id="drawer-body"></div><footer class="drawer-foot" id="drawer-foot"></footer>
+    </section>
+  </div>
+  <div id="confirm-overlay" class="overlay" hidden><section class="confirm" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-text"></p><div class="actions"><button type="button" class="btn" id="confirm-cancel">取消</button><button type="button" class="btn primary" id="confirm-ok">确认</button></div></section></div>
+  <div id="toast" role="status" class="toast" hidden></div>
+  <script>
+    // 本文件为独立交互原型。所有记录均为示例，任何动作均不发送请求或持久化业务数据。
+    const icons={box:'<path d="m12 3 8 4v10l-8 4-8-4V7zM4 7l8 4 8-4M12 11v10"/>',image:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m5 17 5-6 4 4 3-3 3 4"/><circle cx="15" cy="8" r="1"/>',layout:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M10 9v11"/>',scene:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 3v3m6-3v3M9 11h6m-6 4h6"/>',connection:'<rect x="8" y="3" width="8" height="6" rx="1"/><path d="M12 9v5M5 14h14M5 14v4m14-4v4"/><rect x="2" y="18" width="6" height="4" rx="1"/><rect x="16" y="18" width="6" height="4" rx="1"/>',device:'<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M10 6h4m-3 12h2"/>',records:'<path d="M7 3h10l4 4v14H3V3h4m10 0v5h4M7 12h10M7 16h7"/>',plus:'<path d="M12 4v16M4 12h16"/>',moon:'<path d="M20 14a8 8 0 0 1-10-10A8 8 0 1 0 20 14Z"/>',close:'<path d="m6 6 12 12M18 6 6 18"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/>',empty:'<path d="m4 9 4-5h8l4 5v11H4zM4 10h5l1 3h4l1-3h5"/>',lock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/>',refresh:'<path d="M20 7v5h-5M4 17v-5h5M5 8a8 8 0 0 1 13-3l2 3M4 16l2 3a8 8 0 0 0 13-3"/>'};
+    const icon=name=>'<svg viewBox="0 0 24 24" aria-hidden="true">'+(icons[name]||icons.info)+'</svg>';
+    document.querySelectorAll('[data-icon]').forEach(el=>el.outerHTML=icon(el.dataset.icon));
+    const $=id=>document.getElementById(id), escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const connectors=[
+      {id:'demo-1',name:'园区环境监测',key:'park-environment',protocol:'MQTT',enabled:true,version:4,time:'2026/11/10 10:24',endpoint:'ssl://broker.example.com:8883',ref:'IOT_MQTT_PARK',topics:'park/telemetry'},
+      {id:'demo-2',name:'楼宇能耗采集',key:'building-energy',protocol:'MQTT',enabled:true,version:2,time:'2026/11/10 09:18',endpoint:'ssl://energy.example.com:8883',ref:'IOT_MQTT_ENERGY',topics:'building/energy'},
+      {id:'demo-3',name:'设备状态回调',key:'device-webhook',protocol:'HTTPS',enabled:true,version:1,time:'2026/11/09 16:42',endpoint:'https://callback.example.com',ref:'IOT_WEBHOOK_REF',topics:''},
+      {id:'demo-4',name:'联调模拟数据源',key:'integration-mock',protocol:'MOCK',enabled:false,version:1,time:'2026/11/08 14:06',endpoint:'',ref:'',topics:''}
+    ];
+    const bindings=[{id:'bind-1',name:'环境温湿度传感器',key:'sensor-env-001',device:'device-1001',connector:'园区环境监测',protocol:'MQTT',enabled:true,version:'v2',time:'2026/11/10 09:36'},{id:'bind-2',name:'楼宇电表',key:'meter-001',device:'device-1002',connector:'楼宇能耗采集',protocol:'MQTT',enabled:true,version:'v1',time:'2026/11/09 15:24'}];
+    const messages=[{id:'msg-1',name:'环境监测上报',key:'evt-demo-001',device:'sensor-env-001',connector:'园区环境监测',status:'PUBLISHED',statusText:'已发布',time:'2026/11/10 10:24:18',reason:'—'},{id:'msg-2',name:'能耗数据上报',key:'evt-demo-002',device:'meter-001',connector:'楼宇能耗采集',status:'FAILED',statusText:'处理失败',time:'2026/11/10 10:23:42',reason:'消息发布失败，等待人工检查'},{id:'msg-3',name:'设备状态回调',key:'evt-demo-003',device:'device-ext-003',connector:'设备状态回调',status:'CLAIMED',statusText:'处理中',time:'2026/11/10 10:22:36',reason:'等待处理结果'}];
+    const meta={connectors:{title:'连接器管理',list:'全部连接器',create:'新增连接器',hint:'启用状态代表管理员的配置意图；运行情况请在详情中查看，列表不会自动逐行探测。'},bindings:{title:'设备绑定',list:'全部设备绑定',create:'新增绑定',hint:'外部设备通过连接器映射到内部设备；点位映射与运行端场景对象身份分别维护。'},messages:{title:'接收记录',list:'全部接收记录',create:'',hint:'接收成功、事件发布与设备执行是不同结果；人工重放保留原事件身份。'}};
+    let page='connectors',state='default',query={keyword:'',protocol:'',status:''},activeItem=null,activeTab='basic',readOnly=false,opener=null,confirmAction=null,toastTimer;
+    const tag=(text,style='')=>'<span class="tag '+style+'"><span class="dot"></span>'+escape(text)+'</span>';
+    const rows=()=>page==='connectors'?connectors:page==='bindings'?bindings:messages;
+    const allFiltered=()=>rows().filter(r=>(!query.keyword||[r.name,r.key,r.connector,r.device].some(v=>String(v||'').includes(query.keyword)))&&(!query.protocol||r.protocol===query.protocol||r.connector===query.protocol)&&(!query.status||(page==='messages'?r.status===query.status:(r.enabled?'enabled':'disabled')===query.status)));
+    function toast(text){clearTimeout(toastTimer);$('toast').textContent=text;$('toast').hidden=false;toastTimer=setTimeout(()=>$('toast').hidden=true,4200)}
+    function render(){
+      const m=meta[page],data=state==='empty'?[]:allFiltered();
+      $('title').textContent=m.title;$('crumb').textContent='物联网管理 / '+m.title;$('create').innerHTML=icon('plus')+m.create;$('create').hidden=!m.create||readOnly||state==='forbidden';
+      document.querySelectorAll('[data-page]').forEach(el=>{if(el.dataset.page===page)el.setAttribute('aria-current','page');else el.removeAttribute('aria-current')});
+      $('list-title').innerHTML=m.list+'<small id="list-total">共 '+data.length+' '+(page==='connectors'?'个':'条')+'</small>';
+      $('counts').innerHTML=page==='connectors'?'本页概况　启用 <strong>'+data.filter(r=>r.enabled).length+'</strong>　<span>停用 <strong>'+data.filter(r=>!r.enabled).length+'</strong></span>':'';
+      $('tip').innerHTML=icon('info')+m.hint;$('total').textContent='共 '+data.length+' 条记录';
+      const empty=(type,title,description,button='重新加载')=>'<div class="state">'+icon(type)+'<h2>'+title+'</h2><p>'+description+'</p><button type="button" class="btn" data-retry>'+button+'</button></div>';
+      if(state==='loading'){$('data-region').innerHTML='<div class="loading" aria-busy="true">'+Array(4).fill('<div class="skeleton"></div>').join('')+'<span class="small muted">正在加载列表…</span></div>';return}
+      if(state==='error'){$('data-region').innerHTML=empty('refresh','列表加载失败','请检查连接后重试，筛选条件已为你保留。');return}
+      if(state==='forbidden'){$('data-region').innerHTML=empty('lock','暂无访问权限','请联系管理员确认物联网管理权限。','返回设计默认状态');return}
+      if(!data.length){$('data-region').innerHTML=empty('empty','暂无'+(page==='connectors'?'连接器':page==='bindings'?'设备绑定':'接收记录'),'可以调整筛选条件，或从首个管理操作开始。','清除筛选');return}
+      const headings=page==='connectors'?['连接器','协议','启用状态','运行观测','配置版本','最近更新','操作']:page==='bindings'?['外部设备','内部设备编号','所属连接器','映射版本','启用状态','最近更新','操作']:['事件','外部设备编号','所属连接器','处理结果','接收时间','失败摘要','操作'];
+      const content=data.map(r=>{
+        let cells='<td><div class="name">'+escape(r.name)+'</div><span class="small muted mono">'+escape(r.key)+'</span></td>';
+        if(page==='connectors')cells+='<td><span class="tag protocol">'+r.protocol+'</span></td><td>'+tag(r.enabled?'已启用':'已停用',r.enabled?'good':'')+'</td><td>'+tag(r.enabled?'未观测':'已停用')+'</td><td><span class="mono">v'+r.version+'</span></td><td class="small muted">'+r.time+'</td>';
+        if(page==='bindings')cells+='<td class="mono small">'+r.device+'</td><td>'+r.connector+'</td><td class="mono">'+r.version+'</td><td>'+tag(r.enabled?'已启用':'已停用',r.enabled?'good':'')+'</td><td class="small muted">'+r.time+'</td>';
+        if(page==='messages')cells+='<td class="mono small">'+r.device+'</td><td>'+r.connector+'</td><td>'+tag(r.statusText,r.status==='FAILED'?'bad':r.status==='PUBLISHED'?'good':'warn')+'</td><td class="small muted">'+r.time+'</td><td class="small muted">'+r.reason+'</td>';
+        const acts='<button class="link" type="button" data-action="view" data-id="'+r.id+'">查看</button>'+(page==='messages'?(!readOnly&&r.status==='FAILED'?'<button class="link" type="button" data-action="replay" data-id="'+r.id+'">重放</button>':''):readOnly?'':'<button class="link" type="button" data-action="edit" data-id="'+r.id+'">编辑</button><button class="link" type="button" data-action="toggle" data-id="'+r.id+'">'+(r.enabled?'停用':'启用')+'</button>');
+        return '<tr>'+cells+'<td><div class="row-actions">'+acts+'</div></td></tr>';
+      }).join('');
+      $('data-region').innerHTML='<table><thead><tr>'+headings.map(x=>'<th scope="col">'+x+'</th>').join('')+'</tr></thead><tbody>'+content+'</tbody></table>';
+    }
+    function setState(next){state=next;document.querySelectorAll('[data-state]').forEach(b=>b.classList.toggle('active',b.dataset.state===next));render();if(next==='conflict'&&page!=='messages'&&!readOnly)openDrawer('edit',rows()[0])}
+    function configureFilters(){
+      $('keyword-label').textContent=page==='connectors'?'连接器名称 / 编号':page==='bindings'?'外部设备名称 / 编号':'事件名称 / 编号';$('keyword').placeholder='输入'+(page==='connectors'?'名称或连接器编号':page==='bindings'?'外部设备编号':'事件编号');
+      $('protocol-label').textContent=page==='connectors'?'连接协议':'所属连接器';$('protocol').innerHTML=page==='connectors'?'<option value="">全部协议</option><option>MQTT</option><option>HTTPS</option><option>MOCK</option>':'<option value="">全部连接器</option>'+connectors.map(r=>'<option>'+r.name+'</option>').join('');
+      $('status-label').textContent=page==='messages'?'处理结果':'启用状态';$('status').innerHTML=page==='messages'?'<option value="">全部结果</option><option value="PUBLISHED">已发布</option><option value="FAILED">处理失败</option><option value="CLAIMED">处理中</option>':'<option value="">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option>';
+      // 显式清理字段，避免 id 为 reset 的按钮遮蔽浏览器表单的同名方法。
+      query={keyword:'',protocol:'',status:''};$('keyword').value='';$('protocol').value='';$('status').value='';
+    }
+    function field(label,id,value='',hint='',type='text'){return '<div class="field"><label for="'+id+'">'+label+'</label><input id="'+id+'" type="'+type+'" value="'+escape(value)+'" required>'+ (hint?'<span class="hint">'+hint+'</span>':'')+'</div>'}
+    function closeDrawer(){if($('drawer-body').dataset.edit==='true'&&$('drawer-body').dataset.dirty==='true'){ask('放弃未保存的修改？','关闭后会丢弃本次表单修改，列表中的原记录不变。',()=>{ $('drawer-body').dataset.dirty='false';closeDrawer()});return}$('overlay').hidden=true;if(opener?.isConnected)opener.focus()}
+    function openDrawer(mode,item){
+      opener=document.activeElement;activeItem=item||null;activeTab='basic';$('overlay').hidden=false;$('drawer-body').dataset.dirty='false';$('drawer-body').dataset.edit=mode==='view'?'false':'true';
+      $('drawer-title').textContent=mode==='view'?(item?.name||'记录详情'):mode==='edit'?'编辑'+(page==='connectors'?'连接器':'设备绑定'):page==='connectors'?'新增连接器':'新增设备绑定';
+      $('drawer-subtitle').textContent=mode==='view'?(item?.key||''):'修改仅作用于当前交互设计稿';
+      if(mode==='view'){renderDetail();$('drawer-foot').innerHTML='<button type="button" class="btn" data-close>关闭</button>'+(!readOnly&&page!=='messages'?'<button type="button" class="btn primary" data-edit-detail>编辑配置</button>':'')}
+      else renderForm(item);
+      $('close').focus();
+    }
+    function renderDetail(){
+      const r=activeItem;const tabs=page==='connectors'?['基本信息','运行观测','关联设备','接收记录']:['基本信息'];
+      const tabKeys=['basic','runtime','related','records'];
+      let body='<div class="tabs">'+tabs.map((v,i)=>'<button type="button" data-tab="'+tabKeys[i]+'" class="'+(activeTab===tabKeys[i]?'active':'')+'">'+v+'</button>').join('')+'</div>';
+      if(activeTab==='runtime')body+='<div class="notice">运行快照仅作观测，不代表设备及消息链路健康。</div><dl class="details"><dt>期望状态</dt><dd>'+tag(r.enabled?'已启用':'已停用',r.enabled?'good':'')+'</dd><dt>实际观测</dt><dd>'+tag(r.protocol==='MQTT'?'未观测':'不适用')+'</dd><dt>配置版本</dt><dd>v'+r.version+'</dd><dt>观测时间</dt><dd>—</dd><dt>租约有效</dt><dd>尚无已验证的运行观测</dd></dl><div class="notice warn">示例数据未连接真实服务，不能执行实际网络探测。</div><button type="button" class="btn" data-demo-test>连接测试说明</button>';
+      else if(activeTab==='related'||activeTab==='records')body+='<div class="notice">查看与 '+escape(r.name)+' 关联的'+(activeTab==='related'?'设备绑定':'接收记录')+'。</div><button type="button" class="btn primary" data-jump="'+(activeTab==='related'?'bindings':'messages')+'">进入'+(activeTab==='related'?'设备绑定':'接收记录')+'</button>';
+      else{const entries=page==='connectors'?[['显示名称',r.name],['业务编号',r.key],['连接协议',r.protocol],['连接地址',r.endpoint||'不适用'],['凭据引用',r.ref||'未配置'],['配置版本','v'+r.version],['主题',r.topics||'不适用'],['最近更新',r.time]]:page==='bindings'?[['外部设备',r.key],['内部设备',r.device],['所属连接器',r.connector],['映射版本',r.version],['场景 / 对象','暂未关联'],['最近更新',r.time]]:[['事件编号',r.key],['外部设备',r.device],['所属连接器',r.connector],['处理结果',r.statusText],['失败摘要',r.reason],['接收时间',r.time]];body+='<dl class="details">'+entries.map(([k,v])=>'<dt>'+k+'</dt><dd>'+escape(v)+'</dd>').join('')+'</dl><div class="notice">'+(page==='messages'?'只展示脱敏诊断信息；事件发布不等于设备执行。':'凭据只保存受控引用，页面不展示或存储连接密码。')+'</div>'}
+      $('drawer-body').innerHTML=body;
+    }
+    function renderForm(r){
+      let body=state==='conflict'?'<div class="conflict" role="alert">配置已被其他用户更新。本次输入将保留，请刷新服务器版本后确认。</div>':'';
+      body+='<form id="edit-form">'+field('显示名称','form-name',r?.name||'')+field(page==='connectors'?'连接器业务编号':'外部设备编号','form-key',r?.key||'','编号用于稳定关联，不应使用显示名称代替。');
+      if(page==='connectors')body+='<div class="field"><label for="form-protocol">连接协议</label><select id="form-protocol"><option>MQTT</option><option>HTTPS</option><option>MOCK</option></select></div>'+field('连接地址','form-endpoint',r?.endpoint||'','例如 ssl://broker.example.com:8883')+field('凭据引用','form-ref',r?.ref||'','仅填写已部署的受控引用，不填写密码或密钥。')+'<div class="field"><label for="form-topics">订阅主题</label><textarea id="form-topics" placeholder="每行一个确切主题">'+escape(r?.topics||'')+'</textarea><span class="hint">MQTT 使用 QoS 1；不默认支持主题通配符。</span></div><div id="check-result" class="check-result" role="status"></div><button type="button" class="btn" data-validate>校验配置结构</button>';
+      else body+='<div class="field"><label for="form-connector">所属连接器</label><select id="form-connector">'+connectors.map(c=>'<option>'+c.name+'</option>').join('')+'</select></div>'+field('内部设备编号','form-device',r?.device||'')+field('映射版本','form-version',r?.version||'v1')+'<div class="field"><label for="form-mapping">点位映射</label><textarea id="form-mapping">{\n  "temperature": {"scale": 1, "offset": 0}\n}</textarea><span class="hint">此处仅演示表单，正式映射格式以冻结接口合同为准。</span></div>';
+      body+='<div class="notice">新建默认停用。请先保存配置，再进行受限连接测试。</div></form>';$('drawer-body').innerHTML=body;
+      if(page==='connectors')$('form-protocol').value=r?.protocol||'MQTT';
+      $('drawer-foot').innerHTML='<button type="button" class="btn" data-close>取消</button><button type="button" class="btn primary" data-save>保存'+(page==='connectors'?'连接器':'绑定')+'</button>';
+    }
+    function save(){
+      if(readOnly)return;const form=$('edit-form');if(!form.reportValidity())return;
+      if(state==='conflict'){toast('版本冲突：已保留输入，请确认新版本后再保存。');return}
+      if(page==='bindings'){try{JSON.parse($('form-mapping').value)}catch{toast('点位映射不是有效的 JSON，请检查格式。');return}}
+      const r=activeItem||{id:'demo-'+Date.now(),enabled:false,version:page==='bindings'?'v1':0};r.name=$('form-name').value.trim();r.key=$('form-key').value.trim();r.time='2026/11/10 设计预览';
+      if(page==='connectors'){r.protocol=$('form-protocol').value;r.endpoint=$('form-endpoint').value;r.ref=$('form-ref').value;r.topics=$('form-topics').value;r.version+=1}else{r.connector=$('form-connector').value;r.device=$('form-device').value;r.version=$('form-version').value;r.protocol='MQTT'}
+      if(!activeItem)rows().unshift(r);$('drawer-body').dataset.dirty='false';closeDrawer();render();toast('已更新当前设计稿，未写入真实服务。');
+    }
+    function ask(title,text,action){confirmAction=action;$('confirm-title').textContent=title;$('confirm-text').textContent=text;$('confirm-overlay').hidden=false;$('confirm-cancel').focus()}
+    // 限制焦点留在当前对话框中，避免键盘操作误触被遮罩的列表。
+    document.addEventListener('keydown',e=>{const modal=!$('confirm-overlay').hidden?$('confirm-overlay'):!$('overlay').hidden?$('overlay'):null;if(!modal)return;if(e.key==='Escape'){e.preventDefault();if(!$('confirm-overlay').hidden)$('confirm-overlay').hidden=true;else closeDrawer()}if(e.key==='Tab'){const focusable=[...modal.querySelectorAll('button,input,select,textarea')].filter(el=>!el.disabled&&el.offsetParent!==null);if(!focusable.length)return;const first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}});
+    $('filters').addEventListener('submit',e=>{e.preventDefault();query={keyword:$('keyword').value.trim(),protocol:$('protocol').value,status:$('status').value};setState('default')});
+    $('reset').onclick=()=>{configureFilters();setState('default')};$('create').onclick=()=>openDrawer('create');$('close').onclick=closeDrawer;$('confirm-cancel').onclick=()=>{$('confirm-overlay').hidden=true;$('close').focus()};$('confirm-ok').onclick=()=>{$('confirm-overlay').hidden=true;confirmAction?.();confirmAction=null};
+    $('role').onchange=()=>{readOnly=$('role').value==='viewer';if(!$('overlay').hidden){$('drawer-body').dataset.dirty='false';closeDrawer()}render();toast(readOnly?'只读视角：隐藏新增、编辑、启停和重放动作。':'已切换为管理员设计视角。')};
+    $('theme').onclick=()=>{const dark=document.documentElement.dataset.theme!=='dark';document.documentElement.dataset.theme=dark?'dark':'light';$('theme').setAttribute('aria-label','切换'+(dark?'亮色':'暗色')+'主题')};
+    $('drawer-body').addEventListener('input',()=>{$('drawer-body').dataset.dirty='true'});
+    document.addEventListener('click',e=>{
+      const b=e.target.closest('button');if(!b)return;
+      if(b.dataset.page){page=b.dataset.page;configureFilters();setState('default')}
+      if(b.dataset.state)setState(b.dataset.state);
+      if(b.hasAttribute('data-retry')){configureFilters();setState('default')}
+      if(b.hasAttribute('data-close'))closeDrawer();
+      if(b.hasAttribute('data-save'))save();
+      if(b.hasAttribute('data-edit-detail'))openDrawer('edit',activeItem);
+      if(b.dataset.tab){activeTab=b.dataset.tab;renderDetail()}
+      if(b.dataset.jump){page=b.dataset.jump;closeDrawer();configureFilters();$('protocol').value=activeItem.name;query.protocol=activeItem.name;setState('default')}
+      if(b.hasAttribute('data-demo-test'))toast('设计说明：仅已保存配置可测试；需真实凭据、Broker 与主题权限。');
+      if(b.hasAttribute('data-validate')){if(!$('form-endpoint').value.startsWith('ssl://')&&$('form-protocol').value==='MQTT'){$('check-result').textContent='请使用 ssl://主机:端口 形式的连接地址。';$('check-result').style.color='var(--bad)'}else{$('check-result').textContent='配置结构演示通过；尚未验证凭据或网络连通性。';$('check-result').style.color='var(--good)'}}
+      if(b.dataset.action){const r=rows().find(x=>x.id===b.dataset.id);if(!r)return;if(b.dataset.action==='view')openDrawer('view',r);if(b.dataset.action==='edit'&&!readOnly)openDrawer('edit',r);if(b.dataset.action==='toggle'&&!readOnly)ask((r.enabled?'停用':'启用')+'“'+r.name+'”？','正式接入后将改变管理员期望的启用状态，实际会话状态需等待运行器确认。本次仅修改设计稿。',()=>{r.enabled=!r.enabled;render();toast('仅更新设计稿中的期望状态，未操作真实连接。')});if(b.dataset.action==='replay'&&!readOnly)ask('重放这条失败事件？','正式重放保留原事件编号，必须验证权限和实际消息通道。本设计稿不发送事件。',()=>toast('已展示重放确认流程，未发送真实事件。'))}
+    });
+    render();
+  </script>
+</body>
+</html>

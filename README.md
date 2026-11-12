@@ -19,7 +19,7 @@ pnpm install
 pnpm dev
 ```
 
-使用示例配置时访问 `http://localhost:5180/threeWeb/`，首页进入场景管理。独立模式登录表单支持运营端与租户端直接切换，认证成功后展示所选平台的内容，刷新保持该平台；登录、用户资料与退出共用 `VITE_DIM3D_SERVER_URL`；当前默认复用参考项目服务器。真实登录、场景与资源列表依赖业务后端；二维阶段无需启动 Unity。生产配置使用 `.env.production.local`，产物在 `dist/web-unity`，服务器须为配置的访问子路径提供路由回退。
+使用示例配置时访问 `http://localhost:18065/dts/`（端口由 `VITE_DEV_SERVER_PORT` 配置），首页进入场景管理。独立模式登录表单支持运营端与租户端直接切换，认证成功后展示所选平台的内容，刷新保持该平台；登录、用户资料与退出共用 `VITE_DIM3D_SERVER_URL`；当前默认复用参考项目服务器。真实登录、场景与资源列表依赖业务后端；二维阶段无需启动 Unity。生产配置使用 `.env.production.local`，产物在 `dist/web-unity`，服务器须将 `/dts/` 映射到前端产物，并为 `/dts/sceneManage` 等页面提供路由回退；旧 `/threeWeb/` 地址需在部署时同步切换。
 
 ```powershell
 pnpm type-check
@@ -37,7 +37,7 @@ $env:TWOD_SMOKE_REPORT='docs/migration/09-二维浏览器验收结果.json'
 pnpm test:browser:2d
 ```
 
-默认测试地址为 `http://127.0.0.1:5180/threeWeb`，其他访问路径通过 `TWOD_SMOKE_BASE_URL` 配置。第一阶段交付范围、验证边界和人工验收步骤见 [二维迁移交付与验收说明](docs/migration/10-第一阶段二维迁移交付与验收说明.md)。
+默认测试地址为 `http://127.0.0.1:5180/dts`，其他访问路径通过 `TWOD_SMOKE_BASE_URL` 配置。第一阶段交付范围、验证边界和人工验收步骤见 [二维迁移交付与验收说明](docs/migration/10-第一阶段二维迁移交付与验收说明.md)。
 
 二维视频的服务端配置见 `server/media.env.example`。开发中间件只用于本地接入；生产媒体服务需要单独设置服务端环境变量、业务鉴权和代理，不能与 Unity 云渲染通道混用。
 
@@ -53,3 +53,7 @@ pnpm test:browser:2d
 - Unity 编辑器直连端到端联调：`docs/migration/06-Unity编辑器直连端到端联调记录.md`
 
 独立鉴权协议、现有接口证据与后续环境切换步骤见 [独立登录鉴权设计与环境切换](docs/api/05-独立登录鉴权设计与环境切换.md)。旧独立管理鉴权接口已停用，不作为新后端开发依据。
+
+IoT三个正式管理页已纳入当前工程，资源/场景/IoT统一消费后端授权菜单树，规则见[管理导航统一设计](docs/design/02_管理导航统一设计.md)、[IoT界面设计](docs/design/01_IoT管理界面设计.md)及[验证记录](docs/evidence/nav01-20261110/README.md)。发布前先配置目标环境菜单、角色与套餐；旧[独立原型](docs/design/prototypes/iot-management.html)仅为历史交互参考，不能当真实接口验收。
+
+管理端视觉优化的现状评估、配色计算及优先级见[视觉评估](docs/design/03_管理端视觉优化评估.md)，目录以NAV-02恢复的三个一级业务分类为准；该评估尚未改动运行样式。

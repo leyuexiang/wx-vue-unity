@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "真实租户登录后保持三个同级分类和授权六页面",
+      "passed": true
+    },
+    {
+      "name": "连接器管理读取真实网关分页及空列表",
+      "passed": true
+    },
+    {
+      "name": "设备绑定读取真实网关分页及空列表",
+      "passed": true
+    },
+    {
+      "name": "接收记录读取真实网关分页及空列表",
+      "passed": true
+    },
+    {
+      "name": "原查看者无授权菜单时进入恢复页，不能挂载IoT业务",
+      "passed": true
+    }
+  ],
+  "pageErrors": [],
+  "scope": "本地正式Vue通过SSH隧道真实登录、授权与12525网关分页；未发布前端静态包，无接口替身"
+}

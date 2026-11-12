@@ -22,7 +22,7 @@ export interface EditorSceneObjectBehaviorRuntime {
   startPreview: () => Promise<void>
   /** 数据刷新写回 Runtime 前叠加预览显隐，避免请求结果覆盖交互动作的临时状态。 */
   applyPreviewOverridesToSceneObject: (object: SceneObject) => SceneObject
-  /** 数据轮询回写模型后，仅重评该对象的状态规则。 */
+  /** 记录模型数据并评估状态；已有在途评估时合并最新快照后立即返回，避免请求回流等待自身。 */
   observeSceneObject: (object: SceneObject) => Promise<void>
   /** 退出预览时取消后续动作并清空状态边沿缓存。 */
   exitPreview: () => void
@@ -40,6 +40,12 @@ interface PendingStatusEvaluation {
   sceneGeneration: number
   objectGeneration: number
   promise: Promise<void>
+}
+
+interface StatusEvaluationWave {
+  /** 同一对象的在途反馈链中每个规则块最多执行一次；跨对象回流仍合并到原对象的在途链。 */
+  executedBlocks: Set<string>
+  reportedCycle: boolean
 }
 
 const getConditionBlocks = (event: InteractionEvent): ConditionBlokList[] =>
@@ -66,6 +72,15 @@ export const createEditorSceneObjectBehaviorRuntime = (
   const previewVisibilityOverrides = new Map<string, boolean>()
   const previousStatusMatches = new Map<string, Map<string, boolean>>()
   const pendingStatusByObject = new Map<string, PendingStatusEvaluation>()
+  let knownObjectIds = new Set(store?.getScene().objects.map((object) => object.id) ?? [])
+  const invalidateObject = (objectId: string) => {
+    objectGenerationById.set(objectId, (objectGenerationById.get(objectId) ?? 0) + 1)
+    runtimeObjects.delete(objectId)
+    previousStatusMatches.delete(objectId)
+    pendingStatusByObject.delete(objectId)
+    previewVisibilitySnapshot.delete(objectId)
+    previewVisibilityOverrides.delete(objectId)
+  }
   const stopRuntimeInteraction = host?.getRuntime().subscribeObjectInteraction?.((event) => {
     if (disposed || (!previewActive && !previewEntering)) return
     void handleObjectInteraction(event.objectId, event.eventType)
@@ -77,15 +92,19 @@ export const createEditorSceneObjectBehaviorRuntime = (
       previousStatusMatches.clear()
       pendingStatusByObject.clear()
       objectGenerationById.clear()
+      knownObjectIds = new Set(event.scene.objects.map((object) => object.id))
       previewVisibilitySnapshot.clear()
       previewVisibilityOverrides.clear()
     } else if (event.type === 'objectRemoved') {
-      objectGenerationById.set(event.objectId, (objectGenerationById.get(event.objectId) ?? 0) + 1)
-      runtimeObjects.delete(event.objectId)
-      previousStatusMatches.delete(event.objectId)
-      pendingStatusByObject.delete(event.objectId)
-      previewVisibilitySnapshot.delete(event.objectId)
-      previewVisibilityOverrides.delete(event.objectId)
+      invalidateObject(event.objectId)
+      knownObjectIds.delete(event.objectId)
+    } else if (event.type === 'objectUpserted') {
+      knownObjectIds.add(event.object.id)
+    } else if (event.type === 'objectHierarchyChanged') {
+      // 结构面板批次删除及撤销不发布单对象事件；只在批次最终状态比较编号，避免高频数据回写扫描场景。
+      const currentIds = new Set(store?.getScene().objects.map((object) => object.id) ?? [])
+      for (const id of knownObjectIds) if (!currentIds.has(id)) invalidateObject(id)
+      knownObjectIds = currentIds
     }
   })
 
@@ -214,12 +233,13 @@ export const createEditorSceneObjectBehaviorRuntime = (
 
   /**
    * 只在状态条件从不满足变为满足时执行动作，避免轮询周期内反复提交同一显隐命令。
-   * 单对象在途时只保留最后一份数据快照，响应完成后最多补做一次最新评估。
+   * 单对象在途时只保留最后一份数据快照；同一反馈链每个规则块最多执行一次，后续独立变化可重新触发。
    */
   const evaluateObjectStatuses = async (
     object: SceneObject,
     targetSceneGeneration: number,
     targetObjectGeneration: number,
+    wave: StatusEvaluationWave,
   ) => {
     if (!store || !previewActive || !isObjectActive(object.id, targetSceneGeneration, targetObjectGeneration)) return
     const current = getCurrentRuntimeObject(object.id, object)
@@ -227,14 +247,14 @@ export const createEditorSceneObjectBehaviorRuntime = (
     const statusList = getEditorSceneObjectStatusList({ store, objectId: object.id, legacyEventList: [] })
     const previous = previousStatusMatches.get(object.id) ?? new Map<string, boolean>()
     const next = new Map<string, boolean>()
-    const triggeredBlocks: ConditionBlokList[] = []
+    const triggeredBlocks: Array<{ block: ConditionBlokList; key: string }> = []
 
     statusList.filter((status) => status.isOpen).forEach((status) => {
       getConditionBlocks(status).forEach((block) => {
         const key = status.id + ':' + block.id
         const matched = Boolean(evaluateConditionBlock(block, { kind: 'sceneObject', sceneObject: current, store }))
         next.set(key, matched)
-        if (matched && previous.get(key) !== true) triggeredBlocks.push(block)
+        if (matched && previous.get(key) !== true) triggeredBlocks.push({ block, key: JSON.stringify([object.id, status.id, block.id]) })
       })
     })
     previousStatusMatches.set(object.id, next)
@@ -244,7 +264,17 @@ export const createEditorSceneObjectBehaviorRuntime = (
     )
     await runInteractionSequence(
       triggeredBlocks,
-      (block) => evaluateBlock(object.id, current, block, targetSceneGeneration, targetObjectGeneration),
+      ({ block, key }) => {
+        if (wave.executedBlocks.has(key)) {
+          if (!wave.reportedCycle) {
+            wave.reportedCycle = true
+            appLogger.warn('EditorSceneObjectBehaviorRuntime', '检测到状态反馈循环，同一反馈链的规则块仅执行一次')
+          }
+          return
+        }
+        wave.executedBlocks.add(key)
+        return evaluateBlock(object.id, current, block, targetSceneGeneration, targetObjectGeneration)
+      },
       isActive,
     )
   }
@@ -255,9 +285,12 @@ export const createEditorSceneObjectBehaviorRuntime = (
     if (pending) {
       pending.latestObject = object
       pending.rerun = true
-      return pending.promise
+      // 结果回流可能正被当前动作等待；只登记最新快照，不能再等待同一条状态链而形成相互等待。
+      return Promise.resolve()
     }
 
+    // 每个对象独立持有反馈集合，其他对象的慢请求不能阻止该对象下一次独立阈值边沿。
+    const wave: StatusEvaluationWave = { executedBlocks: new Set<string>(), reportedCycle: false }
     const entry: PendingStatusEvaluation = {
       latestObject: object,
       rerun: false,
@@ -265,10 +298,12 @@ export const createEditorSceneObjectBehaviorRuntime = (
       objectGeneration: objectGenerationById.get(object.id) ?? 0,
       promise: Promise.resolve(),
     }
+    // 先登记再执行，覆盖引擎或请求边界同步回流的情况。
+    pendingStatusByObject.set(object.id, entry)
     entry.promise = (async () => {
       do {
         entry.rerun = false
-        await evaluateObjectStatuses(entry.latestObject, entry.sceneGeneration, entry.objectGeneration)
+        await evaluateObjectStatuses(entry.latestObject, entry.sceneGeneration, entry.objectGeneration, wave)
       } while (
         entry.rerun &&
         previewActive &&
@@ -281,7 +316,6 @@ export const createEditorSceneObjectBehaviorRuntime = (
     }).finally(() => {
       if (pendingStatusByObject.get(object.id) === entry) pendingStatusByObject.delete(object.id)
     })
-    pendingStatusByObject.set(object.id, entry)
     return entry.promise
   }
 
@@ -322,6 +356,9 @@ export const createEditorSceneObjectBehaviorRuntime = (
     exitPreview: () => {
       previewActive = false
       previewEntering = false
+      // 退出即开启新的状态代次；新预览不能排在旧确认后，也不能继承旧反馈链的执行集合。
+      sceneGeneration += 1
+      pendingStatusByObject.clear()
       previousStatusMatches.clear()
       const visibility = [...previewVisibilitySnapshot]
       previewVisibilitySnapshot.clear()
@@ -352,6 +389,7 @@ export const createEditorSceneObjectBehaviorRuntime = (
       runtimeObjects.clear()
       previousStatusMatches.clear()
       pendingStatusByObject.clear()
+      knownObjectIds.clear()
       objectGenerationById.clear()
       previewVisibilitySnapshot.clear()
       previewVisibilityOverrides.clear()

@@ -33,7 +33,8 @@ export default defineConfig(({ mode, command }) => {
     .filter(entry => entry.isDirectory() && existsSync(path.join(componentDirectory, entry.name, 'style/css.mjs')))
     .map(entry => `element-plus/es/components/${entry.name}/style/css`)
   return {
-  base: env.VITE_BASE_URL || '/',
+  // 未提供部署配置时也使用 /dts/，确保默认构建与开发入口、静态资源路径一致。
+  base: env.VITE_BASE_URL || '/dts/',
   plugins: [vue(), vueJsx(), tailwindcss(), boundedImportMetaFilter(),
     AutoImport({ imports: ['vue'], resolvers: [ElementPlusResolver()], dts: command === 'serve' ? 'src/auto-imports.d.ts' : false }),
     Components({ resolvers: [IconsResolver({ enabledCollections: ['ep'] }), ElementPlusResolver()], dts: command === 'serve' ? 'src/components.d.ts' : false }),

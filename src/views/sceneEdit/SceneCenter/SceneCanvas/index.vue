@@ -320,6 +320,9 @@ onMounted(async () => {
       ...overlay,
       refreshViewportLayout: refreshLayout,
       enterPreview: async () => {
+        // 面板刚提交的配置须先投影到数据运行态，避免旧结果在进入瞬间触发一次错误状态动作。
+        await restartSceneDataPolling()
+        if (disposed) throw new Error('编辑器已关闭，无法进入预览')
         objectBehaviorRuntime?.preparePreview()
         try {
           await overlay.enterPreview()

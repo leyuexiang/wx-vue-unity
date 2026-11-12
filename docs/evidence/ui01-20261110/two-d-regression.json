@@ -1,0 +1,580 @@
+{
+  "passed": true,
+  "testedAt": "2026-11-10T16:31:56.936Z",
+  "durationMs": 16316,
+  "backend": "隔离模拟接口",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "registryCount": 107,
+  "registry": [
+    {
+      "group": "Control",
+      "key": "VInput",
+      "loaded": true
+    },
+    {
+      "group": "Control",
+      "key": "VSelect",
+      "loaded": true
+    },
+    {
+      "group": "Control",
+      "key": "VButton",
+      "loaded": true
+    },
+    {
+      "group": "Control",
+      "key": "VRecordPagination",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGroupedBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VStackedBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGradientBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VBarSample",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VHorizontalBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VHorizontalGroupedBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VHorizontalStackedBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VHorizontalNegativeBar",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGaugeNeon",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGaugeClassic",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGaugeHalo",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGaugeSegmented",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGaugeCyan",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGaugeDark",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VAreaBasicLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VAreaSmoothLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VAreaGradientLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VAreaDualLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VAreaStackedLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VSankeyBasic",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VSankeyGradient",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VSankeyMultiStage",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VSankeyBiDirectional",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VSankeyEnergy",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VBasicTreemap",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VLineSample",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VPieSample",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VPieSolid",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VDonutSmooth",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VDonutSegmented",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VPieRoseRing",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VMultiLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VLineTrend",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VBasicCurveLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VMultiCurveLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VCurveTrendLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VGradientCurveLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VStepLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VDoubleYAxisLine",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VRadarHexagon",
+      "loaded": true
+    },
+    {
+      "group": "Chart",
+      "key": "VRadarCircle",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder01",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder02",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder03",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder04",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder05",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder06",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder07",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder08",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder09",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder10",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder11",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder12",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorder13",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorderGradient",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorderCornerGlow",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorderDividerGlass",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorderSolidDeepGreen",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorderSolidBlurredGold",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorderTranslucentBlurredGold",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VBorderTranslucentBlurredGoldCapsule",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorate01",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorate02",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorate03",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorate04",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorate05",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorate06",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorateGreenBar",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorateSlantedLine",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorateTitleDivider",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VDecorateCircle",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VClock",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VCloseIcon",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VFullScreen",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VPipelineH",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VPipelineV",
+      "loaded": true
+    },
+    {
+      "group": "Decorate",
+      "key": "VTimeCommon",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTextCommon",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTextGradient",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTextBarrage",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VInputsDate",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VInputsTab",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VInputsPagination",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VProgressBar",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VQuiz",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VPagePagination",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VPageMenu",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VIcon",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VImage",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VImageCarousel",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VIframe",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VVideo",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VNumber",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VFlipperNumber",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VCountDown",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTableList",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTableScrollBoard",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTablesBasic",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTableZebra",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTableScroll",
+      "loaded": true
+    },
+    {
+      "group": "Widget",
+      "key": "VTablePagination",
+      "loaded": true
+    }
+  ],
+  "groups": {
+    "Control": 4,
+    "Chart": 43,
+    "Decorate": 36,
+    "Widget": 24
+  },
+  "renderedCount": 0,
+  "staticDataBinding": true,
+  "reactiveDataConfig": true,
+  "remoteDataBinding": true,
+  "dataRequestCount": 1,
+  "groupingVisibilityUndo": true,
+  "realButtonEvent": true,
+  "previewStateRollback": true,
+  "dragUndoRedo": true,
+  "saveReload": true,
+  "previewRoundTrip": true,
+  "publishedPreview": true,
+  "managementRoutes": [
+    "/sceneManage",
+    "/resourceManage/model",
+    "/resourceManage/icon",
+    "/resourceManage/template",
+    "/plantingManage",
+    "/isolated-missing-route"
+  ],
+  "threeDUnchanged": true,
+  "routeErrors": [],
+  "errors": [],
+  "consoleErrors": [],
+  "failedModules": [],
+  "unityConnections": []
+}

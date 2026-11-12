@@ -27,6 +27,19 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('独立鉴权现代业务协议', () => {
+  it('参考资料响应保留授权菜单，缺失菜单不按角色合成入口', async () => {
+    const auth = await import('../standalone')
+    const { authContext } = await import('../authContext')
+    fetchMock.mockResolvedValueOnce(ok(tokens)).mockResolvedValueOnce(ok({
+      ...profile, menus: [{ id: '1', name: '后台资源', children: [{ id: '2', name: '模型', component: 'resourceManage/modelManage/index' }] }],
+    }))
+    await auth.loginStandalone('13800000000', 'fake')
+    expect(authContext.get()?.menus?.[0]?.name).toBe('后台资源')
+    auth.clearStandalone()
+    fetchMock.mockResolvedValueOnce(ok(tokens)).mockResolvedValueOnce(ok(profile))
+    await auth.loginStandalone('13800000000', 'fake')
+    expect(authContext.get()?.menus).toBeUndefined()
+  })
   it('兼容租户真实资料仅返回 userName，保留真实权限和空角色，刷新后仍可恢复', async () => {
     const auth = await import('../standalone')
     const { authContext } = await import('../authContext')

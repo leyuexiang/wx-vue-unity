@@ -1,0 +1,52 @@
+{
+  "task": "IOT-UI-01",
+  "date": "2026-11-10",
+  "scope": "独立 HTML 交互原型；示例数据；无真实接口、动态菜单或设备联调",
+  "checks": [
+    {
+      "name": "连接器筛选",
+      "passed": true
+    },
+    {
+      "name": "筛选重置",
+      "passed": true
+    },
+    {
+      "name": "详情抽屉",
+      "passed": true
+    },
+    {
+      "name": "运行观测边界",
+      "passed": true
+    },
+    {
+      "name": "设备绑定页面",
+      "passed": true
+    },
+    {
+      "name": "接收记录页面",
+      "passed": true
+    },
+    {
+      "name": "失败状态",
+      "passed": true
+    },
+    {
+      "name": "只读视角",
+      "passed": true
+    },
+    {
+      "name": "版本冲突保留表单",
+      "passed": true
+    },
+    {
+      "name": "暗色主题",
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "viewport": 1275,
+  "documentWidth": 1275,
+  "screenshot": "connectors.jpg",
+  "responsiveBreakpointTested": false
+}

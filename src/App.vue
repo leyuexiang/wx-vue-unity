@@ -12,7 +12,8 @@ import { restoreStandalone } from '@/auth/standalone'
 import StandaloneLogin from '@/views/StandaloneLogin.vue'
 import { redirectScenePreviewToTenantLogin } from '@/auth/scenePreviewLoginRedirect'
 import router from '@/router'
-import { getCurrentManagementCapabilities } from '@/auth/capabilities'
+import { canAccessManagementRoute, isManagementRouteName, getManagementFallbackRoute } from '@/auth/managementNavigation'
+import { loadManagementMenus } from '@/auth/loadManagementMenus'
 
 const appStore = useAppStore()
 const authReady = ref(false)
@@ -62,16 +63,15 @@ const closeEditorTab = () => {
 }
 
 /**
- * 首次路由解析早于 iframe 鉴权，认证完成后需在业务视图挂载前补做一次页面能力校验。
- * 这样租户直接打开模板地址时只会看到模型管理页，模板组件不会挂载也不会发起列表请求。
+ * 首次路由解析早于鉴权，业务视图挂载前统一检查管理菜单。
+ * 未授权页面不挂载或发送业务请求，空菜单进入独立恢复页，避免跳转循环。
  */
 const redirectRestrictedManagementRoute = async () => {
+  // 菜单在业务组件挂载前读取；首次地址栏进入同样经过授权校验。
+  await loadManagementMenus()
   await router.isReady()
-  if (
-    router.currentRoute.value.name === 'templateManage' &&
-    !getCurrentManagementCapabilities().template.canAccess
-  ) {
-    await router.replace({ name: 'modelManage' })
+  if (isManagementRouteName(router.currentRoute.value.name) && !canAccessManagementRoute(router.currentRoute.value.name)) {
+    await router.replace({ name: getManagementFallbackRoute() })
   }
 }
 

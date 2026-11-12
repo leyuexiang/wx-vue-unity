@@ -143,6 +143,8 @@ const executeSceneObjectVisibility = (
   const runtime = context.sceneRuntime
   if (runtime?.setObjectVisibleAsync) {
     return runtime.setObjectVisibleAsync(objectId, visible).then((applied) => {
+      // 等待引擎确认期间可能已退出预览或更换来源；旧回执不能重新写入当前会话状态。
+      if (!(context.isActive?.() ?? true)) return
       if (!applied) throw new Error('当前三维运行时未接入模型显隐动作')
       context.onSceneObjectVisibilityChanged?.(objectId, visible)
     })

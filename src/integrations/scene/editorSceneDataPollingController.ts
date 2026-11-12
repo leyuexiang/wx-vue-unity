@@ -7,6 +7,7 @@ import type renderScene from '@/utils/renderScene'
 import { getDataConfigRequests } from '@/utils/dataConfig'
 import { appLogger } from '@/utils/logger'
 import { SceneDataPollingRuntime } from './widgetRuntime'
+import { getWidgetPreviewState } from './widgetRuntime/ports'
 
 export interface EditorSceneDataPollingController {
   /** 启动编辑场景的数据任务；重复调用只会在配置确实变化时重建调度。 */
@@ -106,6 +107,8 @@ export const createEditorSceneDataPollingController = (
   let stopSceneStoreSubscription: (() => void) | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let lastSignature = ''
+  // 预览可能与防抖刷新同时到达；相同配置必须共享完成屏障，不能只按签名提前返回。
+  let refreshWork: Promise<void> = Promise.resolve()
   let started = false
   let disposed = false
 
@@ -144,9 +147,10 @@ export const createEditorSceneDataPollingController = (
   const refresh = async (force = false) => {
     if (disposed || !options.getViewportHost()) return
     const signature = readSignature()
-    if (!force && signature === lastSignature) return
+    if (!force && signature === lastSignature) return refreshWork
     lastSignature = signature
-    await pollingRuntime.start()
+    refreshWork = pollingRuntime.start()
+    await refreshWork
   }
 
   const scheduleRefresh = () => {
@@ -158,6 +162,15 @@ export const createEditorSceneDataPollingController = (
         appLogger.error('EditorSceneDataPollingController', '刷新场景数据请求任务失败', error)
       })
     }, refreshDelayMs)
+  }
+
+  /** 删除不能等待配置防抖，否则在途结果仍可能回填已删除的实例。 */
+  const refreshImmediately = () => {
+    if (refreshTimer !== null) clearTimeout(refreshTimer)
+    refreshTimer = null
+    void refresh().catch((error) => {
+      appLogger.error('EditorSceneDataPollingController', '协调场景数据任务失败', error)
+    })
   }
 
   const start = async () => {
@@ -173,12 +186,38 @@ export const createEditorSceneDataPollingController = (
           readSignature,
           scheduleRefresh,
         ),
+        watch(() => widgetStore.totalWidgets, (widgets, previous) => {
+          // 仓库通过替换集合批量删除组件；这里只比较编号，不监听高频结果和外观字段。
+          const ids = new Set((widgets ?? []).map((widget) => widget.id))
+          if (previous?.some((widget) => !ids.has(widget.id))) refreshImmediately()
+        }, { flush: 'sync' }),
+        watch(getWidgetPreviewState(), (preview, previous) => {
+          if (preview || !previous) return
+          // 先失效预览请求和参数覆盖，再由原配置重建编辑态任务；同步执行以保护随后恢复的二维快照。
+          pollingRuntime.stop()
+          lastSignature = ''
+          refreshWork = Promise.resolve()
+          scheduleRefresh()
+        }, { flush: 'sync' }),
       )
       const sceneStore = options.getViewportHost()?.getStore()
       stopSceneStoreSubscription =
         sceneStore?.subscribe((event) => {
+          if (event.type === 'sceneLoaded') {
+            // 即使新场景复用相同实例编号和配置，也不能继承旧场景的请求、缓存或传参。
+            pollingRuntime.stop()
+            lastSignature = ''
+            refreshWork = Promise.resolve()
+            refreshImmediately()
+            return
+          }
+          if (event.type === 'objectRemoved' || event.type === 'objectHierarchyChanged') {
+            // 结构面板删除、撤销与批量新增只发布最终层级事件，也必须同步撤销已移除目标的任务。
+            refreshImmediately()
+            return
+          }
           /** 仅实例集合或其数据配置可能变化的事件需要复核签名，选择和变换等结果会被签名过滤。 */
-          if (['sceneLoaded', 'objectUpserted', 'objectRemoved'].includes(event.type)) {
+          if (event.type === 'objectUpserted') {
             scheduleRefresh()
           }
         }) ?? null

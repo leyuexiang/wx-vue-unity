@@ -1,0 +1,18 @@
+{
+  "passed": false,
+  "phase": "node246-candidate",
+  "marker": "web-node246-candidate-mwblekx5",
+  "checks": [
+    {
+      "name": "证书及静态深链接校验",
+      "passed": false,
+      "errorType": "AssertionError",
+      "detail": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'https://127.0.0.1:9448/dts/'\n- '/dts/'\n"
+    }
+  ],
+  "pageErrors": [],
+  "apiMocked": false,
+  "deployedStaticFiles": true,
+  "certificatePinned": true,
+  "scope": "真实静态包、标准登录及12525服务；并发客户端只修改本次标记样本"
+}

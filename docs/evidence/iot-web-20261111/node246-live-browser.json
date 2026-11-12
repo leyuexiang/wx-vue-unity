@@ -1,0 +1,56 @@
+{
+  "passed": true,
+  "phase": "node246-live",
+  "marker": "web-node246-live-mwblqnbj",
+  "checks": [
+    {
+      "name": "证书及静态深链接校验",
+      "passed": true
+    },
+    {
+      "name": "真实登录与三个同级分类",
+      "passed": true
+    },
+    {
+      "name": "网页新增连接器并回读默认停用",
+      "passed": true
+    },
+    {
+      "name": "网页编辑及未保存取消",
+      "passed": true
+    },
+    {
+      "name": "真实并发冲突保留表单并允许核对后恢复保存",
+      "passed": true
+    },
+    {
+      "name": "更多菜单启停沿用真实确认及状态刷新",
+      "passed": true
+    },
+    {
+      "name": "网页创建绑定并保存完整十进制映射",
+      "passed": true
+    },
+    {
+      "name": "浏览器翻页请求真实数据库第二页",
+      "passed": true
+    },
+    {
+      "name": "网页删除绑定和连接器，样本从列表移除",
+      "passed": true
+    },
+    {
+      "name": "接收记录与既有资源场景入口读取",
+      "passed": true
+    },
+    {
+      "name": "深链接刷新后身份恢复，查看者仍不能进入IoT页面",
+      "passed": true
+    }
+  ],
+  "pageErrors": [],
+  "apiMocked": false,
+  "deployedStaticFiles": true,
+  "certificatePinned": true,
+  "scope": "真实静态包、标准登录及12525服务；并发客户端只修改本次标记样本"
+}

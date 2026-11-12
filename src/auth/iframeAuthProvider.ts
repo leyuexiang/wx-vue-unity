@@ -8,6 +8,7 @@ import {
   type PlatformType,
 } from './authTypes'
 import { MemoryAuthContext, type AuthContextStore } from './authContext'
+import { parseManagementMenus } from './iotNavigation'
 
 const DEFAULT_PROTOCOL_VERSION = '1.0'
 const DEFAULT_TIMEOUT_MS = 10_000
@@ -324,6 +325,7 @@ export class IframeAuthProvider implements AuthProvider {
       permissions,
       roles,
       platformType: data.platformType,
+      ...(data.menus === undefined ? {} : { menus: parseManagementMenus(data.menus) }),
       ...(expiresAt === undefined ? {} : { expiresAt }),
       ...(traceId === undefined ? {} : { traceId }),
     }
