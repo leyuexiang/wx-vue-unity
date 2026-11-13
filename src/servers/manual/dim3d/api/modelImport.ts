@@ -3,6 +3,7 @@ import { getDim3dHeaders } from './auth'
 import { DIM3D_ADMIN_API, DIM3D_API_PREFIX } from './constants'
 
 export const MODEL_IMPORT_URL = `${DIM3D_API_PREFIX}/dim3d/model-imports`
+export const MODEL_UPLOAD_URL = `${DIM3D_API_PREFIX}/dim3d/resource/uploadConvert`
 export const MODEL_IMPORT_MAX_BYTES = 500 * 1024 * 1024
 interface ModelImportBase {
   operationId: string
@@ -123,4 +124,95 @@ export async function receiveModelImport(body: ModelImportRequest, file: File, s
   await uploadModelSource(body, file, signal)
   onStage('正在提交导入任务')
   return submitModelImport(body.operationId, signal)
+}
+
+
+/** 自动等待封装在接口层，弹窗只消费转换完成或目录提交完成的结果。 */
+async function waitForModel(
+  initial: ModelImportStatus,
+  target: 'PUBLISHING' | 'COMMITTED',
+  signal: AbortSignal,
+): Promise<ModelImportStatus> {
+  const deadline = Date.now() + 10 * 60 * 1000
+  let state = validateImportStatus(initial, initial.operationId)
+  while (state.importStatus !== target && state.importStatus !== 'COMMITTED') {
+    signal.throwIfAborted()
+    if (['FAILED', 'CANCELLED', 'EXPIRED', 'CONFLICT'].includes(state.importStatus)) {
+      throw new Error(state.errorMessage || '模型处理失败，请重新上传')
+    }
+    if (Date.now() >= deadline) throw new Error('模型处理超时，请稍后重试')
+    // 单次轮询结束即移除监听器，关闭弹窗会立即释放定时器和在途请求。
+    await new Promise<void>((resolve, reject) => {
+      const cancel = () => { clearTimeout(timer); reject(signal.reason) }
+      const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve() }, 1500)
+      signal.addEventListener('abort', cancel, { once: true })
+      if (signal.aborted) cancel()
+    })
+    state = await getModelImport(initial.operationId, signal)
+    if (state.resourceId !== initial.resourceId) throw new Error('模型处理结果与上传资源不一致')
+  }
+  signal.throwIfAborted()
+  return state
+}
+
+/** 新增走单次业务上传，摘要、原包存储及转换入队由后端处理。 */
+export async function uploadModel(
+  file: File,
+  resourceBelong: 'SYSTEM' | 'MINE',
+  signal: AbortSignal,
+  onStage: (text: string) => void,
+  replaceResourceId?: string,
+): Promise<ModelImportStatus> {
+  if (!/\.zip$/i.test(file.name) || file.size <= 0 || file.size > MODEL_IMPORT_MAX_BYTES) {
+    throw new Error('请选择1字节至500MB的ZIP模型压缩包')
+  }
+  onStage('上传中')
+  let state: ModelImportStatus
+  if (replaceResourceId) {
+    // 既有编辑替换保留原资源及并发修订规则，细节收在适配层。
+    const { hashModelFile } = await import('@/utils/modelImport/hashFile')
+    const expectedRevision = await getModelResourceRevision(replaceResourceId, signal)
+    const sha256 = await hashModelFile(file, signal)
+    const operationId = globalThis.crypto.randomUUID()
+    state = await receiveModelImport({ operationId, operationType: 'REPLACE', resourceId: replaceResourceId,
+      expectedRevision, targetFormat: 'glb', source: { size: String(file.size), sha256 } }, file, signal, onStage)
+  } else {
+    const data = new FormData()
+    data.append('file', file)
+    data.append('resourceBelong', resourceBelong)
+    const response = await request<{ code: number; msg?: string; data: ModelImportStatus }>(
+      MODEL_UPLOAD_URL, {
+        method: 'POST', data, requestType: 'form', headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true,
+        signal, timeout: 10 * 60 * 1000,
+      })
+    if (response.code !== 200 || !response.data || !uuid.test(response.data.operationId)) {
+      throw new Error(response.msg || '模型上传失败')
+    }
+    state = response.data
+  }
+  onStage('处理中')
+  return waitForModel(state, 'PUBLISHING', signal)
+}
+
+/** 保存复用模型新增入口，原操作编号保证响应丢失后再次保存仍只有一条目录。 */
+export async function saveUploadedModel(
+  uploaded: ModelImportStatus,
+  directory: ModelImportDirectory,
+  signal: AbortSignal,
+  replacing = false,
+): Promise<ModelImportStatus> {
+  checkedId(uploaded.operationId)
+  let state: ModelImportStatus
+  if (replacing) state = await publishModelImport(uploaded.operationId, uploaded.resourceId, directory, signal)
+  else {
+    const response = await request<{ code: number; msg?: string; data: ModelImportStatus }>(
+      `${DIM3D_API_PREFIX}/dim3d/model/add`, {
+        method: 'POST', data: { ...directory, operationId: uploaded.operationId, resourceId: uploaded.resourceId },
+        headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true, signal,
+      })
+    if (response.code !== 200 || !response.data) throw new Error(response.msg || '模型保存失败')
+    state = validateImportStatus(response.data, uploaded.operationId)
+    if (state.resourceId !== uploaded.resourceId) throw new Error('模型保存结果与上传资源不一致')
+  }
+  return waitForModel(state, 'COMMITTED', signal)
 }

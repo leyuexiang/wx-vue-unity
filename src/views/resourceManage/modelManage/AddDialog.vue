@@ -166,9 +166,9 @@
               name="file"
               class="model-file-upload"
               accept=".zip"
-              :action="MODEL_IMPORT_URL"
+              :action="MODEL_UPLOAD_URL"
               :http-request="handleModelFileUpload"
-              :disabled="modelFileUploading || importInFlight"
+              :disabled="modelFileUploading || submitting"
               :before-upload="beforeFileUpload"
               :show-file-list="false"
             >
@@ -180,7 +180,7 @@
                   {{ modelFileUploadTitle }}
                 </span>
                 <span
-                  v-if="modelFileUploaded && !modelFileUploading && !importPending && (!importTask || importState?.importStatus === 'COMMITTED')"
+                  v-if="modelFileUploaded && !modelFileUploading"
                   class="model-file-upload__success"
                 >
                   上传成功，可点击重新选择
@@ -192,8 +192,6 @@
               </div>
             </el-upload>
             <p v-if="importMessage" role="status" class="model-import-status">{{ importMessage }}</p>
-            <el-button v-if="importTask" :loading="modelFileUploading" @click="refreshImport">查询导入结果</el-button>
-            <el-button v-if="importTask && importState && ['FAILED', 'CANCELLED', 'EXPIRED', 'CONFLICT'].includes(importState.importStatus)" :disabled="modelFileUploading" @click="clearFinishedImport">重新上传</el-button>
           </div>
         </el-form-item>
       </el-form>
@@ -206,7 +204,7 @@
           class="model-dialog__save"
           type="primary"
           :loading="submitting"
-          :disabled="modelFileUploading || submitting || (importPending && !readyToPublish) || importState?.importStatus === 'COMMITTED'"
+          :disabled="modelFileUploading || coverUploading || submitting"
           @click="handleConfirm(ruleFormRef)"
         >
           保存
@@ -242,10 +240,8 @@ import {
   type Dim3dModelDetailVo,
 } from '@/servers/manual/dim3d/api/model'
 import { getDim3dOssFileById, uploadDim3dOssFile } from '@/servers/manual/dim3d/api/oss'
-import { MODEL_IMPORT_URL, MODEL_IMPORT_MAX_BYTES, receiveModelImport, getModelImport, publishModelImport, getModelResourceRevision, type ModelImportRequest, type ModelImportStatus } from '@/servers/manual/dim3d/api/modelImport'
-import { hashModelFile } from '@/utils/modelImport/hashFile'
+import { MODEL_UPLOAD_URL, MODEL_IMPORT_MAX_BYTES, uploadModel, saveUploadedModel, type ModelImportStatus } from '@/servers/manual/dim3d/api/modelImport'
 import { modelPriceInCents } from '@/utils/modelImport/price'
-import { sha256WithoutWebCrypto } from '@/integrations/scene/recoverKnownSceneDependencies'
 import { getStandaloneSessionVersion } from '@/auth/standalone'
 import type { TransferListItem } from './index.vue'
 import { authContext } from '@/auth/authContext'
@@ -296,49 +292,11 @@ const ruleFormRef = ref<FormInstance>()
 const coverUploadRef = ref<UploadInstance>()
 const modelFileUploadRef = ref<UploadInstance>()
 const modelFileUploading = ref(false)
-// 只在当前弹窗保留原操作请求，网络重试复用UUID；不保存签名地址或文件字节。
-const importTask = shallowRef<ModelImportRequest>()
+// 上传结果只属于当前弹窗，内部阶段和轮询交给接口适配处理。
 const importMessage = ref('')
 const importState = shallowRef<ModelImportStatus>()
-// 目录详情的显式关联用于替换，列表编号是目录记录自身的主键。
 const linkedResourceId = ref<string>()
-const importInFlight = computed(() => ['QUEUED', 'VERIFYING_SOURCE', 'CONVERTING', 'VALIDATING', 'PUBLISHING'].includes(importState.value?.importStatus || ''))
-let importFilename = ''
-const recoveryKey = () => {
-  const token = authContext.get()?.accessToken
-  const context = String(props.editRecord?.resourceId ?? props.editRecord?.id ?? 'new')
-  return token ? `wx-model-import:resource-id-v1:${sha256WithoutWebCrypto(new TextEncoder().encode(token))}:${context}` : undefined
-}
-const persistImport = () => {
-  const key = recoveryKey()
-  if (!key || !importTask.value) return
-  try { sessionStorage.setItem(key, JSON.stringify({ request: importTask.value, filename: importFilename, scope: importScope })) } catch { /* 存储受限时仍可在当前弹窗查询。 */ }
-}
-let importRecoveryKey: string | undefined
-const restoreImport = () => {
-  const currentKey = recoveryKey()
-  if (importRecoveryKey !== currentKey) {
-    stopImportWait()
-    modelFileUploading.value = false
-    importTask.value = undefined
-    importState.value = undefined
-    importMessage.value = ''
-    importRecoveryKey = currentKey
-  }
-  if (importTask.value) return
-  try {
-    const key = recoveryKey(); if (!key) return
-    const stored = JSON.parse(sessionStorage.getItem(key) || 'null')
-    if (!stored || !/^[0-9a-f-]{36}$/.test(stored.request?.operationId) || !['SYSTEM', 'MINE'].includes(stored.scope)) return
-    importTask.value = stored.request
-    importFilename = String(stored.filename || '模型文件')
-    importScope = stored.scope
-    importSessionVersion = getStandaloneSessionVersion()
-    importMessage.value = '已恢复原导入任务，请查询结果；若原文件未传完，请重新选择同一文件继续。'
-  } catch { /* 无效本地缓存不创建资源或恢复可用状态。 */ }
-}
 const readyToPublish = computed(() => importState.value?.importStatus === 'PUBLISHING')
-const importPending = computed(() => Boolean(importTask.value && !['FAILED', 'CANCELLED', 'EXPIRED', 'CONFLICT', 'COMMITTED'].includes(importState.value?.importStatus || '')))
 let importController: AbortController | undefined
 let importGeneration = 0
 let importSessionVersion = 0
@@ -365,7 +323,7 @@ const paidFormOptions = [
 const rules = reactive<FormRules<RuleForm>>({
   modelName: [
     { required: true, message: '请输入模型名称', trigger: 'blur' },
-    { min: 1, max: 50, message: '模型名称长度在 1 到 50 个字符之间', trigger: 'blur' },
+    { min: 2, max: 50, message: '模型名称长度在 2 到 50 个字符之间', trigger: 'blur' },
   ],
   category: [{ required: true, message: '请选择模型分类', trigger: 'change' }],
   resourceBelong: [{ required: true, message: '请选择模型归属', trigger: 'change' }],
@@ -396,6 +354,8 @@ const rules = reactive<FormRules<RuleForm>>({
 const dialogImageUrl = ref('')
 const dialogVisible = ref(false)
 const coverUploading = ref(false)
+let coverController: AbortController | undefined
+onUnmounted(() => coverController?.abort())
 
 const currentCover = computed<CoverFile | undefined>(() => {
   const cover = ruleForm.coverList[0]
@@ -407,7 +367,7 @@ const currentCover = computed<CoverFile | undefined>(() => {
  * 模型上传控件关闭了 Element Plus 默认文件列表，必须把已上传文件名直接渲染到拖拽区。
  * 这样上传成功、编辑回显和重新选择三种状态都能在同一个区域给出明确反馈。
  */
-const modelFileUploaded = computed(() => Boolean((ruleForm.modelFileId || importState.value?.importStatus === 'COMMITTED') && ruleForm.fileList.length))
+const modelFileUploaded = computed(() => Boolean((ruleForm.modelFileId || readyToPublish.value) && ruleForm.fileList.length))
 const modelFileUploadTitle = computed(() => {
   if (modelFileUploading.value) return importMessage.value || '模型导入处理中'
   const fileName = ruleForm.fileList[0]?.name?.trim()
@@ -486,10 +446,8 @@ watch(
     // 关闭弹窗时不重置业务表单；下次打开同一条记录仍需重新回填。
     if (!visible) { stopImportWait(); modelFileUploading.value = false; return }
     linkedResourceId.value = undefined
-    restoreImport()
     if (!record) {
       resetRuleForm()
-      if (importTask.value && importScope) ruleForm.resourceBelong = importScope
       return
     }
 
@@ -500,7 +458,7 @@ watch(
     }
     // 列表记录可能没有 modelFileId；详情接口是编辑保存时保留原文件绑定的唯一可靠来源。
     let detail: Dim3dModelDetailVo | undefined
-    const resourceId = String(record.resourceId ?? record.id ?? '').trim()
+    const resourceId = String(record.id ?? '').trim()
     if (resourceId && !resourceId.startsWith('resource-')) {
       const [error, response] = await to(getDim3dModelInfo(resourceId))
       if (!error && requestId === editInitRequestId && props.visible) {
@@ -561,8 +519,8 @@ const beforeAvatarUpload: UploadProps['beforeUpload'] = (rawFile) => {
     ElMessage.error('当前仅能上传 png、jpg 或 webp 图片')
     return false
   }
-  if (rawFile.size / 1024 / 1024 >= 5) {
-    ElMessage.error('图片大小需小于 5MB')
+  if (rawFile.size <= 0 || rawFile.size > 5 * 1024 * 1024) {
+    ElMessage.error('图片大小需在1字节至5MB之间')
     return false
   }
   return true
@@ -574,10 +532,17 @@ const handlePictureCardPreview: UploadProps['onPreview'] = (uploadFile) => {
 }
 
 const handleCoverUpload = async (options: UploadRequestOptions) => {
+  // 封面和模型文件各自取消，两个并行上传不会互相中断，身份变化后不回填旧结果。
+  coverController?.abort()
+  const controller = new AbortController()
+  coverController = controller
+  const sessionVersion = getStandaloneSessionVersion()
+  const active = () => !controller.signal.aborted && sessionVersion === getStandaloneSessionVersion()
   coverUploading.value = true
 
   try {
-    const uploadResponse = await uploadDim3dOssFile(options.file as File)
+    const uploadResponse = await uploadDim3dOssFile(options.file as File, { signal: controller.signal })
+    if (!active()) return
     const ossId = uploadResponse.data?.ossId
     if (uploadResponse.code !== 200 || ossId === undefined || ossId === null) {
       throw new Error(uploadResponse.msg || '新封面上传失败')
@@ -599,6 +564,7 @@ const handleCoverUpload = async (options: UploadRequestOptions) => {
     ElMessage.success('封面上传成功')
     options.onSuccess?.(uploadResponse)
   } catch (error) {
+    if (!active()) return
     const err = error as Error
     ElMessage.error(err.message || '封面处理失败，请重试')
     const uploadError = Object.assign(new Error(err.message), {
@@ -609,7 +575,7 @@ const handleCoverUpload = async (options: UploadRequestOptions) => {
     }) as UploadError
     options.onError?.(uploadError)
   } finally {
-    coverUploading.value = false
+    if (coverController === controller) coverUploading.value = false
   }
 }
 
@@ -643,96 +609,44 @@ const createUploadError = (error: unknown, options: UploadRequestOptions): Uploa
   }) as UploadError
 }
 
-/** 只有原操作提交成功才绑定资源；入队和转换进度不能当作上传成功。 */
-const applyImportStatus = (state: ModelImportStatus, filename: string) => {
-  importState.value = state
-  if (state.importStatus === 'COMMITTED') {
-    persistImport()
-    ruleForm.fileList = [{ name: filename, status: 'success', response: { data: state.resourceId } }]
-    ruleFormRef.value?.clearValidate('fileList')
-    importMessage.value = '模型与目录已发布'
-    emit('updateList')
-  } else if (state.importStatus === 'PUBLISHING') {
-    importMessage.value = '产物校验完成，请保存目录信息以确认发布，已提交确认的任务可查询结果。'
-  } else if (['FAILED', 'CANCELLED', 'EXPIRED', 'CONFLICT'].includes(state.importStatus)) {
-    importMessage.value = state.errorMessage || '模型导入未完成，请联系管理员查看任务'
-  } else {
-    importMessage.value = state.importStatus === 'QUEUED' ? '原文件已上传并入队，转换发布完成前暂不能保存。可查询导入结果。' : '模型正在处理，发布完成后才能保存。'
-  }
-}
-const clearFinishedImport = () => {
-  const key = recoveryKey(); if (key) sessionStorage.removeItem(key)
-  importTask.value = undefined
-  importState.value = undefined
-  importMessage.value = ''
-  importFilename = ''
-}
-const refreshImport = async () => {
-  if (!importTask.value || modelFileUploading.value) return
-  if (getStandaloneSessionVersion() !== importSessionVersion) { ElMessage.error('登录身份已变化，请重新打开弹窗'); return }
-  const generation = ++importGeneration
-  importController = new AbortController()
-  modelFileUploading.value = true
-  try {
-    const state = await getModelImport(importTask.value.operationId, importController.signal)
-    if (generation === importGeneration && getStandaloneSessionVersion() === importSessionVersion) applyImportStatus(state, importFilename || '模型文件')
-  } catch (error) {
-    if (generation === importGeneration) ElMessage.error(error instanceof Error ? error.message : '查询失败，可再次查询')
-  } finally { if (generation === importGeneration) modelFileUploading.value = false }
-}
-
+/** 选中文件后自动等待转换，关闭或切换身份后禁止旧请求回填表单。 */
 const handleModelFileUpload = async (options: UploadRequestOptions) => {
-  if (modelFileUploading.value || importInFlight.value) {
-    options.onError?.(createUploadError(new Error('请先查询当前导入任务结果'), options)); return
-  }
+  if (modelFileUploading.value || submitting.value) return
   const checked = checkFile(options.file as UploadRawFile)
   if (!checked.success) { options.onError?.(createUploadError(new Error(checked.msg), options)); return }
-  const generation = ++importGeneration
+  if (props.editRecord && !linkedResourceId.value) {
+    options.onError?.(createUploadError(new Error('当前历史模型暂不支持文件替换'), options))
+    return
+  }
+  stopImportWait()
+  const generation = importGeneration
   importSessionVersion = getStandaloneSessionVersion()
   const sessionVersion = importSessionVersion
   importController = new AbortController()
-  const signal = importController.signal
   const active = () => generation === importGeneration && sessionVersion === getStandaloneSessionVersion()
+  const previous = importState.value
+  const previousFiles = [...ruleForm.fileList].filter(file => file.status === 'success')
   modelFileUploading.value = true
   try {
-    importMessage.value = '正在校验模型文件'
-    const sha256 = await hashModelFile(options.file as File, signal)
+    const scope = normalizeResourceBelong(ruleForm.resourceBelong)
+    const state = await uploadModel(options.file as File, scope, importController.signal,
+      text => { if (active()) importMessage.value = text }, props.editRecord ? linkedResourceId.value : undefined)
     if (!active()) return
-    const source = { size: String(options.file.size), sha256 }
-    // 已取得操作编号后不因网络失败自动新建任务；只有相同输入才能重放原请求。
-    if (importTask.value) {
-      if (importTask.value.source.sha256 !== sha256 || importTask.value.source.size !== source.size) throw new Error('当前仍有导入记录，请查询结果后关闭弹窗再上传其他文件')
-    } else {
-      importRecoveryKey = recoveryKey()
-      importFilename = options.file.name
-      importScope = normalizeResourceBelong(ruleForm.resourceBelong)
-      const filename = options.file.name.replace(/\.zip$/i, '').trim() || '模型'
-      const operationId = crypto.randomUUID()
-      if (props.editRecord) {
-        const resourceId = linkedResourceId.value
-        if (!resourceId) throw new Error('当前目录尚未关联受管资源，无法执行同编号替换')
-        const expectedRevision = await getModelResourceRevision(resourceId, signal)
-        if (!active()) return
-        importTask.value = { operationId, operationType: 'REPLACE', resourceId, expectedRevision, targetFormat: 'glb', source }
-      } else importTask.value = {
-        operationId, operationType: 'CREATE',
-        resourceScope: importScope === 'SYSTEM' ? 'GLOBAL_SYSTEM' : 'TENANT_SHARED',
-        metadata: { resourceName: (ruleForm.modelName.trim() || filename).slice(0, 150), assetName: filename.slice(0, 150) },
-        targetFormat: 'glb', source,
-      }
-      persistImport()
-    }
-    const state = await receiveModelImport(importTask.value, options.file as File, signal, text => { if (active()) importMessage.value = text })
-    if (!active()) return
-    applyImportStatus(state, options.file.name)
-    // 上传控件只确认传输完成，资源可用性由原操作的提交回执决定。
+    importScope = scope
+    importState.value = state
+    ruleForm.fileList = [{ name: options.file.name, status: 'success', response: { data: state.resourceId } }]
+    ruleFormRef.value?.clearValidate('fileList')
+    importMessage.value = '上传成功'
     options.onSuccess?.({ code: 200, data: state })
   } catch (error) {
     if (!active()) return
-    importMessage.value = '本次导入未确认完成，可查询原任务结果；网络重试复用同一任务。'
+    // 新文件失败时保留上一份已就绪的结果和业务表单，允许再次选择文件。
+    importState.value = previous
+    ruleForm.fileList = previousFiles
+    importMessage.value = error instanceof Error ? error.message : '模型上传失败，请重新选择文件'
     options.onError?.(createUploadError(error, options))
-    ElMessage.error(error instanceof Error ? error.message : '模型导入失败')
-  } finally { if (generation === importGeneration) modelFileUploading.value = false }
+    ElMessage.error(importMessage.value)
+  } finally { if (active()) modelFileUploading.value = false }
 }
 
 /** 表单使用分类 id，阶段三模型接口使用分类编码；转换只依赖分类接口返回的数据。 */
@@ -740,7 +654,7 @@ const getCategoryCode = (categoryId?: number) =>
   props.originCategories.find((category) => category.id === categoryId)?.typeCode?.trim() || ''
 
 const handleConfirm = async (formEl?: FormInstance) => {
-  if (!formEl) return
+  if (!formEl || submitting.value || coverUploading.value || modelFileUploading.value) return
   await formEl.validate(async (valid) => {
     if (!valid) {
       ElMessage.error('请填写完整信息')
@@ -769,7 +683,7 @@ const handleConfirm = async (formEl?: FormInstance) => {
       ElMessage.error('分类接口未返回有效分类编码')
       return
     }
-    if (importTask.value) {
+    if (importState.value) {
       const state = importState.value
       if (!readyToPublish.value || !state || normalizeResourceBelong(resourceBelong) !== importScope) {
         ElMessage.warning('请等待产物校验，并保持资源归属与上传时一致')
@@ -783,18 +697,20 @@ const handleConfirm = async (formEl?: FormInstance) => {
       importController = new AbortController()
       const generation = importGeneration
       try {
-        const result = await publishModelImport(state.operationId, state.resourceId, {
+        const result = await saveUploadedModel(state, {
           // 明确提交完整表单，空描述和空封面可清空旧值，金额按整数分传输。
           modelName: modelName.trim(), category: categoryCode, modelDesc: modelDesc.trim(),
           coverImageId: coverImageId || null, isPaid: normalizedIsPaid,
           price: normalizedIsPaid === 'PAID' ? modelPriceInCents(price) : 0,
-        }, importController.signal)
+        }, importController.signal, Boolean(props.editRecord))
         if (generation !== importGeneration || getStandaloneSessionVersion() !== importSessionVersion) return
-        applyImportStatus(result, importFilename || '模型文件')
-        if (result.importStatus === 'PUBLISHING') importMessage.value = '已受理发布，请查询最终结果'
+        importState.value = result
+        ElMessage.success(props.editRecord ? '模型修改成功' : '模型新增成功')
+        emit('updateList')
+        handelCancel(formEl)
       } catch (error) {
         if (generation === importGeneration) ElMessage.error(error instanceof Error ? error.message : '发布确认失败')
-      } finally { submitting.value = false }
+      } finally { if (generation === importGeneration) submitting.value = false }
       return
     }
     if (!modelFileId) {
@@ -808,12 +724,12 @@ const handleConfirm = async (formEl?: FormInstance) => {
       category: categoryCode,
       resourceBelong: normalizeResourceBelong(resourceBelong),
       isPaid: normalizedIsPaid,
-      price: normalizedIsPaid === 'PAID' ? Number(price) : void 0,
+      price: normalizedIsPaid === 'PAID' ? modelPriceInCents(price) : 0,
       coverImageId: coverImageId || void 0,
       modelFileId,
     }
 
-    const resourceId = props.editRecord?.resourceId ?? props.editRecord?.id
+    const resourceId = props.editRecord?.id
     if (props.editRecord && (resourceId === undefined || resourceId === null)) {
       ElMessage.error('缺少模型编号，无法修改')
       return
@@ -828,8 +744,6 @@ const handleConfirm = async (formEl?: FormInstance) => {
 
     ElMessage.success(props.editRecord ? '模型修改成功' : '模型新增成功')
     emit('updateList')
-    const key = recoveryKey(); if (key) sessionStorage.removeItem(key)
-    importTask.value = undefined
     importState.value = undefined
     importMessage.value = ''
     handelCancel(formEl)
@@ -837,9 +751,6 @@ const handleConfirm = async (formEl?: FormInstance) => {
 }
 
 const handelCancel = (formEl?: FormInstance) => {
-  if (importPending.value) {
-    ElMessage.warning('导入任务仍在服务器处理，关闭只停止本地等待。请查询完成后再保存模型。')
-  }
   handelRest(formEl)
   emit('update:visible', false)
 }
@@ -847,9 +758,12 @@ const handelCancel = (formEl?: FormInstance) => {
 const handelRest = (formEl?: FormInstance) => {
   // 关闭只终止本地等待，不假称已取消服务器任务；已提交的转换继续由后端负责。
   stopImportWait()
-  // 记录仅含原请求和文件名，按认证会话隔离；重开后先查询，绝不恢复未验证的可用资源编号。
-  persistImport()
+  coverController?.abort()
+  submitting.value = false
+  // 关闭后释放页面状态，后台已受理任务仍按既有到期及回收规则处理。
   importState.value = undefined
+  importMessage.value = ''
+  importScope = undefined
   coverUploading.value = false
   modelFileUploading.value = false
   coverUploadRef.value?.clearFiles()
