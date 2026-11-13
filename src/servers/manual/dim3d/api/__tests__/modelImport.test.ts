@@ -9,7 +9,7 @@ const state = (status: string) => ({ operationId: id, resourceId: '9007199254740
   operationStatus: status === 'COMMITTED' ? status : 'UPLOADING', targetFormat: 'glb', committedRevision: status === 'COMMITTED' ? '1' : null })
 const ok = (data: unknown) => ({ code: 200, data })
 beforeEach(() => { vi.resetModules(); mocks.request.mockReset(); vi.stubEnv('VITE_DIM3D_API_MODE', 'admin') })
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 it('鉴权创建、独立PUT和入队严格按顺序执行，PUT不携带业务令牌', async () => {
   mocks.request.mockResolvedValueOnce(ok(state('RECEIVING')))
     .mockResolvedValueOnce(ok({ uploadUrl: 'https://storage.invalid/source?sig=fake', method: 'PUT', sourceSize: '3', sourceSha256: body.source.sha256 }))
@@ -86,4 +86,52 @@ it('发布完整目录时保留封面字符串编号和整数分价格', async (
   mocks.request.mockResolvedValueOnce(ok(state('PUBLISHING')))
   await publishModelImport(id, '9007199254740993', directory, new AbortController().signal)
   expect(mocks.request.mock.calls[0]?.[1].data).toEqual(directory)
+})
+
+
+it('新增仅向业务后端上传文件并自动等待转换，保存自动等待提交', async () => {
+  const { uploadModel, saveUploadedModel } = await import('../modelImport')
+  mocks.request.mockResolvedValueOnce(ok(state('PUBLISHING')))
+  const signal = new AbortController().signal
+  const file = new File(['abc'], '模型.zip')
+  const uploaded = await uploadModel(file, 'MINE', signal, vi.fn())
+  expect(uploaded.importStatus).toBe('PUBLISHING')
+  expect(mocks.request.mock.calls[0]?.[0]).toMatch(/resource\/uploadConvert$/)
+  const uploadOptions = mocks.request.mock.calls[0]?.[1]
+  expect(uploadOptions.data.get('file')).toBe(file)
+  expect(uploadOptions.data.get('resourceBelong')).toBe('MINE')
+  expect(uploadOptions.headers['Content-Type']).toBeUndefined()
+  mocks.request.mockResolvedValueOnce(ok(state('COMMITTED')))
+  await expect(saveUploadedModel(uploaded, { modelName: '模型', category: 'sample' }, signal)).resolves.toMatchObject({ importStatus: 'COMMITTED' })
+  expect(mocks.request.mock.calls[1]?.[0]).toMatch(/model\/add$/)
+  expect(mocks.request.mock.calls[1]?.[1].data).toMatchObject({ operationId: id, resourceId: uploaded.resourceId })
+})
+
+
+it('转换和保存自动轮询到最终结果，关闭时释放等待', async () => {
+  const { uploadModel, saveUploadedModel } = await import('../modelImport')
+  vi.useFakeTimers()
+  mocks.request.mockResolvedValueOnce(ok(state('QUEUED'))).mockResolvedValueOnce(ok(state('PUBLISHING')))
+  const controller = new AbortController()
+  const pending = uploadModel(new File(['abc'], '模型.zip'), 'SYSTEM', controller.signal, vi.fn())
+  await vi.advanceTimersByTimeAsync(1500)
+  const uploaded = await pending
+  expect(uploaded.importStatus).toBe('PUBLISHING')
+  mocks.request.mockResolvedValueOnce(ok(state('PUBLISHING'))).mockResolvedValueOnce(ok(state('COMMITTED')))
+  const saving = saveUploadedModel(uploaded, { modelName: '模型', category: 'sample' }, controller.signal)
+  await vi.advanceTimersByTimeAsync(1500)
+  expect((await saving).committedRevision).toBe('1')
+  mocks.request.mockResolvedValueOnce(ok(state('QUEUED')))
+  const cancelled = uploadModel(new File(['abc'], '模型.zip'), 'MINE', controller.signal, vi.fn())
+  const rejection = expect(cancelled).rejects.toBeDefined()
+  await vi.advanceTimersByTimeAsync(0)
+  controller.abort()
+  await rejection
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('处理失败和状态改绑不会显示上传成功', async () => {
+  const { uploadModel } = await import('../modelImport')
+  mocks.request.mockResolvedValueOnce(ok({ ...state('FAILED'), errorMessage: '模型缺少贴图' }))
+  await expect(uploadModel(new File(['abc'], '模型.zip'), 'MINE', new AbortController().signal, vi.fn())).rejects.toThrow('缺少贴图')
 })
