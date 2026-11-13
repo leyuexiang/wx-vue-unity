@@ -15,6 +15,7 @@ import {
   mergeAjaxRequestWithGlobalConfig,
 } from './dataRequestHelpers'
 import { evaluateTemplateString, executeDynamicCode } from '@/utils/dynamicCode'
+import { getDataSourceAdapter } from './dataSourceAdapters'
 import { resolveDataRequestUrl } from './dataRequestUrl'
 import {
   assertEmbeddedDataRequestUrl,
@@ -589,6 +590,15 @@ export const executeComponentRequestByType = async (
       globalConfig,
       runtimeContext,
     )
+  }
+
+  if (dataConfig.request.type === 'adapter') {
+    const requestConfig = dataConfig.request.config as { adapterId?: unknown; config?: unknown }
+    const adapterId = typeof requestConfig.adapterId === 'string' ? requestConfig.adapterId : ''
+    const adapter = getDataSourceAdapter(adapterId)
+    const config = adapter?.normalizeConfig(requestConfig.config)
+    if (!adapter || !config) return { dimensions: [], source: [], raw: null }
+    return adapter.read(config)
   }
 
   return null

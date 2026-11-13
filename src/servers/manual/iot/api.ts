@@ -34,6 +34,8 @@ export interface IotPageQuery {
   connectorId?: string
   externalDeviceId?: string
   connectorType?: string
+  sceneId?: string
+  objectId?: string
   enabled?: boolean
   status?: string
 }
@@ -47,6 +49,24 @@ export interface IotRuntime {
   version?: number
 }
 export interface IotConnectionResult { outcome: string; elapsedMillis: number; topicCount: number; message: string }
+/** 三维状态投影返回的单点最新快照；空数据表示尚未收到或已经过期。 */
+export interface IotStateSnapshot {
+  eventId: string
+  schemaVersion: string
+  eventTime: string
+  tenantId: number
+  deviceId: string
+  pointCode: string
+  value: unknown
+  valueType: 'BOOLEAN' | 'NUMBER' | 'STRING' | string
+  unit?: string
+  quality?: string
+  sceneId?: string
+  objectId?: string
+  mappingRevision?: string
+  replay?: boolean
+  traceId?: string
+}
 interface Envelope<T> { code: number; data: T; msg?: string }
 export const IOT_RESOURCES = { connectors: 'connector', bindings: 'device-binding', messages: 'message-inbox' } as const
 export const IOT_VERSION_CONFLICT = 1009001011
@@ -124,6 +144,42 @@ export async function toggleIotConnector(id: string, enabled: boolean): Promise<
 export async function getIotRuntime(id: string): Promise<IotRuntime> {
   requirePermission('connectors', 'query')
   return call('connectors', 'runtime', 'GET', { id: iotId(id) })
+}
+
+/**
+ * 查询当前租户的设备点位最新值。
+ * 查询接口不复用管理菜单权限，服务端会单独校验 dimensions:iot-state:query。
+ */
+export async function getIotState(deviceId: string, pointCode: string, scope?: { sceneId: string; objectId: string }): Promise<IotStateSnapshot | null> {
+  const normalizedDeviceId = deviceId.trim()
+  const normalizedPointCode = pointCode.trim()
+  if (!normalizedDeviceId || !normalizedPointCode || normalizedDeviceId.length > 256 || normalizedPointCode.length > 256) {
+    throw new Error('设备编号和点位编码不能为空且不能超过256个字符')
+  }
+  const identity = authContext.get()
+  if (!identity || !authContext.hasValidContext()) throw new IotApiError(401, '请先登录')
+  const response = await request<Envelope<IotStateSnapshot | null>>(`${DIM3D_SERVER_URL}/admin-api/dimensions/iot-state/get`, {
+    method: 'GET',
+    // 运行时携带实例范围，服务端按已保存场景校验。
+    params: { deviceId: normalizedDeviceId, pointCode: normalizedPointCode, ...scope },
+    skipPlatformPath: true,
+  })
+  // 身份切换后的迟到快照不得写入新场景运行态。
+  const current = authContext.get()
+  if (!current || current.accessToken !== identity.accessToken || current.tenantId !== identity.tenantId ||
+      current.platformType !== identity.platformType) throw new Error('登录身份已变化，请重新进入页面')
+  if (response?.code !== 200) {
+    const code = Number(response?.code || 500)
+    throw new IotApiError(code, code === 401 || code === 403 ? '当前账号没有物联网状态查询权限' : '物联网状态查询失败')
+  }
+  if (response.data === null || response.data === undefined) return null
+  const snapshot = response.data
+  if (typeof snapshot !== 'object' || !snapshot.eventId || !snapshot.deviceId || !snapshot.pointCode ||
+      snapshot.deviceId !== normalizedDeviceId || snapshot.pointCode !== normalizedPointCode ||
+      typeof snapshot.eventTime !== 'string' || typeof snapshot.schemaVersion !== 'string') {
+    throw new Error('物联网状态响应格式错误')
+  }
+  return snapshot
 }
 export async function validateIotMqtt(form: Partial<IotRow>): Promise<void> {
   requirePermission('connectors', form.id ? 'update' : 'create')

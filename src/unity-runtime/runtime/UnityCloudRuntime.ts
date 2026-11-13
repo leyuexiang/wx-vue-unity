@@ -20,7 +20,7 @@ export interface UnityCloudRuntime {
   loadScene(scene: SceneDefinition): Promise<void>
   clearScene(): Promise<void>
   createObject(object: SceneObject): Promise<void>
-  updateObject(object: SceneObject): Promise<void>
+  updateObject(object: SceneObject, options?: { runtimeOnly?: boolean }): Promise<void>
   deleteObject(instanceId: string): Promise<void>
   setSelection(instanceId: string | null): void
   setGizmoMode(mode: UnityGizmoMode): Promise<void>

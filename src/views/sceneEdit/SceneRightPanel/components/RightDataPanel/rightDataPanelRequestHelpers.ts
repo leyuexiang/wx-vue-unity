@@ -11,7 +11,7 @@ import {
   normalizePublicRequestName,
   resolvePublicRequestName,
 } from '@/utils/dataConfig/publicRequestName'
-import { createEmptyAjaxRequest, createEmptyPublicRequest } from './rightDataPanelDataHelpers'
+import { createEmptyAdapterRequest, createEmptyAjaxRequest, createEmptyPublicRequest } from './rightDataPanelDataHelpers'
 
 export interface SwitchRequestTypeOptions {
   currentConfig: ComponentDataConfig
@@ -114,6 +114,8 @@ export function switchRequestTypeConfig(
     nextConfig.request.config = createEmptyAjaxRequest()
   } else if (options.nextRequestType === 'public') {
     nextConfig.request.config = { publicRequestId: options.previousPublicId }
+  } else if (options.nextRequestType === 'adapter') {
+    nextConfig.request.config = createEmptyAdapterRequest()
   }
 
   return { nextConfig, staticJsonText }

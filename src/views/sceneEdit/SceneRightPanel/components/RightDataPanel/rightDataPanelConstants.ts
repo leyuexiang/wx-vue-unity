@@ -21,6 +21,7 @@ export const RIGHT_DATA_PANEL_REQUEST_TYPE_OPTIONS = [
   { label: '动态请求', value: 'ajax' },
   { label: '公共接口', value: 'public' },
   { label: '数据集', value: 'dataset' },
+  { label: '扩展数据源', value: 'adapter' },
 ] as const
 
 /**
