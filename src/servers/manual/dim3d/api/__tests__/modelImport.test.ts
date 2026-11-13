@@ -78,3 +78,12 @@ it('发布确认复用原操作并校验资源编号', async () => {
   mocks.request.mockResolvedValueOnce(ok({ ...state('PUBLISHING'), resourceId: '102' }))
   await expect(publishModelImport(id, '9007199254740993', directory, signal)).rejects.toThrow('不一致')
 })
+
+it('发布完整目录时保留封面字符串编号和整数分价格', async () => {
+  const { publishModelImport } = await import('../modelImport')
+  const directory = { modelName: '完整模型', category: 'sample', modelDesc: '',
+    coverImageId: '9007199254740993', isPaid: 'PAID' as const, price: 1299 }
+  mocks.request.mockResolvedValueOnce(ok(state('PUBLISHING')))
+  await publishModelImport(id, '9007199254740993', directory, new AbortController().signal)
+  expect(mocks.request.mock.calls[0]?.[1].data).toEqual(directory)
+})

@@ -57,7 +57,7 @@
               class="model-dialog__control model-dialog__textarea"
               type="textarea"
               :rows="3"
-              maxlength="200"
+              maxlength="500"
               show-word-limit
               placeholder="请输入模型描述"
             />
@@ -244,6 +244,7 @@ import {
 import { getDim3dOssFileById, uploadDim3dOssFile } from '@/servers/manual/dim3d/api/oss'
 import { MODEL_IMPORT_URL, MODEL_IMPORT_MAX_BYTES, receiveModelImport, getModelImport, publishModelImport, getModelResourceRevision, type ModelImportRequest, type ModelImportStatus } from '@/servers/manual/dim3d/api/modelImport'
 import { hashModelFile } from '@/utils/modelImport/hashFile'
+import { modelPriceInCents } from '@/utils/modelImport/price'
 import { sha256WithoutWebCrypto } from '@/integrations/scene/recoverKnownSceneDependencies'
 import { getStandaloneSessionVersion } from '@/auth/standalone'
 import type { TransferListItem } from './index.vue'
@@ -373,8 +374,10 @@ const rules = reactive<FormRules<RuleForm>>({
     {
       validator: (_rule, value, callback) => {
         if (ruleForm.isPaid !== 'PAID') return callback()
-        const price = Number(value)
-        if (!Number.isFinite(price) || price < 0.01) return callback(new Error('请输入有效价格'))
+        // 与发布请求共用精确金额转换，拒绝额外小数位和数据库溢出。
+        try { modelPriceInCents(value) } catch (error) {
+          return callback(error instanceof Error ? error : new Error('请输入有效价格'))
+        }
         callback()
       },
       trigger: 'blur',
@@ -776,16 +779,15 @@ const handleConfirm = async (formEl?: FormInstance) => {
         ElMessage.warning('模型名称至少需要两个字符')
         return
       }
-      if (importTask.value.operationType === 'CREATE' && (normalizedIsPaid !== 'FREE' || coverImageId)) {
-        ElMessage.warning('新导入发布仅支持免费且无封面的模型')
-        return
-      }
       submitting.value = true
       importController = new AbortController()
       const generation = importGeneration
       try {
         const result = await publishModelImport(state.operationId, state.resourceId, {
-          modelName: modelName.trim(), category: categoryCode, modelDesc: modelDesc.trim() || undefined,
+          // 明确提交完整表单，空描述和空封面可清空旧值，金额按整数分传输。
+          modelName: modelName.trim(), category: categoryCode, modelDesc: modelDesc.trim(),
+          coverImageId: coverImageId || null, isPaid: normalizedIsPaid,
+          price: normalizedIsPaid === 'PAID' ? modelPriceInCents(price) : 0,
         }, importController.signal)
         if (generation !== importGeneration || getStandaloneSessionVersion() !== importSessionVersion) return
         applyImportStatus(result, importFilename || '模型文件')

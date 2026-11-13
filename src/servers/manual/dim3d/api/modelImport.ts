@@ -67,10 +67,21 @@ export async function submitModelImport(id: string, signal: AbortSignal) {
   return validateImportStatus(await api<ModelImportStatus>(`/${checkedId(id)}/submit`, signal, {}), id)
 }
 /** 确认目录字段后由原导入操作发布，回执仍要核对资源身份。 */
+export interface ModelImportDirectory {
+  modelName: string
+  category: string
+  modelDesc?: string
+  /** 省略时替换保留原封面，显式空值清空。编号保持字符串精度。 */
+  coverImageId?: string | null
+  isPaid?: 'FREE' | 'PAID'
+  /** 数据库整数分，付费时必填，免费时为零。 */
+  price?: number
+}
+
 export async function publishModelImport(
   id: string,
   resourceId: string,
-  directory: { modelName: string; category: string; modelDesc?: string },
+  directory: ModelImportDirectory,
   signal: AbortSignal,
 ) {
   const status = validateImportStatus(await api<ModelImportStatus>(`/${checkedId(id)}/publish`, signal, directory), id)
