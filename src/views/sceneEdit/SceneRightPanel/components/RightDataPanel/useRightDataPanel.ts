@@ -3,6 +3,7 @@ import { debounce } from 'lodash-es'
 import { ElMessage } from 'element-plus'
 import type {
   AjaxRequestConfig,
+  AdapterRequestConfig,
   ChartBindingRule,
   ComponentDataBindingRule,
   ComponentDataConfig,
@@ -27,6 +28,7 @@ import {
   setWidgetDataConfigById,
 } from '@/utils/dataConfig'
 import { resolvePublicRequestName } from '@/utils/dataConfig/publicRequestName'
+import { getDataSourceAdapter, listDataSourceAdapters, type DataSourceAdapterField, type DataSourceAdapterOption } from '@/utils/dataConfig/dataSourceAdapters'
 import { useSceneRequestStore, useSceneStore, useSceneWidgetStore } from '@/stores/sceneEditStore'
 import type {
   RecordPaginationBinding,
@@ -338,6 +340,7 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
     if (changed && syncCurrent) syncActiveRequestItem()
     activeRequestId.value = item.id
     editableConfig.value = item.config
+    if (item.config.request.type === 'adapter') void loadAdapterOptions()
     staticJsonText.value = buildRightDataPanelStaticJsonText(
       item.config,
       item.config.request.type === 'static' && isChartWidgetSelection.value
@@ -629,7 +632,77 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
     )
   })
 
-  const requestTypeOptions = computed(() => RIGHT_DATA_PANEL_REQUEST_TYPE_OPTIONS)
+  // 当前场景调度器仅对三维实例启用物联网实时数据源。
+  const requestTypeOptions = computed(() => selectionKind.value === 'object'
+    ? RIGHT_DATA_PANEL_REQUEST_TYPE_OPTIONS
+    : RIGHT_DATA_PANEL_REQUEST_TYPE_OPTIONS.filter(item => item.value !== 'adapter'))
+
+  const adapterConfig = computed<AdapterRequestConfig | null>(() => {
+    if (editableConfig.value?.request.type !== 'adapter') return null
+    return editableConfig.value.request.config as AdapterRequestConfig
+  })
+  const adapterOptions = computed(() => listDataSourceAdapters().map((item) => ({ value: item.id, label: item.label })))
+  const adapterFields = computed<readonly DataSourceAdapterField[]>(() =>
+    adapterConfig.value?.adapterId ? getDataSourceAdapter(adapterConfig.value.adapterId)?.configFields || [] : [],
+  )
+  const adapterFieldOptions = ref<Record<string, DataSourceAdapterOption[]>>({})
+  const adapterOptionsLoading = ref(false)
+  let adapterOptionsRequest = 0
+  const loadAdapterOptions = async () => {
+    const requestId = ++adapterOptionsRequest
+    adapterFieldOptions.value = {}
+    adapterOptionsLoading.value = false
+    const adapterId = adapterConfig.value?.adapterId
+    const adapter = adapterId ? getDataSourceAdapter(adapterId) : undefined
+    if (!adapter?.loadConfigOptions) {
+      adapterFieldOptions.value = {}
+      return
+    }
+    adapterOptionsLoading.value = true
+    try {
+      const owner = adapterConfig.value
+      const result = await adapter.loadConfigOptions({
+        sceneId: scenePlatformStore.value?.getScene().id,
+        objectId: selectedSceneObjectId.value ?? undefined,
+      })
+      if (requestId === adapterOptionsRequest && adapterConfig.value === owner) adapterFieldOptions.value = result
+    } catch {
+      // 请求失败时保持空候选项，结束加载状态。
+    } finally {
+      if (requestId === adapterOptionsRequest) adapterOptionsLoading.value = false
+    }
+  }
+  const getAdapterFieldValue = (key: string) => {
+    const config = adapterConfig.value?.config
+    return config && typeof config === 'object' ? (config as Record<string, unknown>)[key] : undefined
+  }
+  const getAdapterFieldOptions = (field: DataSourceAdapterField) => {
+    const options = adapterFieldOptions.value[field.key] || field.options || []
+    const dependency = field.dependsOn ? String(getAdapterFieldValue(field.dependsOn) || '') : ''
+    return dependency ? options.filter((item) => !item.dependsOnValue || item.dependsOnValue === dependency) : options
+  }
+  const updateAdapterField = (key: string, value: unknown) => {
+    if (!adapterConfig.value || !adapterConfig.value.config || typeof adapterConfig.value.config !== 'object') return
+    const config = adapterConfig.value.config as Record<string, unknown>
+    config[key] = value
+    // 根据适配器声明清除已失效的联动字段。
+    for (const field of adapterFields.value) {
+      if (field.dependsOn === key && !getAdapterFieldOptions(field).some(item => item.value === config[field.key])) {
+        config[field.key] = ''
+      }
+    }
+    persistSoon()
+  }
+  const updateAdapterId = (value: string | number | boolean | undefined) => {
+    if (!adapterConfig.value) return
+    adapterConfig.value.adapterId = String(value || '')
+    adapterConfig.value.config = adapterOptions.value.some((item) => item.value === adapterConfig.value?.adapterId)
+      ? listDataSourceAdapters().find((item) => item.id === adapterConfig.value?.adapterId)?.createDefaultConfig() ?? {}
+      : {}
+    void loadAdapterOptions()
+    refreshAvailableFields()
+    persistSoon()
+  }
 
   const mappingSectionTitle = computed(() => {
     if (isTableWidgetSelection.value) return '列数据映射'
@@ -1676,6 +1749,16 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
     isThreeMapSelection,
     isTableWidgetSelection,
     requestTypeOptions,
+    adapterConfig,
+    adapterOptions,
+    adapterFields,
+    adapterFieldOptions,
+    adapterOptionsLoading,
+    getAdapterFieldValue,
+    getAdapterFieldOptions,
+    updateAdapterField,
+    loadAdapterOptions,
+    updateAdapterId,
     mappingSectionTitle,
     mappingHeadLabel,
     targetBindings,

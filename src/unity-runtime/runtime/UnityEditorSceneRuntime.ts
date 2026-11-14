@@ -350,7 +350,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       .catch(error => this.options.onStatus(error instanceof Error ? error.message : 'Unity 清场失败'))
   }
 
-  override async upsertObject(object: SceneObject): Promise<void> {
+  override async upsertObject(object: SceneObject, options?: { runtimeOnly?: boolean }): Promise<void> {
     const previous = this.objectMap.get(object.id)
     const existedInUnity = previous !== undefined && !this.isDeferredInUnity(previous)
     await super.upsertObject(object)
@@ -370,7 +370,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       return
     }
     this.programmaticUpdates.add(object.id)
-    try { await this.unity.updateObject(projectObjectForUnity(object)) }
+    try { await this.unity.updateObject(projectObjectForUnity(object), options) }
     finally { this.programmaticUpdates.delete(object.id) }
   }
 

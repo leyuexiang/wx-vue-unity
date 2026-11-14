@@ -7,6 +7,9 @@ import type {
   RequestIntervalUnit,
 } from '@/types/data-config'
 import type { SceneObject } from '@/scene-platform'
+import { getIotState, type IotStateSnapshot } from '@/servers/manual/iot/api'
+import { createIotStateWebSocketClient, type IotStateUpdate } from '@/servers/manual/iot/websocket'
+import { getDataSourceAdapter } from '@/utils/dataConfig/dataSourceAdapters'
 import {
   createEmptyRequestGlobalConfig,
   customizeHttpRequest,
@@ -46,6 +49,20 @@ type SceneObjectRemoteEntry = {
   requestType: 'ajax' | 'public'
   publicRequestId?: string | null
   requestId: string
+}
+
+type IotStateTask = {
+  objectId: string
+  deviceId: string
+  pointCode: string
+  bindings: ComponentDataBindingRule[]
+  intervalMs: number
+  delivery: 'auto' | 'websocket' | 'polling'
+  subscriptionId: string
+  running: boolean
+  timer?: ReturnType<typeof setInterval>
+  unsubscribe?: () => void
+  lastStateVersion?: string
 }
 
 type SceneDataRemoteEntry = WidgetPreviewRemoteEntry | SceneObjectRemoteEntry
@@ -98,7 +115,7 @@ export interface SceneDataPollingRuntimeOptions {
   /** 三维对象使用领域快照读取，因而同一逻辑可覆盖本地三维和地理信息系统场景。 */
   getSceneObjects?: () => readonly SceneObject[]
   /** 只把数据结果写入当前 Runtime，不修改编辑场景 Store 和持久化快照。 */
-  applySceneObject?: (object: SceneObject) => void | Promise<void>
+  applySceneObject?: (object: SceneObject, options?: { runtimeOnly?: boolean }) => void | Promise<void>
 }
 
 const resolvePublicRequestPayload = (response: unknown): unknown => {
@@ -232,6 +249,10 @@ export class SceneDataPollingRuntime {
   /** 参数覆盖属于运行态；二维持久化配置不变，避免其监听器重启全部请求。 */
   private readonly widgetRequestOverrides = new Map<string, ComponentDataConfig>()
   private readonly ajaxEntriesByTarget = new Map<string, Map<string, SceneDataRemoteEntry>>()
+  /** 三维对象设备绑定的状态查询任务；状态只写入当前运行时快照，不进入场景保存数据。 */
+  private readonly iotStateTasks = new Map<string, IotStateTask>()
+  /** 当前场景复用一条已认证连接，避免每个模型实例各自建立 WebSocket。 */
+  private readonly iotStateWebSocket = createIotStateWebSocketClient()
   private unregisterParameterHandler: (() => void) | null = null
   private running = false
   private generation = 0
@@ -300,6 +321,7 @@ export class SceneDataPollingRuntime {
       this.sourceSignatures.delete(`object:${id}`)
       this.staticObjectSignatures.delete(id)
     }
+    const iotStateWork = this.syncIotStateTasks(sceneObjects, generation)
     const retainedStaticWidgets = new Set<string>()
     this.widgetDataService?.applyStaticDataConfigs((widget, config) => {
       retainedStaticWidgets.add(widget.id)
@@ -452,7 +474,7 @@ export class SceneDataPollingRuntime {
     }
     this.recordPaginationRuntime.start()
     // 首轮只执行新增或自身输入变化的任务，同时登记目标就绪屏障供后续配置动作等待。
-    const work: Promise<unknown>[] = [staticWork]
+    const work: Promise<unknown>[] = [staticWork, ...iotStateWork]
     for (const entry of created) {
       if (entry.requestType !== 'ajax') continue
       const task = this.tasks.get(this.getEntryKey(entry))!
@@ -527,6 +549,12 @@ export class SceneDataPollingRuntime {
     this.loadedQuizWidgetIds.clear()
     this.widgetRequestOverrides.clear()
     this.ajaxEntriesByTarget.clear()
+    this.iotStateTasks.forEach((task) => {
+      if (task.timer) clearInterval(task.timer)
+      task.unsubscribe?.()
+    })
+    this.iotStateTasks.clear()
+    this.iotStateWebSocket.dispose()
     clearQuizRuntimeStatus(this.quizEntriesByWidgetId.keys())
     this.quizEntriesByWidgetId.clear()
   }
@@ -538,6 +566,133 @@ export class SceneDataPollingRuntime {
 
   private getSceneObject(objectId: string) {
     return this.runtimeObjectSnapshots.get(objectId) ?? null
+  }
+
+  /** 从设备绑定读取标准点位，要求点位同时存在于现有对象数据映射中。 */
+  private getIotStateBinding(object: SceneObject) {
+    const dataConfig = this.getSceneObjectDataConfig(object.id)
+    const binding = object.metadata?.deviceBinding
+    // 数据源与映射按请求项配对，其他接口的数据映射不能被物联网状态覆盖。
+    const requests = getDataConfigRequests(dataConfig)
+    const item = requests.find(({ request }) => request.type === 'adapter'
+      && (request.config as { adapterId?: unknown }).adapterId === 'iot-state')
+    const adapterConfig = item?.request.config as { adapterId?: unknown; config?: unknown } | undefined
+    const adapter = adapterConfig?.adapterId === 'iot-state' ? getDataSourceAdapter('iot-state') : undefined
+    const iotConfig = adapter?.normalizeConfig(adapterConfig?.config)
+    if (item && !iotConfig) return null
+    if (!binding && !iotConfig) return null
+    const deviceId = iotConfig?.deviceId || (typeof (binding as { deviceId?: unknown })?.deviceId === 'string'
+      ? (binding as { deviceId: string }).deviceId.trim()
+      : '')
+    const pointCode = iotConfig?.pointCode || (typeof (binding as { pointCode?: unknown })?.pointCode === 'string'
+      ? (binding as { pointCode: string }).pointCode.trim()
+      : '')
+    if (!deviceId || !pointCode) return null
+    const bindings = (item?.bindings ?? requests.flatMap((item) => item.bindings ?? []))
+      .filter((item) => item.kind === 'object')
+    if (!bindings.length) return null
+    const intervalSeconds = iotConfig?.pollIntervalSeconds || (typeof (binding as { pollIntervalSeconds?: unknown })?.pollIntervalSeconds === 'number'
+      ? (binding as { pollIntervalSeconds: number }).pollIntervalSeconds
+      : 5)
+    const delivery = iotConfig?.delivery || ((binding as { delivery?: unknown })?.delivery === 'websocket' || (binding as { delivery?: unknown })?.delivery === 'auto'
+      ? (binding as { delivery: 'auto' | 'websocket' }).delivery
+      : 'polling')
+    return { deviceId, pointCode, bindings, intervalMs: Math.max(1000, intervalSeconds * 1000), delivery }
+  }
+
+  private syncIotStateTasks(sceneObjects: readonly SceneObject[], generation: number): Promise<void>[] {
+    this.iotStateTasks.forEach((task) => {
+      if (task.timer) clearInterval(task.timer)
+      task.unsubscribe?.()
+    })
+    this.iotStateTasks.clear()
+    return sceneObjects.flatMap((object) => {
+      const binding = this.getIotStateBinding(object)
+      if (!binding) return []
+      const task: IotStateTask = {
+        objectId: object.id, deviceId: binding.deviceId, pointCode: binding.pointCode,
+        bindings: binding.bindings,
+        intervalMs: binding.intervalMs, running: false,
+        delivery: binding.delivery,
+        subscriptionId: `iot-${generation}-${object.id}`,
+      }
+      this.iotStateTasks.set(object.id, task)
+      if (task.delivery === 'polling') {
+        task.timer = setInterval(() => void this.executeIotStateTask(task, generation), task.intervalMs)
+        return [this.executeIotStateTask(task, generation)]
+      }
+      return [this.subscribeIotStateTask(task, generation)]
+    })
+  }
+
+  /** WebSocket 首次确认后立即取一次快照；自动模式失败时才启用查询轮询补偿。 */
+  private async subscribeIotStateTask(task: IotStateTask, generation: number): Promise<void> {
+    try {
+      const unsubscribe = await this.iotStateWebSocket.subscribe(
+        {
+          subscriptionId: task.subscriptionId,
+          sceneId: this.options.getRuntimeContext?.()?.sceneId || undefined,
+          objectId: task.objectId,
+          deviceId: task.deviceId,
+          pointCode: task.pointCode,
+        },
+        (update) => {
+          if (update.stateVersion && task.lastStateVersion && update.stateVersion <= task.lastStateVersion) return
+          task.lastStateVersion = update.stateVersion || update.eventId
+          void this.applyIotSnapshot(task, update, generation).catch(error => {
+            appLogger.error('SceneDataPollingRuntime', '物联网状态应用失败', error)
+          })
+        },
+        () => { void this.executeIotStateTask(task, generation) },
+      )
+      if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.objectId) !== task) {
+        unsubscribe()
+        return
+      }
+      task.unsubscribe = unsubscribe
+      await this.executeIotStateTask(task, generation)
+    } catch (error) {
+      if (task.delivery === 'auto' && this.running && generation === this.generation && this.iotStateTasks.get(task.objectId) === task) {
+        task.timer = setInterval(() => void this.executeIotStateTask(task, generation), task.intervalMs)
+        await this.executeIotStateTask(task, generation)
+      } else if (generation === this.generation) {
+        appLogger.error('SceneDataPollingRuntime', `物联网实时订阅失败 (${task.objectId})`, error)
+      }
+    }
+  }
+
+  private async executeIotStateTask(task: IotStateTask, generation: number): Promise<void> {
+    if (!this.running || generation !== this.generation || task.running) return
+    task.running = true
+    try {
+      const sceneId = this.options.getRuntimeContext?.()?.sceneId
+      const versionBeforeQuery = task.lastStateVersion
+      const snapshot: IotStateSnapshot | null = sceneId
+        ? await getIotState(task.deviceId, task.pointCode, { sceneId, objectId: task.objectId })
+        : await getIotState(task.deviceId, task.pointCode)
+      // 查询发出后收到的推送优先，避免较晚返回的首屏快照覆盖实时值。
+      if (versionBeforeQuery !== task.lastStateVersion) return
+      if (!snapshot || !this.running || generation !== this.generation || this.iotStateTasks.get(task.objectId) !== task) return
+      await this.applyIotSnapshot(task, snapshot, generation)
+    } catch (error) {
+      if (generation === this.generation) appLogger.error('SceneDataPollingRuntime', `物联网状态查询失败 (${task.objectId})`, error)
+    } finally {
+      task.running = false
+    }
+  }
+
+  private async applyIotSnapshot(
+    task: IotStateTask,
+    snapshot: IotStateSnapshot,
+    generation: number,
+  ): Promise<void> {
+    if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.objectId) !== task) return
+    const object = this.getSceneObject(task.objectId)
+    if (!object) return
+    const row = { ...snapshot, value: snapshot.value, [snapshot.pointCode]: snapshot.value }
+    const nextObject = applySceneObjectBindings(object, task.bindings, row)
+    this.runtimeObjectSnapshots.set(task.objectId, nextObject)
+    if (nextObject !== object) await this.options.applySceneObject?.(nextObject, { runtimeOnly: true })
   }
 
   /**

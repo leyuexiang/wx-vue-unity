@@ -13,7 +13,7 @@ export const DATA_REQUEST_ITEM_LIMIT = 5
 export const CHART_AUTO_MEASURE_FIELD_LIMIT = 2
 export const MARKING_INSTANCE_LIMIT_DEFAULT = 2000
 
-export type DataRequestType = 'static' | 'dataset' | 'ajax' | 'public'
+export type DataRequestType = 'static' | 'dataset' | 'ajax' | 'public' | 'adapter'
 export type DataBindingValueType = 'boolean' | 'number' | 'vector3' | 'euler' | 'string'
 export type ObjectBindingTargetPath = 'visible' | 'position' | 'rotation' | 'scale'
 export type MarkingBindingTargetPath = 'position' | 'rotation' | 'scale' | 'visible'
@@ -137,12 +137,19 @@ export interface PublicRequestReferenceConfig {
   publicRequestId: string | null
 }
 
+/** 扩展数据源适配器配置；具体字段由 adapterId 对应的适配器校验。 */
+export interface AdapterRequestConfig {
+  adapterId: string
+  config: unknown
+}
+
 /** 每个请求项都使用同一套请求配置联合类型。 */
 export type DataRequestConfig =
   | StaticRequestConfig
   | DatasetRequestConfig
   | AjaxRequestConfig
   | PublicRequestReferenceConfig
+  | AdapterRequestConfig
 
 export interface ObjectBindingRule {
   kind: 'object'

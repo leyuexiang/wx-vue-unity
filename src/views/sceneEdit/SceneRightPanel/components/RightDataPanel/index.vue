@@ -228,6 +228,45 @@
           <p v-if="datasetFieldLoadError" class="error-text mt-2">{{ datasetFieldLoadError }}</p>
         </section>
 
+        <section
+          v-if="editableConfig.request.type === 'adapter' && adapterConfig"
+          class="panel-block panel-block--figma-divider"
+        >
+          <div class="panel-title">扩展数据源</div>
+          <ScenePropertySelect
+            :model-value="adapterConfig.adapterId"
+            placeholder="选择数据源适配器"
+            @change="updateAdapterId"
+          >
+            <el-option v-for="item in adapterOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </ScenePropertySelect>
+          <div v-for="field in adapterFields" :key="field.key" class="mt-3">
+            <div class="panel-label">{{ field.label }}</div>
+            <el-input-number
+              v-if="field.kind === 'number'"
+              :model-value="Number(getAdapterFieldValue(field.key) ?? 0)"
+              :min="1"
+              @change="(value) => updateAdapterField(field.key, value ?? 1)"
+            />
+            <ScenePropertySelect
+              v-else
+              :model-value="getAdapterFieldValue(field.key) as string | number | boolean | undefined"
+              :loading="adapterOptionsLoading && !adapterFieldOptions[field.key] && !field.options"
+              :filterable="field.kind === 'select'"
+              :allow-create="field.kind === 'text'"
+              :placeholder="field.required ? `请选择${field.label}` : `可选${field.label}`"
+              @change="(value: string | number | boolean | undefined) => updateAdapterField(field.key, value)"
+            >
+              <el-option
+                v-for="option in getAdapterFieldOptions(field)"
+                :key="`${field.key}:${option.value}:${option.dependsOnValue || ''}`"
+                :label="option.label"
+                :value="option.value"
+              />
+            </ScenePropertySelect>
+          </div>
+        </section>
+
         <section v-if="showRequestTest" class="panel-block panel-block--figma-divider request-test">
           <div class="panel-label">测试</div>
           <!--
@@ -509,6 +548,15 @@ const {
   isThreeMapSelection,
   isTableWidgetSelection,
   requestTypeOptions,
+  adapterConfig,
+  adapterOptions,
+  adapterFields,
+  adapterFieldOptions,
+  adapterOptionsLoading,
+  getAdapterFieldValue,
+  getAdapterFieldOptions,
+  updateAdapterField,
+  updateAdapterId,
   mappingSectionTitle,
   mappingHeadLabel,
   targetBindings,

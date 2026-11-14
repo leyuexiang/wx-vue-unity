@@ -121,7 +121,7 @@ export const createEditorSceneDataPollingController = (
     }),
     // 模型配置存放在领域对象 metadata 中；只读当前场景快照，不复制整场或扫描旧引擎对象。
     getSceneObjects: () => options.getViewportHost()?.getStore().getScene().objects ?? [],
-    applySceneObject: async (object) => {
+    applySceneObject: async (object, updateOptions) => {
       /**
        * 数据结果属于运行时状态，直接交给当前引擎中立 Runtime。GIS 与本地三维在各自适配器中
        * 应用经纬高或本地变换；绝不调用 SceneStore.upsertObject，避免轮询数据进入保存和撤销栈。
@@ -129,7 +129,7 @@ export const createEditorSceneDataPollingController = (
       const host = options.getViewportHost()
       if (!host) return
       const runtimeObject = options.projectSceneObjectForRuntime?.(object) ?? object
-      await host.getRuntime().upsertObject(runtimeObject)
+      await host.getRuntime().upsertObject(runtimeObject, updateOptions)
       await options.onSceneObjectUpdated?.(runtimeObject)
     },
   })

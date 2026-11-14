@@ -224,8 +224,10 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
     this.assertSuccess(response)
   }
 
-  async updateObject(object: SceneObject): Promise<void> {
-    const response = await this.send<SceneObject, unknown>('editor.v1.object.update', object)
+  async updateObject(object: SceneObject, options?: { runtimeOnly?: boolean }): Promise<void> {
+    // 可选标记兼容旧运行时，未设置时保持原编辑报文。
+    const payload = options?.runtimeOnly ? { ...object, runtimeOnly: true } : object
+    const response = await this.send<typeof payload, unknown>('editor.v1.object.update', payload)
     this.assertSuccess(response)
   }
 
