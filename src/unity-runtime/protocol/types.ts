@@ -43,6 +43,23 @@ export interface UnitySessionInitializePayload {
     accessToken: string
     downloadOrigins: readonly string[]
   }
+  /** 只读发布会话按资源键和固定修订签发，和编辑登录鉴权互斥。 */
+  publicationResources?: {
+    apiBaseUrl: string
+    publicationId: string
+    ticket: string
+    downloadOrigins: readonly string[]
+    catalog: Readonly<Record<string, {
+      resourceId: string
+      revision: string
+      contentHash: string
+      manifestSha256: string
+      contentFormat: string
+      platform: string
+      appCompatibility: string
+      manifestPath: string
+    }>>
+  }
 }
 
 export interface UnitySessionInitializeResponse {

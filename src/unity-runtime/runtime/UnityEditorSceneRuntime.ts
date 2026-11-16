@@ -24,7 +24,7 @@ import type {
   ObjectInteractionMoveCameraOptions,
   ObjectInteractionSwitchViewOptions,
 } from '@/scene-platform/runtime/sceneRuntime'
-import type { UnityInteractionActionDto } from '../protocol/types'
+import type { UnityInteractionActionDto, UnitySessionInitializePayload } from '../protocol/types'
 import { getUnityCameraConfig } from './editorCameraConfig'
 import type { VegetationSystemDefinition } from '@/scene-platform/core/types'
 import { checkVegetationTilesForUnity } from './vegetationTilesPreflight'
@@ -36,6 +36,8 @@ export interface UnityEditorSceneRuntimeOptions {
   mode: UnityRenderMode
   cloudConfig?: LegacySessionConfig
   webBootstrapUrl?: string
+  /** 固定发布只读模式将完整资源授权交给本次播放器会话。 */
+  publicationResources?: UnitySessionInitializePayload['publicationResources']
   getHost: () => ViewportHost | null
   onStatus: (message: string) => void
   onWarnings?: (messages: string[]) => void
@@ -272,7 +274,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
 
   private async connectProtocol(): Promise<void> {
     if (this.disposed || !this.transport) throw new Error('Unity 视口已关闭')
-    const unity = new JsonRpcUnityCloudRuntime(this.transport)
+    const unity = new JsonRpcUnityCloudRuntime(this.transport, this.options.publicationResources)
     this.unity = unity
     await unity.connect()
     if (!unity.capabilities?.sceneTypes.includes(this.type)) throw new Error(`当前 Unity 播放器不支持 ${this.type === 'gis' ? 'GIS' : '普通三维'} 场景，请更新对应端的播放器`)

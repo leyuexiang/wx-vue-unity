@@ -1372,8 +1372,10 @@ const OperateActionMap = {
     const { href } = router.resolve({
       path: '/scenePreview',
       query: {
-        // resolve 只接收编辑场景编号；发布编号由后端响应提供，禁止在路由中提前传入。
-        sceneId,
+        // 固定发布和旧场景解析使用不同合同，由列表返回的发布编号判断入口。
+        ...(/^PUB-[1-9]\d{0,18}$/.test(record.publishedPublicationId || '')
+          ? { publicationId: record.publishedPublicationId }
+          : { sceneId }),
         sceneType: record.sceneType === 'GisScene' ? 'gis' : 'local3d',
       },
     })

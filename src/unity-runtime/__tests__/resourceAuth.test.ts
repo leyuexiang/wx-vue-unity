@@ -22,3 +22,21 @@ it('初始化携带本次登录身份和HTTPS根来源，并拒绝无效配置�
   authContext.clear()
   await expect(new JsonRpcUnityCloudRuntime(transport).connect()).rejects.toThrow('有效登录身份')
 })
+
+it.each([true, false])('发布播放器只接收固定资源授权，并校验能力协商 (%s)', async (supported) => {
+  const resources = { apiBaseUrl: 'https://publication.invalid', publicationId: 'PUB-15', ticket: 'test-ticket',
+    downloadOrigins: ['https://files.invalid'], catalog: {} }
+  const request = vi.fn(async (_method, envelope) => ({ protocolVersion: 1, requestId: envelope.requestId, success: true,
+    payload: { protocolVersion: 1, capabilities: { sceneTypes: ['local3d'], objectTypes: ['model'], gizmoModes: [],
+      features: { 'scene.publicationResources': supported } } } }))
+  const transport = { connect: vi.fn(), disconnect: vi.fn(), subscribe: () => () => {}, notify: vi.fn(), request } as unknown as UnityTransport
+  const runtime = new JsonRpcUnityCloudRuntime(transport, resources)
+  if (supported) await expect(runtime.connect()).resolves.toBeUndefined()
+  else {
+    await expect(runtime.connect()).rejects.toThrow('播放器不支持固定发布模型')
+    expect(transport.disconnect).toHaveBeenCalled()
+  }
+  expect(request.mock.calls[0]?.[1].payload).toEqual({
+    client: expect.any(String), supportedProtocolVersions: [1], publicationResources: resources,
+  })
+})

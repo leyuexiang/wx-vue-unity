@@ -254,12 +254,13 @@ export class SceneDataPollingRuntime {
   /** 三维对象设备绑定的状态查询任务；状态只写入当前运行时快照，不进入场景保存数据。 */
   private readonly iotStateTasks = new Map<string, IotStateTask>()
   /** 当前场景复用一条已认证连接，避免每个模型实例各自建立 WebSocket。 */
-  private readonly iotStateWebSocket = createIotStateWebSocketClient()
+  private readonly iotStateWebSocket: ReturnType<typeof createIotStateWebSocketClient>
   private unregisterParameterHandler: (() => void) | null = null
   private running = false
   private generation = 0
 
   constructor(private readonly options: SceneDataPollingRuntimeOptions) {
+    this.iotStateWebSocket = createIotStateWebSocketClient(options.getIotPublicationAccess)
     this.recordPaginationRuntime = new RecordPaginationRuntime({
       ...options,
       getPublicRequests: () => this.getRuntimePublicRequests(),

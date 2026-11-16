@@ -71,6 +71,7 @@ export interface IotStateSnapshot {
 export interface IotPublicationAccess {
   publicationId: string
   publicationTicket: string
+  apiBaseUrl?: string
 }
 type IotStateScope = { sceneId: string; objectId: string } | (IotPublicationAccess & { objectId: string })
 interface Envelope<T> { code: number; data: T; msg?: string }
@@ -165,7 +166,7 @@ export async function getIotState(deviceId: string, pointCode: string, scope?: I
   const identity = authContext.get()
   if (!identity || !authContext.hasValidContext()) throw new IotApiError(401, '请先登录')
   const published = scope && 'publicationId' in scope ? scope : undefined
-  const response = await request<Envelope<IotStateSnapshot | null>>(`${DIM3D_SERVER_URL}/admin-api/dimensions/iot-state/${published ? 'publication' : 'get'}`, {
+  const response = await request<Envelope<IotStateSnapshot | null>>(`${published?.apiBaseUrl ?? DIM3D_SERVER_URL}/admin-api/dimensions/iot-state/${published ? 'publication' : 'get'}`, {
     method: 'GET',
     params: {
       deviceId: normalizedDeviceId, pointCode: normalizedPointCode,

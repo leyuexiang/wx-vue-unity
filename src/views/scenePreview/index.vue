@@ -18,14 +18,14 @@
       class="scene-preview-access-state"
       role="status"
     >
-      <template v-if="previewAccessState === 'need-password'">
-        <h1>请输入访问密码</h1>
+      <template v-if="previewAccessState === 'need-password' || previewAccessState === 'need-ticket'">
+        <h1>{{ previewAccessState === 'need-ticket' ? '请输入发布访问票据' : '请输入访问密码' }}</h1>
         <p
           class="scene-preview-access-state__password-message"
           :class="{ 'is-error': previewAccessMessage }"
           aria-live="polite"
         >
-          {{ previewAccessMessage || '该场景已启用公开加密访问。' }}
+          {{ previewAccessMessage || (previewAccessState === 'need-ticket' ? '使用签发给该发布版本的票据。' : '该场景已启用公开加密访问。') }}
         </p>
         <el-input
           v-model="previewPassword"
@@ -33,7 +33,7 @@
           type="password"
           show-password
           autocomplete="current-password"
-          placeholder="请输入访问密码"
+          :placeholder="previewAccessState === 'need-ticket' ? '请输入发布访问票据' : '请输入访问密码'"
           @input="clearPreviewPasswordMessage"
           @keyup.enter="submitPreviewPassword"
         />
@@ -48,6 +48,7 @@
       <template v-else>
         <h1>{{ previewAccessTitle }}</h1>
         <p>{{ previewAccessMessage }}</p>
+        <el-button v-if="fixedLoginRequired" type="primary" @click="loginForFixedPublication">前往登录</el-button>
       </template>
     </section>
   </div>
@@ -93,6 +94,10 @@ import {
   type ScenePreviewTicketRefresher,
 } from '@/integrations/scene/scenePreviewAccess'
 import { authContext } from '@/auth/authContext'
+import { hasIotPermission } from '@/auth/iotNavigation'
+import { loadFixedScenePublication, type FixedPublication } from '@/integrations/scene/fixedScenePublication'
+import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
+import { unityRenderConfig } from '@/unity-runtime/renderMode'
 import { clearAuthenticationRuntime } from '@/auth/runtime'
 import { tokenCache } from '@/utils/utils'
 import { clearTabAuthHandoffCache } from '@/auth/tabAuthHandoff'
@@ -136,6 +141,7 @@ const stageLayout = reactive({
 })
 let resizeObserver: ResizeObserver | null = null
 let previewRuntimeController: ScenePreviewRuntimeController | null = null
+let previewClosed = false
 const firstPersonObject = ref<SceneObject | null>(null)
 const firstPersonActive = ref(false)
 const firstPersonCollisionMessage = ref('')
@@ -271,6 +277,7 @@ type PreviewAccessState =
   | 'ready'
   | 'need-password'
   | 'need-login'
+  | 'need-ticket'
   | 'not-found'
   | 'not-published'
   | 'expired'
@@ -281,6 +288,15 @@ const previewAccessState = ref<PreviewAccessState>('loading')
 const previewAccessMessage = ref('')
 const previewPassword = ref('')
 const previewPasswordSubmitting = ref(false)
+const fixedLoginRequired = computed(() => previewAccessState.value === 'need-login' && Boolean(getFixedPublicationId()))
+
+const loginForFixedPublication = () => {
+  try {
+    if (!redirectScenePreviewToTenantLogin()) previewAccessMessage.value = '请稍后重试登录。'
+  } catch {
+    previewAccessMessage.value = '请从租户端场景管理进入该发布。'
+  }
+}
 
 /** 访问状态使用机器码映射固定标题，避免依赖后端 msg 文案判断业务分支。 */
 const PREVIEW_ACCESS_TITLE: Partial<Record<PreviewAccessState, string>> = {
@@ -403,11 +419,19 @@ const getPreviewSceneId = () => {
   return (Array.isArray(sceneId) ? sceneId[0] : sceneId)?.trim() || ''
 }
 
+const getFixedPublicationId = () => {
+  const publicationId = route.query.publicationId
+  return (Array.isArray(publicationId) ? publicationId[0] : publicationId)?.trim() || ''
+}
+
 const mountSceneDefinitionPreview = async (
   publishedPublicationId: string,
   runtimeElement: HTMLElement,
-  session: ScenePreviewSession,
+  session: ScenePreviewSession | undefined,
+  fixed?: FixedPublication,
 ) => {
+  const identity = authContext.get()
+  const fixedResources = fixed?.resources
   const controller = createScenePreviewRuntimeLoader({
     container: runtimeElement,
     /** 运行态回退标识也必须使用发布快照编号，避免场景基础包缺少标识时回到编辑场景。 */
@@ -419,8 +443,25 @@ const mountSceneDefinitionPreview = async (
      */
     renderSelector: '#preview-runtime',
     /** 当前公开会话固定使用 publishedPublicationId + ticket 的预览数据源，禁止切换正式发布接口。 */
-    publicationId: session.publishedPublicationId,
-    fragmentLoaderFactory: (fragmentPublicationId) => {
+    publicationId: publishedPublicationId,
+    ...(fixed && fixedResources ? {
+      fixedPublication: fixed,
+      runtimeFactory: (scene) => new UnityEditorSceneRuntime(scene.type, {
+        mode: 'webgpu',
+        webBootstrapUrl: unityRenderConfig.webgpu.bootstrapUrl,
+        publicationResources: fixedResources,
+        getHost: () => null,
+        onStatus: () => undefined,
+      }),
+      getIotPublicationAccess: () => {
+        const current = authContext.get()
+        if (previewClosed || !identity || !authContext.hasValidContext() || identity.tenantId !== current?.tenantId ||
+          identity.platformType !== current?.platformType ||
+          !(hasIotPermission('dimensions:iot-state:query') || hasIotPermission('dimensions:iot-state:subscribe'))) return null
+        return { publicationId: fixedResources.publicationId, publicationTicket: fixedResources.ticket, apiBaseUrl: fixedResources.apiBaseUrl }
+      },
+    } : {}),
+    fragmentLoaderFactory: session ? (fragmentPublicationId) => {
       if (fragmentPublicationId !== session.publishedPublicationId) {
         throw new Error('发布预览请求编号与 publishedPublicationId 不一致。')
       }
@@ -428,9 +469,11 @@ const mountSceneDefinitionPreview = async (
         publicationId: session.publishedPublicationId,
         api: createScenePreviewFragmentLoaderApi(session),
       })
-    },
+    } : undefined,
   })
 
+  // 持有正在装载的控制器，保证卸载也能结束 Unity 启动和在途订阅。
+  previewRuntimeController = controller
   let result: Awaited<ReturnType<typeof controller.load>>
   try {
     result = await controller.load()
@@ -442,12 +485,12 @@ const mountSceneDefinitionPreview = async (
     throw error
   }
 
+  if (previewClosed || previewRuntimeController !== controller) return false
   if (result.loadedBy !== 'scene-definition' || !result.runtime) {
     controller.dispose()
     return false
   }
 
-  previewRuntimeController = controller
   previewRuntimeType.value = result.runtimeType
   firstPersonRuntime = result.runtime
   // 内存宿主不具备第一人称渲染能力，不能因为保存包存在相机就开放三维输入循环。
@@ -480,7 +523,7 @@ const mountSceneDefinitionPreview = async (
   // 二维预览不自动开启已保存相机的三维输入循环。
 
   previewTicketRefresher?.stop()
-  previewTicketRefresher = createScenePreviewTicketRefresher(session, {
+  previewTicketRefresher = session ? createScenePreviewTicketRefresher(session, {
     getPassword: () =>
       session.accessMode === 'PUBLIC_ENCRYPT' ? previewTicketRefreshPassword : undefined,
     isAuthenticated: () => authContext.hasValidContext(),
@@ -488,7 +531,7 @@ const mountSceneDefinitionPreview = async (
       // 续期失败只记录并等待下一周期重试，绝不在运行态弹出登录或密码交互。
       appLogger.warn('ScenePreview', '预览票据续期失败，下一周期将继续尝试', error)
     },
-  })
+  }) : null
 
   updateStageLayout()
   return true
@@ -528,6 +571,25 @@ const ACCESS_STATE_BY_RESULT_CODE: Partial<
 const openPreview = async (password?: string) => {
   const runtimeElement = runtimeHostRef.value
   const sceneId = getPreviewSceneId()
+  const fixedId = getFixedPublicationId()
+  if (runtimeElement && fixedId) {
+    if (!authContext.hasValidContext()) {
+      previewAccessState.value = 'need-login'
+      previewAccessMessage.value = '登录后可加载此发布的 Unity 场景。'
+      return
+    }
+    previewAccessState.value = 'need-ticket'
+    if (!password) return
+    if (!unityRenderConfig.webgpu.bootstrapUrl) throw new Error('固定发布的 Unity WebGPU 播放器尚未配置。')
+    const fixed = await loadFixedScenePublication(fixedId, password)
+    if (previewClosed) return
+    if (!await mountSceneDefinitionPreview(fixedId, runtimeElement, undefined, fixed)) {
+      throw new Error('固定发布没有可用的场景内容。')
+    }
+    previewAccessState.value = 'ready'
+    previewAccessMessage.value = ''
+    return
+  }
   if (!runtimeElement || !sceneId) {
     previewAccessState.value = 'error'
     previewAccessMessage.value = '预览地址缺少有效的 sceneId。'
@@ -613,7 +675,7 @@ const openPreview = async (password?: string) => {
 
 /** 用户开始修正密码时移除上一次校验错误，避免旧错误与新输入同时存在造成误导。 */
 const clearPreviewPasswordMessage = () => {
-  if (previewAccessState.value === 'need-password') previewAccessMessage.value = ''
+  if (previewAccessState.value === 'need-password' || previewAccessState.value === 'need-ticket') previewAccessMessage.value = ''
 }
 
 /** 密码只保留在输入模型和当前请求中；成功后立即清空，不写路由或浏览器存储。 */
@@ -621,7 +683,7 @@ const submitPreviewPassword = async () => {
   if (previewPasswordSubmitting.value) return
   const password = previewPassword.value.trim()
   if (!password) {
-    previewAccessMessage.value = '请输入访问密码。'
+    previewAccessMessage.value = getFixedPublicationId() ? '请输入发布访问票据。' : '请输入访问密码。'
     return
   }
   previewPasswordSubmitting.value = true
@@ -630,6 +692,12 @@ const submitPreviewPassword = async () => {
     await openPreview(password)
   if (previewAccessState.value === 'ready') previewPassword.value = ''
   } catch (error) {
+    if (getFixedPublicationId()) {
+      previewPassword.value = ''
+      previewAccessState.value = 'need-ticket'
+      previewAccessMessage.value = error instanceof Error ? error.message : '固定发布加载失败。'
+      return
+    }
     if (isScenePreviewAuthenticationError(error) && redirectScenePreviewToTenantLogin()) return
     previewAccessState.value = 'error'
     previewAccessMessage.value = error instanceof Error ? error.message : '预览加载失败。'
@@ -669,6 +737,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  previewClosed = true
   exitFirstPerson()
   window.removeEventListener('keydown', handleFirstPersonKeyDown)
   window.removeEventListener('keyup', handleFirstPersonKeyUp)

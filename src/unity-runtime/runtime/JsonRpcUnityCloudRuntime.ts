@@ -88,7 +88,8 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
   private readonly listeners = new Map<keyof UnityRuntimeEventMap, Set<(payload: never) => void>>()
   private unsubscribeEvents: Array<() => void> = []
 
-  constructor(private readonly transport: UnityTransport) {}
+  constructor(private readonly transport: UnityTransport,
+    private readonly publicationResources?: UnitySessionInitializePayload['publicationResources']) {}
 
   async connect(): Promise<void> {
     await this.transport.connect()
@@ -99,12 +100,16 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
         {
           client: UNITY_EDITOR_CLIENT,
           supportedProtocolVersions: [UNITY_EDITOR_PROTOCOL_VERSION],
-          ...this.resourceAuth(),
+          ...(this.publicationResources ? { publicationResources: this.publicationResources } : this.resourceAuth()),
         },
       )
       if (!response.success || !response.payload) throw new Error(response.error?.message ?? 'Unity 能力协商失败')
       if (response.payload.protocolVersion !== UNITY_EDITOR_PROTOCOL_VERSION) {
         throw new Error(`Unity 协议版本不兼容：${response.payload.protocolVersion}`)
+      }
+      // 旧播放器会忽略新增字段，必须在加载任何模型前确认支持固定发布资源。
+      if (this.publicationResources && !response.payload.capabilities.features['scene.publicationResources']) {
+        throw new Error('当前 Unity 播放器不支持固定发布模型，请更新播放器')
       }
       this.capabilities = response.payload.capabilities
       const transportWithSnapshot = this.transport as UnityTransport & { markRuntimeReady?: () => void }

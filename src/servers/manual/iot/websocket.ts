@@ -23,10 +23,10 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>
 }
 
-const toWebSocketUrl = (token: string, tenantId?: string) => {
+const toWebSocketUrl = (token: string, tenantId?: string, apiBaseUrl?: string) => {
   // 无浏览器 location 时（例如单元测试或 SSR）仍使用可解析的占位根地址；
   // 真实部署优先沿用环境配置，其次使用当前页面同源地址。
-  const base = DIM3D_SERVER_URL || globalThis.location?.origin || 'http://localhost'
+  const base = apiBaseUrl || DIM3D_SERVER_URL || globalThis.location?.origin || 'http://localhost'
   const url = new URL(base, globalThis.location?.href || 'http://localhost')
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = `${url.pathname.replace(/\/$/, '')}/dimensions/ws`
@@ -48,6 +48,8 @@ export class IotStateWebSocketClient {
     request: IotStateSubscription; handler: UpdateHandler; onReconnect?: () => void
   }>()
   private readonly pendingRequests = new Map<string, PendingRequest>()
+
+  constructor(private readonly getPublicationAccess?: () => IotPublicationAccess | null) {}
 
   async subscribe(request: IotStateSubscription, handler: UpdateHandler, onReconnect?: () => void): Promise<() => void> {
     this.disposed = false
@@ -102,8 +104,10 @@ export class IotStateWebSocketClient {
     if (this.opening) return this.opening
     const identity = authContext.get()
     if (!identity?.accessToken) throw new Error('物联网实时订阅需要登录')
+    const publication = this.getPublicationAccess?.()
+    if (this.getPublicationAccess && !publication) throw new Error('发布访问票据已失效')
     this.opening = new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(toWebSocketUrl(identity.accessToken, identity.tenantId))
+      const socket = new WebSocket(toWebSocketUrl(identity.accessToken, identity.tenantId, publication?.apiBaseUrl))
       this.socket = socket
       const timeout = globalThis.setTimeout(() => {
         socket.close()
@@ -245,4 +249,5 @@ export class IotStateWebSocketClient {
   }
 }
 
-export const createIotStateWebSocketClient = () => new IotStateWebSocketClient()
+export const createIotStateWebSocketClient = (getPublicationAccess?: () => IotPublicationAccess | null) =>
+  new IotStateWebSocketClient(getPublicationAccess)

@@ -80,6 +80,7 @@ function isEmbeddedFirstPartyUrl(url: string): boolean {
     const configuredOrigins = [
       import.meta.env.VITE_DIM3D_SERVER_URL,
       import.meta.env.VITE_DATA_MIDDLEWARE_URL,
+      import.meta.env.VITE_UNITY_PUBLICATION_API_ORIGIN,
     ]
       .filter(Boolean)
       .map((item) => new URL(String(item)).origin)
