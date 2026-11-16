@@ -11,7 +11,8 @@ vi.mock('@/servers/manual/iot/api', () => ({
 const mockedGetIotState = vi.mocked(getIotState)
 
 describe('三维实例物联网状态绑定', () => {
-  it('按设备和点位查询状态并复用对象属性映射', async () => {
+  it.each(['draft', 'published', 'anonymous'] as const)('按场景访问方式查询状态并复用运行态对象属性映射 (%s)', async (mode) => {
+    mockedGetIotState.mockClear()
     const dataConfig = createEmptyDataConfig([{ value: true }])
     dataConfig.request = {
       type: 'adapter',
@@ -42,13 +43,23 @@ describe('三维实例物联网状态绑定', () => {
       getSceneObjects: () => [object],
       getPublicRequests: () => [],
       getRequestGlobalConfig: () => ({ requestOriginUrl: '', requestInterval: null, requestIntervalUnit: 'second', requestParams: { Header: {} } }),
-      getRuntimeContext: () => ({ sceneId: '42' }),
+      getRuntimeContext: () => ({ sceneId: '42', publicPreview: mode !== 'draft' }),
+      ...(mode === 'published' ? {
+        getIotPublicationAccess: () => ({ publicationId: 'PUB-10', publicationTicket: 'test-ticket' }),
+      } : {}),
       applySceneObject: applyObject,
     })
 
     try {
       await runtime.start()
-      expect(mockedGetIotState).toHaveBeenCalledWith('iot-resident-device-01', 'temperature', { sceneId: '42', objectId: 'pump-01' })
+      if (mode === 'anonymous') {
+        expect(mockedGetIotState).not.toHaveBeenCalled()
+        expect(applyObject).not.toHaveBeenCalled()
+        return
+      }
+      expect(mockedGetIotState).toHaveBeenCalledWith('iot-resident-device-01', 'temperature', mode === 'published'
+        ? { publicationId: 'PUB-10', publicationTicket: 'test-ticket', objectId: 'pump-01' }
+        : { sceneId: '42', objectId: 'pump-01' })
       expect(applied.at(-1)?.visible).toBe(false)
       expect(applyObject).toHaveBeenCalledWith(expect.objectContaining({ visible: false }), { runtimeOnly: true })
       expect(object.visible).toBe(true)

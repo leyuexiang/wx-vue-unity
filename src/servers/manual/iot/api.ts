@@ -67,6 +67,12 @@ export interface IotStateSnapshot {
   replay?: boolean
   traceId?: string
 }
+/** 凭据只由当前发布页会话持有，不能放入场景的数据源配置。 */
+export interface IotPublicationAccess {
+  publicationId: string
+  publicationTicket: string
+}
+type IotStateScope = { sceneId: string; objectId: string } | (IotPublicationAccess & { objectId: string })
 interface Envelope<T> { code: number; data: T; msg?: string }
 export const IOT_RESOURCES = { connectors: 'connector', bindings: 'device-binding', messages: 'message-inbox' } as const
 export const IOT_VERSION_CONFLICT = 1009001011
@@ -150,7 +156,7 @@ export async function getIotRuntime(id: string): Promise<IotRuntime> {
  * 查询当前租户的设备点位最新值。
  * 查询接口不复用管理菜单权限，服务端会单独校验 dimensions:iot-state:query。
  */
-export async function getIotState(deviceId: string, pointCode: string, scope?: { sceneId: string; objectId: string }): Promise<IotStateSnapshot | null> {
+export async function getIotState(deviceId: string, pointCode: string, scope?: IotStateScope): Promise<IotStateSnapshot | null> {
   const normalizedDeviceId = deviceId.trim()
   const normalizedPointCode = pointCode.trim()
   if (!normalizedDeviceId || !normalizedPointCode || normalizedDeviceId.length > 256 || normalizedPointCode.length > 256) {
@@ -158,11 +164,20 @@ export async function getIotState(deviceId: string, pointCode: string, scope?: {
   }
   const identity = authContext.get()
   if (!identity || !authContext.hasValidContext()) throw new IotApiError(401, '请先登录')
-  const response = await request<Envelope<IotStateSnapshot | null>>(`${DIM3D_SERVER_URL}/admin-api/dimensions/iot-state/get`, {
+  const published = scope && 'publicationId' in scope ? scope : undefined
+  const response = await request<Envelope<IotStateSnapshot | null>>(`${DIM3D_SERVER_URL}/admin-api/dimensions/iot-state/${published ? 'publication' : 'get'}`, {
     method: 'GET',
-    // 运行时携带实例范围，服务端按已保存场景校验。
-    params: { deviceId: normalizedDeviceId, pointCode: normalizedPointCode, ...scope },
+    params: {
+      deviceId: normalizedDeviceId, pointCode: normalizedPointCode,
+      ...(scope ? { objectId: scope.objectId } : {}),
+      ...(published ? { publicationId: published.publicationId } : scope && 'sceneId' in scope ? { sceneId: scope.sceneId } : {}),
+    },
+    // 票据仅走请求头，查询参数和运行态日志都不应带出票据。
+    ...(published ? { headers: { 'X-Scene-Ticket': published.publicationTicket } } : {}),
     skipPlatformPath: true,
+  }).catch((error: unknown) => {
+    if (published) throw new IotApiError(500, '发布场景的物联网状态查询失败')
+    throw error
   })
   // 身份切换后的迟到快照不得写入新场景运行态。
   const current = authContext.get()

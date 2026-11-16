@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { authContext } from '@/auth/authContext'
 import { IotStateWebSocketClient } from '../websocket'
 
@@ -20,6 +20,7 @@ class TestSocket {
 }
 
 describe('IoT 状态 WebSocket 客户端', () => {
+  afterEach(() => { authContext.clear(); vi.unstubAllGlobals(); vi.useRealTimers() })
   it('使用认证令牌订阅并分发状态更新', async () => {
     vi.stubGlobal('WebSocket', TestSocket)
     authContext.set({ accessToken: 'token-1', clientId: 'web', tenantId: '2', platformType: 'tenant', roles: [], permissions: [] })
@@ -35,5 +36,38 @@ describe('IoT 状态 WebSocket 客户端', () => {
     socket.message({ type: 'iot-state-update', content: JSON.stringify({ subscriptionId: 'sub-1', eventId: 'event-1', schemaVersion: '1.0', eventTime: '2026-11-13T00:00:00Z', tenantId: 2, deviceId: 'device-1', pointCode: 'temperature', value: 31.2, valueType: 'NUMBER' }) })
     expect(received).toHaveLength(1)
     client.dispose()
+  })
+
+  it('发布订阅在续租时使用最新票据，票据失效时注销旧会话', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('WebSocket', TestSocket)
+    authContext.set({ accessToken: 'fake', clientId: 'web', tenantId: '2', platformType: 'tenant', roles: [], permissions: [] })
+    const client = new IotStateWebSocketClient()
+    let ticket = 'initial-test-ticket'
+    const pending = client.subscribe({
+      subscriptionId: 'published', objectId: 'model', deviceId: 'd', pointCode: 'p',
+      publication: () => ticket ? { publicationId: 'PUB-20', publicationTicket: ticket } : null,
+    }, vi.fn())
+    const socket = TestSocket.instances.at(-1)!
+    socket.open()
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      const frame = (index: number) => JSON.parse(socket.sent[index]!)
+      expect(JSON.parse(frame(0).content)).toEqual({
+        requestId: 'request-published', publicationId: 'PUB-20', publicationTicket: ticket,
+        bindings: [{ subscriptionId: 'published', objectId: 'model', deviceId: 'd', pointCode: 'p' }],
+      })
+      socket.message({ type: 'iot-state-subscribe-ack', content: JSON.stringify({ requestId: 'request-published', accepted: ['published'] }) })
+      await pending
+      ticket = 'replacement-test-ticket'
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(JSON.parse(frame(1).content).publicationTicket).toBe(ticket)
+      ticket = ''
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(frame(2).type).toBe('iot-state-unsubscribe')
+      expect(socket.readyState).toBe(TestSocket.CLOSED)
+    } finally {
+      client.dispose()
+    }
   })
 })

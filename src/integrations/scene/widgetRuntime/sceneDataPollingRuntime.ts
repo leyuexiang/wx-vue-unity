@@ -7,7 +7,7 @@ import type {
   RequestIntervalUnit,
 } from '@/types/data-config'
 import type { SceneObject } from '@/scene-platform'
-import { getIotState, type IotStateSnapshot } from '@/servers/manual/iot/api'
+import { getIotState, type IotPublicationAccess, type IotStateSnapshot } from '@/servers/manual/iot/api'
 import { createIotStateWebSocketClient, type IotStateUpdate } from '@/servers/manual/iot/websocket'
 import { getDataSourceAdapter } from '@/utils/dataConfig/dataSourceAdapters'
 import {
@@ -98,6 +98,8 @@ const isQuizWidgetEntry = (entry: SceneDataRemoteEntry): entry is WidgetPreviewR
 export interface SceneDataPollingRuntimeOptions {
   /** 当前运行场景上下文；嵌入模式的数据请求会据此追加 sceneId。 */
   getRuntimeContext?: () => DataRequestRuntimeContext
+  /** 发布会话从独立入口提供当前票据，不暴露给普通 HTTP 数据源或保存包。 */
+  getIotPublicationAccess?: () => IotPublicationAccess | null
   getDatasets?: () => Dataset[]
   getPublicRequests: () => PublicRequestConfig[]
   getRequestGlobalConfig: () => RequestGlobalConfig
@@ -606,6 +608,7 @@ export class SceneDataPollingRuntime {
       task.unsubscribe?.()
     })
     this.iotStateTasks.clear()
+    if (this.options.getRuntimeContext?.()?.publicPreview && !this.options.getIotPublicationAccess?.()) return []
     return sceneObjects.flatMap((object) => {
       const binding = this.getIotStateBinding(object)
       if (!binding) return []
@@ -628,10 +631,11 @@ export class SceneDataPollingRuntime {
   /** WebSocket 首次确认后立即取一次快照；自动模式失败时才启用查询轮询补偿。 */
   private async subscribeIotStateTask(task: IotStateTask, generation: number): Promise<void> {
     try {
+      const publication = this.options.getIotPublicationAccess
       const unsubscribe = await this.iotStateWebSocket.subscribe(
         {
           subscriptionId: task.subscriptionId,
-          sceneId: this.options.getRuntimeContext?.()?.sceneId || undefined,
+          ...(publication ? { publication } : { sceneId: this.options.getRuntimeContext?.()?.sceneId || undefined }),
           objectId: task.objectId,
           deviceId: task.deviceId,
           pointCode: task.pointCode,
@@ -665,10 +669,16 @@ export class SceneDataPollingRuntime {
     if (!this.running || generation !== this.generation || task.running) return
     task.running = true
     try {
-      const sceneId = this.options.getRuntimeContext?.()?.sceneId
+      const context = this.options.getRuntimeContext?.()
+      const publication = this.options.getIotPublicationAccess?.()
+      // 发布票据失效时结束本次查询，禁止回退到草稿或租户级查询。
+      if ((context?.publicPreview || this.options.getIotPublicationAccess) && !publication) return
+      const scope = publication
+        ? { ...publication, objectId: task.objectId }
+        : context?.sceneId ? { sceneId: context.sceneId, objectId: task.objectId } : undefined
       const versionBeforeQuery = task.lastStateVersion
-      const snapshot: IotStateSnapshot | null = sceneId
-        ? await getIotState(task.deviceId, task.pointCode, { sceneId, objectId: task.objectId })
+      const snapshot: IotStateSnapshot | null = scope
+        ? await getIotState(task.deviceId, task.pointCode, scope)
         : await getIotState(task.deviceId, task.pointCode)
       // 查询发出后收到的推送优先，避免较晚返回的首屏快照覆盖实时值。
       if (versionBeforeQuery !== task.lastStateVersion) return

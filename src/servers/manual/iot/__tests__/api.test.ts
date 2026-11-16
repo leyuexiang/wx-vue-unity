@@ -70,3 +70,14 @@ it('状态查询拒绝非法参数、身份切换和跨租户错误', async () =
   finish({ code: 200, data: null })
   await expect(pending).rejects.toThrow('身份已变化')
 })
+
+it('发布场景通过专用端点读取状态，票据只出现在请求头', async () => {
+  transport.mockResolvedValue({ code: 200, data: null })
+  await expect(getIotState('d', 'p', {
+    publicationId: 'PUB-10', publicationTicket: 'test-ticket', objectId: 'pump',
+  })).resolves.toBeNull()
+  expect(transport).toHaveBeenCalledWith(expect.stringContaining('/iot-state/publication'), expect.objectContaining({
+    headers: { 'X-Scene-Ticket': 'test-ticket' },
+    params: { publicationId: 'PUB-10', objectId: 'pump', deviceId: 'd', pointCode: 'p' },
+  }))
+})

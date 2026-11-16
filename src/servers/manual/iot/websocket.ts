@@ -1,14 +1,13 @@
 import { authContext } from '@/auth/authContext'
 import { DIM3D_SERVER_URL } from '@/servers/manual/dim3d/api/constants'
-import type { IotStateSnapshot } from './api'
+import type { IotPublicationAccess, IotStateSnapshot } from './api'
 
-export interface IotStateSubscription {
+export type IotStateSubscription = {
   subscriptionId: string
-  sceneId?: string
   objectId?: string
   deviceId: string
   pointCode: string
-}
+} & ({ sceneId?: string; publication?: never } | { sceneId?: never; publication: () => IotPublicationAccess | null })
 
 export interface IotStateUpdate extends IotStateSnapshot {
   subscriptionId: string
@@ -71,13 +70,10 @@ export class IotStateWebSocketClient {
         timer,
       })
     })
-    this.send('iot-state-subscribe', {
-      requestId,
-      sceneId: request.sceneId,
-      bindings: [request],
-    })
+    this.sendSubscription(requestId, request)
     await acknowledged.catch((error) => {
       this.subscriptions.delete(request.subscriptionId)
+      if (!this.subscriptions.size) this.dispose()
       throw error
     })
     this.ensureRenewal()
@@ -148,11 +144,9 @@ export class IotStateWebSocketClient {
     this.reconnectTimer = globalThis.setTimeout(() => {
       this.reconnectTimer = null
       void this.ensureConnected()
-        .then(() => this.subscriptions.forEach(({ request }) => this.send('iot-state-subscribe', {
-          requestId: `reconnect-${request.subscriptionId}`,
-          sceneId: request.sceneId,
-          bindings: [request],
-        })))
+        .then(() => this.subscriptions.forEach(({ request }) => {
+          this.sendSubscription(`reconnect-${request.subscriptionId}`, request)
+        }))
         .catch(() => this.scheduleReconnect())
     }, delay)
   }
@@ -169,14 +163,32 @@ export class IotStateWebSocketClient {
   private ensureRenewal() {
     if (this.renewalTimer || !this.subscriptions.size) return
     this.renewalTimer = setInterval(() => {
-      this.subscriptions.forEach(({ request }) => {
-        this.send('iot-state-subscribe', {
-          requestId: `request-${request.subscriptionId}`,
-          sceneId: request.sceneId,
-          bindings: [request],
-        })
-      })
+      this.subscriptions.forEach(({ request }) => this.sendSubscription(`request-${request.subscriptionId}`, request))
     }, 30000)
+  }
+
+  /** 发布票据在建连、续租时现场读取，且只放在帧首部。 */
+  private sendSubscription(requestId: string, request: IotStateSubscription) {
+    const { subscriptionId, objectId, deviceId, pointCode } = request
+    const publication = request.publication?.()
+    if (request.publication && !publication) {
+      const pending = this.pendingRequests.get(requestId)
+      if (pending) {
+        clearTimeout(pending.timer)
+        this.pendingRequests.delete(requestId)
+        pending.reject(new Error('发布访问票据已失效'))
+      } else {
+        this.unsubscribe(subscriptionId)
+      }
+      return
+    }
+    this.send('iot-state-subscribe', {
+      requestId,
+      ...(publication
+        ? { publicationId: publication.publicationId, publicationTicket: publication.publicationTicket }
+        : { sceneId: request.sceneId }),
+      bindings: [{ subscriptionId, objectId, deviceId, pointCode }],
+    })
   }
 
   private send(type: string, content: unknown) {
