@@ -8,7 +8,8 @@ import {
   isEmbeddedMode,
 } from '@/auth/runtime'
 import { handleLoginRedirect } from '@/utils/auth'
-import { restoreStandalone } from '@/auth/standalone'
+import { clearStandalone, restoreStandalone } from '@/auth/standalone'
+import { authContext } from '@/auth/authContext'
 import StandaloneLogin from '@/views/StandaloneLogin.vue'
 import { redirectScenePreviewToTenantLogin } from '@/auth/scenePreviewLoginRedirect'
 import router from '@/router'
@@ -22,6 +23,9 @@ const showStandaloneLogin = ref(false)
 const editorAuthExpired = ref(false)
 const isEditorTab = computed(() => window.location.pathname.endsWith('/sceneEdit'))
 const isPreviewTab = computed(() => window.location.pathname.endsWith('/scenePreview'))
+// 固定发布在独立部署中使用本站认证，旧分享页仍按原有交接方式启动。
+const isStandalonePublication = computed(() => isPreviewTab.value && !isEmbeddedMode() &&
+  new URLSearchParams(window.location.search).has('publicationId'))
 let previewAuthExpiryTimer: ReturnType<typeof setTimeout> | undefined
 
 const schedulePreviewAuthExpiryRedirect = (context: Readonly<{ expiresAt?: number }> | null) => {
@@ -30,7 +34,7 @@ const schedulePreviewAuthExpiryRedirect = (context: Readonly<{ expiresAt?: numbe
   const checkExpiration = () => {
     const remaining = context.expiresAt! - Date.now()
     if (remaining <= 0) {
-      redirectScenePreviewToTenantLogin()
+      handleEditorAuthExpired()
       return
     }
     // 浏览器单次定时器存在 32 位上限，超长有效期按上限分段复查。
@@ -40,6 +44,12 @@ const schedulePreviewAuthExpiryRedirect = (context: Readonly<{ expiresAt?: numbe
 }
 
 const handleEditorAuthExpired = () => {
+  if (isStandalonePublication.value) {
+    clearAuthenticationRuntime()
+    clearStandalone()
+    requireStandaloneLogin()
+    return
+  }
   if (isPreviewTab.value) {
     redirectScenePreviewToTenantLogin()
     return
@@ -78,7 +88,8 @@ const redirectRestrictedManagementRoute = async () => {
 /** 登录与失效都由组合根控制业务视图，避免旧权限请求或外部跳转混入独立认证流程。 */
 const completeStandaloneLogin = async () => {
   appStore.syncAuthentication()
-  await redirectRestrictedManagementRoute()
+  if (isStandalonePublication.value) schedulePreviewAuthExpiryRedirect(authContext.get())
+  else await redirectRestrictedManagementRoute()
   showStandaloneLogin.value = false
   authError.value = ''
   authReady.value = true
@@ -98,10 +109,19 @@ onMounted(async () => {
   window.addEventListener('xr-center-auth-expired', handleEditorAuthExpired)
   window.addEventListener('standalone-auth-required', requireStandaloneLogin)
   if (!isEmbeddedMode()) handleLoginRedirect()
-  // 预览始终是独立页签：无论当前构建是否开启 iframe 模式，都只消费新页签/登录回跳凭证，
-  // 不调用历史独立登录的用户信息接口。这样本地联调切换 VITE_EMBED_MODE 时行为仍保持一致。
+  // 预览优先消费页签交接。独立部署的固定发布也可恢复本页已验证会话或在原地址登录。
   if (isPreviewTab.value) {
     const context = await initializeTabAuthentication()
+    if (isStandalonePublication.value) {
+      try {
+        if (context || await restoreStandalone()) await completeStandaloneLogin()
+        else showStandaloneLogin.value = true
+      } catch {
+        authError.value = '无法验证登录状态，请检查网络后重新登录'
+        showStandaloneLogin.value = true
+      }
+      return
+    }
     schedulePreviewAuthExpiryRedirect(context)
     authReady.value = true
     return
@@ -156,7 +176,8 @@ onBeforeUnmount(() => {
         <button type="button" @click="closeEditorTab">确认并关闭编辑器</button>
       </div>
     </div>
-    <StandaloneLogin v-if="showStandaloneLogin && !authReady" :message="authError" @authenticated="completeStandaloneLogin" />
+    <StandaloneLogin v-if="showStandaloneLogin && !authReady" :message="authError"
+      :initial-platform="isStandalonePublication ? 'tenant' : 'operation'" @authenticated="completeStandaloneLogin" />
     <div v-if="!authReady && !showStandaloneLogin" class="auth-bootstrap-state" role="status">
       <span>{{ authError || '正在验证登录状态…' }}</span>
       <button v-if="editorAuthExpired" type="button" @click="closeEditorTab">

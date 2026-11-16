@@ -4,7 +4,7 @@ import { loginStandalone, sendStandaloneSms } from '@/auth/standalone'
 import type { PlatformType } from '@/auth/authTypes'
 import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
 
-defineProps<{ message?: string }>()
+const props = defineProps<{ message?: string; initialPlatform?: PlatformType }>()
 const emit = defineEmits<{ authenticated: [] }>()
 const phonenumber = ref('')
 const password = ref('')
@@ -37,7 +37,8 @@ async function sendCode(): Promise<void> {
 }
 const submitting = ref(false)
 const errorMessage = ref('')
-const platformType = ref<PlatformType>('operation')
+// 固定发布默认展示租户登录，其他入口继续使用运营端默认值。
+const platformType = ref<PlatformType>(props.initialPlatform ?? 'operation')
 
 /** 切换登录平台或方式只影响下次认证；清除敏感输入，不修改已有身份权限。 */
 watch([platformType, loginMethod], () => {
