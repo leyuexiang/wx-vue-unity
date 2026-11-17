@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_ADMIN_API, DIM3D_API_PREFIX } from './constants'
+import { DIM3D_API_PREFIX } from './constants'
 import type { Dim3dTemplateType } from './template'
 
 /**
@@ -20,21 +20,35 @@ export type Dim3dModelCategoryItem = Dim3dDictionaryItem
 export interface Dim3dDictionaryResponse {
   code?: number
   msg?: string
-  data?: Dim3dModelCategoryItem[] | null
+  data?: Dim3dDictionaryItem[] | null
 }
 
-/** 148管理接口使用精简字典列表；只合并并发读取，避免跨登录身份长期缓存。 */
-let adminDictionaryRequest: Promise<Dim3dDictionaryResponse> | undefined
-const getDictionary = (type: string, options?: Record<string, unknown>) => {
-  if (!adminDictionaryRequest) {
-    adminDictionaryRequest = request<{ code?: number; msg?: string; data?: Array<{ dictType?: string; label?: string; value?: string }> }>(
-      `${DIM3D_API_PREFIX}/system/dict-data/simple-list`,
-      { method: 'GET', headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true, ...options },
-    ).then((response) => ({ ...response, data: response.data?.map((item) => ({
-      dictType: item.dictType, dictLabel: item.label, dictValue: item.value,
-    })) })).finally(() => { adminDictionaryRequest = undefined })
+/**
+ * 所有分类共用按类型查询入口，管理端与参考端的前缀由部署配置决定。
+ * 每次请求独立携带当前身份和调用选项，服务端过滤并排序后原样返回字典编号及业务编码。
+ */
+async function getDictionary(type: string, options?: Record<string, unknown>) {
+  const response = await request<Dim3dDictionaryResponse>(
+    `${DIM3D_API_PREFIX}/system/dict/data/type/${encodeURIComponent(type)}`,
+    {
+      method: 'GET',
+      headers: getDim3dHeaders(),
+      passAuth: true,
+      // 分类是公共元数据路径，资源页的平台路径分流不适用于字典。
+      skipPlatformPath: true,
+      ...options,
+    },
+  )
+  // 业务错误和异常响应需要进入页面已有的失败分支，防止被当作合法空分类缓存。
+  if (response.code !== undefined && response.code !== 0 && response.code !== 200) {
+    throw Object.assign(new Error(response.msg?.trim() || '字典读取失败'), {
+      code: response.code,
+      status: response.code,
+    })
   }
-  return adminDictionaryRequest.then((response) => ({ ...response, data: response.data?.filter((item) => item.dictType === type) }))
+  if (!Array.isArray(response.data)) throw new Error('字典接口返回格式异常')
+  // 编辑器另存模板入口按 200 判断成功，兼容现有系统服务的成功码零。
+  return { ...response, code: response.code === 0 ? 200 : response.code }
 }
 
 /**
@@ -104,18 +118,7 @@ export function createDim3dDictionaryOptions(items: Dim3dDictionaryItem[] = []) 
  * 字典的 dictValue 作为模型接口的分类编码，dictLabel 作为页面展示名称，禁止回退到临时字典接口。
  */
 export function getDim3dModelCategoryDictionary(options?: Record<string, unknown>) {
-  if (DIM3D_ADMIN_API) return getDictionary('dim3d_model_category', options)
-  return request<Dim3dDictionaryResponse>(
-    `${DIM3D_API_PREFIX}/system/dict/data/type/dim3d_model_category`,
-    {
-      method: 'GET',
-      headers: getDim3dHeaders(),
-      passAuth: true,
-      // 字典是三维资源的公共元数据，平台差异只作用于资源列表接口。
-      skipPlatformPath: true,
-      ...(options || {}),
-    },
-  )
+  return getDictionary('dim3d_model_category', options)
 }
 
 /**
@@ -123,17 +126,7 @@ export function getDim3dModelCategoryDictionary(options?: Record<string, unknown
  * dictValue 是图标分页筛选和新增、编辑提交的分类编码，dictLabel 仅用于中文展示。
  */
 export function getDim3dIconCategoryDictionary(options?: Record<string, unknown>) {
-  return request<Dim3dDictionaryResponse>(
-    `${DIM3D_API_PREFIX}/system/dict/data/type/dim3d_icon_category`,
-    {
-      method: 'GET',
-      headers: getDim3dHeaders(),
-      passAuth: true,
-      // 字典是三维资源的公共元数据，平台差异只作用于资源列表接口。
-      skipPlatformPath: true,
-      ...(options || {}),
-    },
-  )
+  return getDictionary('dim3d_icon_category', options)
 }
 
 /**
@@ -151,53 +144,15 @@ export function getDim3dTemplateCategoryDictionary(
   const templateType = hasTemplateType ? templateTypeOrOptions : undefined
   const requestOptions = hasTemplateType ? options : templateTypeOrOptions
   const dictionaryType = templateType || 'dim3d_template_category'
-  if (DIM3D_ADMIN_API) {
-    return getDictionary(dictionaryType, requestOptions).then((response) =>
-      response.code === 0 ? { ...response, code: 200 } : response,
-    )
-  }
-
-  return request<Dim3dDictionaryResponse>(
-    `${DIM3D_API_PREFIX}/system/dict/data/type/${encodeURIComponent(dictionaryType)}`,
-    {
-      method: 'GET',
-      headers: getDim3dHeaders(),
-      passAuth: true,
-      // 字典是三维资源的公共元数据，平台差异只作用于资源列表接口。
-      skipPlatformPath: true,
-      ...(requestOptions || {}),
-    },
-  )
+  return getDictionary(dictionaryType, requestOptions)
 }
 
 /** 读取场景分类字典；dictValue 用于场景分页和新增/编辑提交，dictLabel 用于页面展示。 */
 export function getDim3dSceneCategoryDictionary(options?: Record<string, unknown>) {
-  if (DIM3D_ADMIN_API) return getDictionary('dim3d_scene_category', options)
-  return request<Dim3dDictionaryResponse>(
-    `${DIM3D_API_PREFIX}/system/dict/data/type/dim3d_scene_category`,
-    {
-      method: 'GET',
-      headers: getDim3dHeaders(),
-      passAuth: true,
-      // 字典是三维资源的公共元数据，平台差异只作用于资源列表接口。
-      skipPlatformPath: true,
-      ...(options || {}),
-    },
-  )
+  return getDictionary('dim3d_scene_category', options)
 }
 
 /** 读取场景发布访问模式字典；发布接口直接提交字典 dictValue，不再维护本地枚举映射。 */
 export function getDim3dAccessModeDictionary(options?: Record<string, unknown>) {
-  if (DIM3D_ADMIN_API) return getDictionary('dim3d_access_mode', options)
-  return request<Dim3dDictionaryResponse>(
-    `${DIM3D_API_PREFIX}/system/dict/data/type/dim3d_access_mode`,
-    {
-      method: 'GET',
-      headers: getDim3dHeaders(),
-      passAuth: true,
-      // 字典是三维资源的公共元数据，平台差异只作用于资源列表接口。
-      skipPlatformPath: true,
-      ...(options || {}),
-    },
-  )
+  return getDictionary('dim3d_access_mode', options)
 }

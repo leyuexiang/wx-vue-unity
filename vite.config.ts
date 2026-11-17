@@ -1,5 +1,5 @@
 import { fileURLToPath, URL } from 'node:url'
-import { existsSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -27,6 +27,16 @@ const boundedImportMetaFilter = (): Plugin => ({
 /** 只接入页面、二维组件和媒体构建能力；云渲染使用独立传输层，不安装浏览器三维插件。 */
 export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
+  // 启动接口与页面使用同源相对路径，部署子目录变化时统一跟随基础路径。
+  const unityRuntimePrefix = new URL('unity-runtime', new URL(env.VITE_BASE_URL || '/', 'http://localhost')).pathname
+  const unityRuntimeProxy = {
+    [unityRuntimePrefix]: {
+      target: 'https://localhost:5191',
+      // 本机资源网关使用项目自行生成的证书，代理连接限定在环回开发入口。
+      secure: false,
+      rewrite: (requestPath: string) => requestPath.slice(unityRuntimePrefix.length) || '/',
+    },
+  }
   const componentDirectory = path.resolve('node_modules/element-plus/es/components')
   // 懒加载页面会逐步发现组件样式，预先列举真实入口可避免首访反复预构建及整页重载。
   const componentStyles = readdirSync(componentDirectory, { withFileTypes: true })
@@ -36,6 +46,24 @@ export default defineConfig(({ mode, command }) => {
   // 未提供部署配置时也使用 /dts/，确保默认构建与开发入口、静态资源路径一致。
   base: env.VITE_BASE_URL || '/dts/',
   plugins: [vue(), vueJsx(), tailwindcss(), boundedImportMetaFilter(),
+    {
+      name: 'package-unity-web-gateway', apply: 'build',
+      writeBundle(output) {
+        // 公共目录由构建工具原样复制；额外交付只依赖运行库内置模块的启动网关。
+        const serverDirectory = path.resolve(output.dir || 'dist/web-unity', 'server')
+        mkdirSync(serverDirectory, { recursive: true })
+        // 配置存储模块随网关一起交付，生产环境不依赖源码目录。
+        for (const file of ['unityWebDevGateway.ts', 'unityWebPackages.ts']) {
+          copyFileSync(fileURLToPath(new URL(`./server/${file}`, import.meta.url)), path.join(serverDirectory, file))
+        }
+        const packageConfig = fileURLToPath(new URL('./config/webgpu-packages.json', import.meta.url))
+        if (existsSync(packageConfig)) {
+          const configDirectory = path.resolve(serverDirectory, '../config')
+          mkdirSync(configDirectory, { recursive: true })
+          copyFileSync(packageConfig, path.join(configDirectory, 'webgpu-packages.json'))
+        }
+      },
+    },
     AutoImport({ imports: ['vue'], resolvers: [ElementPlusResolver()], dts: command === 'serve' ? 'src/auto-imports.d.ts' : false }),
     Components({ resolvers: [IconsResolver({ enabledCollections: ['ep'] }), ElementPlusResolver()], dts: command === 'serve' ? 'src/components.d.ts' : false }),
     Icons({ autoInstall: true }),
@@ -61,6 +89,7 @@ export default defineConfig(({ mode, command }) => {
     },
     // 保留来源业务请求契约，只有配置了目标地址才创建代理，避免空地址导致启动失败。
     proxy: {
+      ...unityRuntimeProxy,
       // 同源部署时业务与独立鉴权均走 /api；配置为空时由部署网关负责转发。
       ...(env.VITE_DIM3D_SERVER_URL ? { '/api': { target: env.VITE_DIM3D_SERVER_URL, changeOrigin: true } } : {}),
       ...(env.VITE_DATA_MIDDLEWARE_URL && env.VITE_DATA_MIDDLEWARE_PREFIX ? {
@@ -70,6 +99,8 @@ export default defineConfig(({ mode, command }) => {
     },
   },
   preview: {
+    // 本机检查发布产物时沿用同一个相对启动入口。
+    proxy: unityRuntimeProxy,
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'credentialless',

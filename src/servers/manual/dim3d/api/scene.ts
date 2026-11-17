@@ -318,7 +318,9 @@ const sceneRequest = (path: string, method: string, options: Record<string, unkn
     passAuth: true,
     // 三维服务常量已经包含完整管理 API 根路径，不能在 Unity Web 会话建立后再次插入平台段。
     skipPlatformPath: true,
-    preserveConfiguredHeaders: true,
+    // 场景写入使用当前登录身份，与列表读取保持一致。这里的请求头来自兼容存储，
+    // 并非用户配置的数据源凭据，必须允许拦截器覆盖旧临时令牌和客户端编号，
+    // 并保留当前会话的统一失效处理；没有登录上下文时仍沿用 passAuth 的兼容逻辑。
     ...options,
   })
 

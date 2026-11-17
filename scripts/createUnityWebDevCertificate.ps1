@@ -1,6 +1,10 @@
 $frontendRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $directory = Join-Path $frontendRoot '.tmp\unity-web-dev'
 New-Item -ItemType Directory -Path $directory -Force | Out-Null
+# 保存当前已能导出证书的运行库位置，让资源管理器双击启动时也能找到同一个运行库。
+# 此文件属于本机启动配置，与证书一起保留；路径变更后再次初始化即可更新。
+[System.IO.File]::WriteAllText((Join-Path $directory 'powershell-path.txt'),
+    (Join-Path $PSHOME 'pwsh.exe'), [System.Text.UTF8Encoding]::new($false))
 $marker = Join-Path $directory 'cert-thumbprint.txt'
 $keyFile = Join-Path $directory 'localhost-key.pem'
 $certFile = Join-Path $directory 'localhost-cert.pem'

@@ -88,7 +88,10 @@ export class WebUnityTransport implements UnityTransport {
     const clientId = authContext.getClientId()
     const platform = authContext.getPlatformType()
     const tenantId = authContext.get()?.tenantId
-    const response = await fetch(this.bootstrapUrl, {
+    // 相对入口和播放器地址统一基于应用根路径，避免编辑器路由层级改变资源位置。
+    // 现有独立部署提供的完整地址仍可按浏览器标准地址解析规则使用。
+    const applicationUrl = new URL(import.meta.env.BASE_URL, document.baseURI)
+    const response = await fetch(new URL(this.bootstrapUrl, applicationUrl).href, {
       credentials: 'same-origin', cache: 'no-store',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(clientId ? { ClientId: clientId } : {}),
         ...(tenantId ? { 'tenant-id': tenantId } : {}),
@@ -100,6 +103,15 @@ export class WebUnityTransport implements UnityTransport {
         !bootstrap.art?.descriptorBase64 || !bootstrap.art.descriptorSha256 || !bootstrap.art.releaseBaseUrl || !bootstrap.art.projectId ||
         !bootstrap.business?.projectName || !bootstrap.business.apiBaseUrl || !bootstrap.business.userId) {
       throw new Error('Unity Web 部署配置缺少构建或启动字段')
+    }
+    // 在交给加载器和原生线程前一次性解析，确保所有构建文件使用相同的部署基准。
+    bootstrap.build = {
+      ...bootstrap.build,
+      loaderUrl: new URL(bootstrap.build.loaderUrl, applicationUrl).href,
+      dataUrl: new URL(bootstrap.build.dataUrl, applicationUrl).href,
+      frameworkUrl: new URL(bootstrap.build.frameworkUrl, applicationUrl).href,
+      codeUrl: new URL(bootstrap.build.codeUrl, applicationUrl).href,
+      streamingAssetsUrl: bootstrap.build.streamingAssetsUrl ? new URL(bootstrap.build.streamingAssetsUrl, applicationUrl).href : undefined,
     }
     if (bootstrap.build.threadsRequired && (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer === 'undefined')) {
       throw new Error('Unity WebGPU 原生线程需要网页启用跨源隔离（COOP: same-origin；COEP: credentialless 或 require-corp），配置后请完整刷新页面')

@@ -9,7 +9,7 @@ const bootstrap = {
 
 describe('Unity native thread prerequisites', () => {
   const appendPlayer = vi.fn()
-  const appendLoader = vi.fn(() => { throw new Error('loader reached') })
+  const appendLoader = vi.fn((_script: HTMLScriptElement) => { throw new Error('loader reached') })
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => bootstrap }))
@@ -17,7 +17,25 @@ describe('Unity native thread prerequisites', () => {
     vi.stubGlobal('document', { baseURI: 'http://app.test/', createElement: () => ({ style: {}, remove: vi.fn(), addEventListener: vi.fn(), focus: vi.fn() }), head: { append: appendLoader } })
     vi.stubGlobal('window', { location: { origin: 'http://app.test' }, addEventListener: vi.fn(), removeEventListener: vi.fn() })
   })
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+
+  it('多级编辑路由中的相对播放器地址始终基于应用部署目录解析', async () => {
+    // 发布在子目录且编辑器路由带多级路径时，启动接口和播放器仍定位到应用根目录。
+    vi.stubEnv('BASE_URL', '/deployed/app/')
+    vi.stubGlobal('crossOriginIsolated', true)
+    vi.stubGlobal('document', { ...document, baseURI: 'http://app.test/deployed/app/sceneEdit/nested?id=1' })
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      ...bootstrap, build: { ...bootstrap.build, loaderUrl: './unity-web/player/Build/player.loader.js',
+        dataUrl: './unity-web/player/Build/player.data', frameworkUrl: './unity-web/player/Build/player.framework.js',
+        codeUrl: './unity-web/player/Build/player.wasm' },
+    }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const transport = new WebUnityTransport({ append: appendPlayer } as unknown as HTMLElement, './unity-runtime/bootstrap')
+    await expect(transport.connect()).rejects.toThrow('loader reached')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://app.test/deployed/app/unity-runtime/bootstrap')
+    expect(appendLoader.mock.calls[0]?.[0].src).toBe('http://app.test/deployed/app/unity-web/player/Build/player.loader.js')
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
 
   it('reports missing page isolation before downloading the player', async () => {
     vi.stubGlobal('crossOriginIsolated', false)

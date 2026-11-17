@@ -12,7 +12,8 @@ export const unityRenderConfig = {
     connectionId: String(import.meta.env.VITE_UNITY_CLOUD_CLIENT_ID || '').trim(),
   },
   webgpu: {
-    bootstrapUrl: String(import.meta.env.VITE_UNITY_WEB_BOOTSTRAP_URL || '').trim(),
+    // 默认入口随前端子目录部署，显式空值仍可关闭入口，完整地址继续支持独立网关。
+    bootstrapUrl: String(import.meta.env.VITE_UNITY_WEB_BOOTSTRAP_URL ?? './unity-runtime/bootstrap').trim(),
   },
 }
 

@@ -45,6 +45,8 @@ export interface SceneCardCapabilities {
 
 /** 管理页面当前需要的能力快照；不暴露 iframe 消息或具体认证提供者。 */
 export interface ManagementCapabilities {
+  /** 系统配置会影响整个部署，只向运营端展示和开放配置页面。 */
+  readonly systemConfig: { readonly canAccess: boolean }
   readonly resource: ResourceCardCapabilities
   readonly scene: SceneCardCapabilities
   readonly template: {
@@ -130,6 +132,7 @@ const TENANT_SCENE_PUBLISH_ACCESS_MODES: readonly ScenePublishAccessModeOption[]
 export function createManagementCapabilities(input: CapabilityInput): ManagementCapabilities {
   if (input.platformType === 'operation') {
     return Object.freeze({
+      systemConfig: Object.freeze({ canAccess: true }),
       resource: FULL_RESOURCE_CAPABILITIES,
       scene: OPERATION_SCENE_CAPABILITIES,
       template: Object.freeze({ canAccess: true }),
@@ -138,6 +141,7 @@ export function createManagementCapabilities(input: CapabilityInput): Management
   }
 
   return Object.freeze({
+    systemConfig: Object.freeze({ canAccess: false }),
     // 资源归属会在 resolveResourceCardCapabilities 中叠加，租户基础快照先关闭所有资源动作。
     resource: TENANT_SYSTEM_RESOURCE_CAPABILITIES,
     scene: Object.freeze({

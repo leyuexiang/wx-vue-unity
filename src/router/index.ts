@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { authContext } from '@/auth/authContext'
 import { canAccessManagementRoute, isManagementRouteName, getManagementFallbackRoute } from '@/auth/managementNavigation'
+import { getCurrentManagementCapabilities } from '@/auth/capabilities'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -43,6 +44,12 @@ const router = createRouter({
           name: 'sceneManage',
           component: () => import('../views/SceneManage/index.vue'),
         },
+        {
+          // 系统设置独立于资源管理，后续增加其他配置时无需改变侧栏分组。
+          path: '/systemManage/config',
+          name: 'configManage',
+          component: () => import('../views/systemManage/configManage/index.vue'),
+        },
       ],
     },
     {
@@ -76,6 +83,12 @@ const router = createRouter({
 router.beforeEach((to) => {
   if (isManagementRouteName(to.name) && authContext.get() && !canAccessManagementRoute(to.name)) {
     return { name: getManagementFallbackRoute(), replace: true }
+  }
+  if (to.name === 'configManage' && !getCurrentManagementCapabilities().systemConfig.canAccess) {
+    return { name: 'sceneManage', replace: true }
+  }
+  if (to.name === 'templateManage' && !getCurrentManagementCapabilities().template.canAccess) {
+    return { name: 'modelManage', replace: true }
   }
   return true
 })

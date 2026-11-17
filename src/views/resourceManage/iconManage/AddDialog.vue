@@ -168,7 +168,7 @@ import {
   type UploadRequestOptions,
   type UploadUserFile,
 } from 'element-plus'
-import { toData } from '@/utils/asyncHandler'
+import { to } from '@/utils/asyncHandler'
 import type { TransferListItem } from './index.vue'
 import { uploadDim3dOssFile } from '@/servers/manual/dim3d/api/oss'
 import { addDim3dIcon, editDim3dIcon, type Dim3dIconForm } from '@/servers/manual/dim3d/api/icon'
@@ -418,10 +418,10 @@ const handleConfirm = async (formEl?: FormInstance) => {
   const id = props.editRecord?.id ? String(props.editRecord.id) : ''
 
   submitting.value = true
-  const [error] = await toData(id ? editDim3dIcon(id, body) : addDim3dIcon(body))
+  const [error] = await to<unknown>(id ? editDim3dIcon(id, body) : addDim3dIcon(body))
   submitting.value = false
   if (error) {
-    ElMessage.error(id ? '编辑图片失败' : '新增图片失败')
+    ElMessage.error(error.message || (id ? '编辑图片失败' : '新增图片失败'))
     return
   }
 

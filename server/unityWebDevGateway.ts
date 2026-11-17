@@ -1,9 +1,11 @@
 import { createServer as createHttpsServer } from 'node:https'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
-import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createReadStream, readFileSync, statSync } from 'node:fs'
 import { randomUUID, createHash } from 'node:crypto'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { assertPackageFile, createWebPackageStore, WebPackageError, type WebPackageDeployment } from './unityWebPackages.ts'
 
 // Local integration only. The browser's login token is checked against the existing
 // profile API; the Unity player receives a short-lived opaque proxy URL, not the token.
@@ -14,17 +16,59 @@ const pageOrigin = process.env.UNITY_WEB_DEV_PAGE_ORIGIN || 'http://localhost:51
 const backend = new URL(required('UNITY_WEB_DEV_BACKEND'))
 // 默认使用本项目管理 API，旧参考部署可显式配置 reference。
 const adminApi = process.env.UNITY_WEB_DEV_API_MODE !== 'reference'
-const playerRoot = path.resolve(required('UNITY_WEB_DEV_PLAYER_DIR'))
-const artRoot = path.resolve(required('UNITY_WEB_DEV_ART_DIR'))
-const descriptor = readFileSync(required('UNITY_WEB_DEV_DESCRIPTOR_FILE'))
-const descriptorSha256 = `sha256:${createHash('sha256').update(descriptor).digest('hex')}`
+// 源码目录与发布目录共用同一入口；所有默认文件位置均相对于服务文件所在项目解析。
+// 构建工具会把公共资源和本网关一起放入发布目录，部署后无需保留开发机器的目录结构。
+const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+// 配置页和启动接口共享持久化配置；不再由进程启动时的三个磁盘绝对路径锁死版本。
+const packages = createWebPackageStore(projectRoot)
+const deployments = new Map<string, WebPackageDeployment>()
 // 远程测试入口经反向代理访问；对外地址与环回监听地址独立配置。
 const publicOrigin = process.env.UNITY_WEB_DEV_PUBLIC_ORIGIN
 const origin = publicOrigin ? new URL(publicOrigin).origin : `https://localhost:${port}`
 if (publicOrigin && (origin !== publicOrigin || !origin.startsWith('https://'))) {
   throw new Error('UNITY_WEB_DEV_PUBLIC_ORIGIN 必须是 HTTPS 根来源')
 }
-const sessions = new Map<string, { token: string; clientId: string; tenantId?: string; expiresAt: number }>()
+const sessions = new Map<string, { token: string; clientId: string; tenantId?: string; expiresAt: number; deploymentId: string }>()
+let nextSessionPrune = 0
+
+/** 每个会话绑定创建时的部署快照，切换版本不会混用旧播放器和新美术资源。 */
+function pruneSessions(): void {
+  // 大场景会连续下载许多资源，清理每半分钟最多执行一次，避免每次文件请求都遍历会话。
+  if (Date.now() < nextSessionPrune) return
+  nextSessionPrune = Date.now() + 30000
+  for (const [key, value] of sessions) if (value.expiresAt <= Date.now()) sessions.delete(key)
+  const retained = new Set([...sessions.values()].map(session => session.deploymentId))
+  for (const key of deployments.keys()) if (!retained.has(key)) deployments.delete(key)
+}
+
+/** 正文监听在成功、超限、超时和断开时统一释放，错误响应前继续排空请求而不销毁连接。 */
+function readConfigBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks: Buffer[] = []
+    const cleanup = () => {
+      clearTimeout(timer)
+      req.off('data', onData).off('end', onEnd).off('aborted', onAborted).off('error', onAborted)
+    }
+    const fail = (error: WebPackageError) => { cleanup(); req.resume(); reject(error) }
+    const onAborted = () => fail(new WebPackageError('配置请求已中断'))
+    const onData = (chunk: Buffer) => {
+      size += chunk.length
+      if (size > 8192) { fail(new WebPackageError('配置内容过大', 413)); return }
+      chunks.push(Buffer.from(chunk))
+    }
+    const onEnd = () => {
+      cleanup()
+      try {
+        const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
+        resolve(value as Record<string, unknown>)
+      } catch { reject(new WebPackageError('配置内容格式无效')) }
+    }
+    const timer = setTimeout(() => fail(new WebPackageError('配置请求读取超时', 408)), 5000)
+    req.on('data', onData).once('end', onEnd).once('aborted', onAborted).once('error', onAborted)
+  })
+}
 
 function required(name: string): string {
   const value = process.env[name]
@@ -60,16 +104,26 @@ function contentType(file: string): string {
 function serveFile(root: string, relative: string, res: ServerResponse): void {
   if (relative.includes('\\') || relative.includes('\0')) { reply(res, 400, { error: 'Bad path' }); return }
   const file = path.resolve(root, relative)
-  if (!file.startsWith(root + path.sep) || !existsSync(file) || !statSync(file).isFile()) {
-    reply(res, 404, { error: 'Not found' }); return
+  let size: number
+  // 每次请求只读取一次文件状态；更新资源目录时文件可能恰好被移走，统一返回缺失而不抛出进程异常。
+  try {
+    if (!file.startsWith(root + path.sep)) throw new Error()
+    assertPackageFile(packages.assetRoot, file)
+    const fileStat = statSync(file)
+    if (!fileStat.isFile()) throw new Error()
+    size = fileStat.size
   }
-  const size = statSync(file).size
+  catch { reply(res, 404, { error: 'Not found' }); return }
   res.writeHead(200, {
     'Content-Type': contentType(file), 'Content-Length': size,
     ...(file.endsWith('.br') ? { 'Content-Encoding': 'br' } : {}),
     'Cache-Control': 'no-store',
   })
-  createReadStream(file).pipe(res)
+  // 读取期间文件发生变更或客户端断开时释放流，防止未处理的文件错误和无效磁盘读取。
+  const stream = createReadStream(file)
+  stream.on('error', () => res.destroy())
+  res.once('close', () => stream.destroy())
+  stream.pipe(res)
 }
 
 async function profile(token: string, clientId: string, platform: string, tenantId?: string): Promise<string> {
@@ -99,28 +153,57 @@ async function bootstrap(req: IncomingMessage, res: ServerResponse): Promise<voi
   let userId: string
   try { userId = await profile(token, clientId, platform, typeof tenantId === 'string' ? tenantId : undefined) }
   catch { reply(res, 401, { error: 'Login expired or profile unavailable' }); return }
-  const files = [
-    ['loaderUrl', ['.loader.js']], ['dataUrl', ['.data.br', '.data']],
-    ['frameworkUrl', ['.framework.js.br', '.framework.js']], ['codeUrl', ['.wasm.br', '.wasm']],
-  ] as const
-  const names = readdirSync(path.join(playerRoot, 'Build'))
-  const build: Record<string, string> = {}
-  for (const [key, suffixes] of files) {
-    const name = suffixes.map(suffix => names.find(value => value.endsWith(suffix))).find(Boolean)
-    if (!name) { reply(res, 503, { error: `Unity build file missing: ${key}` }); return }
-    build[key] = `${origin}/unity-web/Build/${encodeURIComponent(name)}`
-  }
-  build.streamingAssetsUrl = `${origin}/unity-web/StreamingAssets`
-  for (const [key, value] of sessions) if (value.expiresAt <= Date.now()) sessions.delete(key)
+  const deployment = packages.activeDeployment()
+  const { descriptor, descriptorSha256 } = deployment
+  pruneSessions()
+  // 来源目录和构建文件共同参与快照编号；相同版本的并发场景复用同一快照。
+  const deploymentId = createHash('sha256').update(deployment.playerRoot).update(descriptorSha256)
+    .update(JSON.stringify(deployment.build)).digest('hex').slice(0, 24)
+  deployments.set(deploymentId, deployment)
+  const playerBaseUrl = `./unity-runtime/packages/${deploymentId}/player/`
+  const build = Object.fromEntries(Object.entries(deployment.build).map(([key, file]) => [key, `${playerBaseUrl}${file}`]))
+  build.streamingAssetsUrl = `${playerBaseUrl}StreamingAssets`
   const session = randomUUID()
-  sessions.set(session, { token, clientId, ...(typeof tenantId === 'string' ? { tenantId } : {}), expiresAt: Date.now() + 60 * 60 * 1000 })
+  sessions.set(session, { token, clientId, ...(typeof tenantId === 'string' ? { tenantId } : {}), expiresAt: Date.now() + 60 * 60 * 1000, deploymentId })
   reply(res, 200, {
     build: { ...build, threadsRequired: true },
     art: { projectId: process.env.UNITY_WEB_DEV_PROJECT_ID || '1', descriptorBase64: descriptor.toString('base64'),
-      descriptorSha256, releaseBaseUrl: `${origin}/art/`, allowedOrigins: [origin] },
+      descriptorSha256, releaseBaseUrl: `${origin}/art/${deploymentId}/`, allowedOrigins: [origin] },
     business: { projectName: process.env.UNITY_WEB_DEV_PROJECT_NAME || '9tyf',
       apiBaseUrl: `${origin}/session/${session}`, userId, allowedApiOrigins: [origin] },
   })
+}
+
+/** 沿用业务后端身份校验，系统配置只对运营端开放，不能匿名读写服务器目录。 */
+async function configurePackages(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+  const token = req.headers.authorization
+  const clientId = req.headers.clientid
+  const tenantId = req.headers['tenant-id']
+  if (!token || !/^Bearer\s+\S+$/i.test(token) || typeof clientId !== 'string' || !clientId.trim() ||
+      (adminApi && (typeof tenantId !== 'string' || !/^[1-9]\d{0,18}$/.test(tenantId)))) {
+    reply(res, 401, { error: '请先登录后管理配置' }); return
+  }
+  if (req.headers['x-unity-platform'] !== 'operation') { reply(res, 403, { error: '仅运营端可以管理系统配置' }); return }
+  try { await profile(token, clientId, 'operation', typeof tenantId === 'string' ? tenantId : undefined) }
+  catch { reply(res, 401, { error: '登录已失效或身份服务不可用' }); return }
+  try {
+    if (req.method === 'GET' && pathname === '/config/webgpu') { reply(res, 200, packages.snapshot()); return }
+    // 文件夹选择与配置读写共用运营端身份校验，查询范围限定为项目公共资源目录。
+    if (req.method === 'GET' && pathname === '/config/webgpu/directories') {
+      const directory = new URL(req.url || '/', origin).searchParams.get('path') || ''
+      reply(res, 200, packages.directories(directory))
+      return
+    }
+    if (!((req.method === 'PUT' && pathname === '/config/webgpu') || (req.method === 'POST' && pathname === '/config/webgpu/check'))) {
+      reply(res, 405, { error: '不支持的配置操作' }); return
+    }
+    if (!req.headers['content-type']?.startsWith('application/json')) throw new WebPackageError('配置请求需使用结构化数据格式', 415)
+    const input = await readConfigBody(req)
+    reply(res, 200, req.method === 'PUT' ? packages.save(input, input.revision) : { checks: packages.check(input) })
+  } catch (error) {
+    reply(res, error instanceof WebPackageError ? error.status : 500,
+      { error: error instanceof WebPackageError ? error.message : '配置保存失败，请检查配置目录写入权限' })
+  }
 }
 
 function proxyBusiness(req: IncomingMessage, res: ServerResponse, pathname: string, search: string): void {
@@ -153,22 +236,34 @@ const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
   try { pathname = decodeURIComponent(url.pathname) }
   catch { reply(res, 400, { error: 'Bad path' }); return }
   if (req.method === 'GET' && pathname === '/health') { reply(res, 200, { status: 'ready' }); return }
+  if (pathname === '/config/webgpu' || pathname === '/config/webgpu/check' || pathname === '/config/webgpu/directories') {
+    void configurePackages(req, res, pathname).catch(() => { if (!res.headersSent) reply(res, 500, { error: '配置服务暂时不可用' }) })
+    return
+  }
   if (req.method === 'GET' && pathname === '/bootstrap') {
     void bootstrap(req, res).catch(() => reply(res, 503, { error: 'Unity Web deployment unavailable' }))
     return
   }
-  if (req.method === 'GET' && pathname.startsWith('/unity-web/')) {
-    const relative = pathname.slice('/unity-web/'.length)
+  if (req.method === 'GET' && pathname.startsWith('/packages/')) {
+    pruneSessions()
+    const match = /^\/packages\/([0-9a-f]{24})\/player\/(.+)$/.exec(pathname)
+    const deployment = match && deployments.get(match[1])
+    if (!match || !deployment) { reply(res, 404, { error: '资源包会话不存在或已过期' }); return }
+    const relative = match[2]
     if (/^StreamingAssets\/(?:Config|Windows)(?:\/|$)/i.test(relative)) {
       reply(res, 404, { error: 'Not found' }); return
     }
-    serveFile(playerRoot, relative, res); return
+    serveFile(deployment.playerRoot, relative, res); return
   }
   if (req.method === 'GET' && pathname.startsWith('/art/')) {
-    if (/^\/art\/(?:ArtReleaseManifest|ArtPackManifest|ArtResourceCatalog)\.json$/.test(pathname)) {
+    pruneSessions()
+    const match = /^\/art\/([0-9a-f]{24})\/(.+)$/.exec(pathname)
+    const deployment = match && deployments.get(match[1])
+    if (!match || !deployment) { reply(res, 404, { error: '资源包会话不存在或已过期' }); return }
+    if (/^(?:ArtReleaseManifest|ArtPackManifest|ArtResourceCatalog)\.json$/.test(match[2])) {
       res.once('finish', () => console.log(`Unity art metadata ${pathname} ${res.statusCode}`))
     }
-    serveFile(artRoot, pathname.slice('/art/'.length), res); return
+    serveFile(deployment.artRoot, match[2], res); return
   }
   if (pathname.startsWith('/session/')) { proxyBusiness(req, res, pathname, url.search); return }
   reply(res, 404, { error: 'Not found' })

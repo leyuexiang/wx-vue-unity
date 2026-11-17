@@ -62,20 +62,28 @@ export interface Dim3dIconVoidResponse {
   data?: null
 }
 
+/** 新增返回服务端生成的字符串目录编号。 */
+export interface Dim3dIconCreateResponse {
+  code?: number
+  msg?: string
+  data?: string
+}
+
 interface Dim3dIconPageEnvelope {
   data?: Dim3dIconPageResponse
   code?: number
   msg?: string
 }
 
-/** 只接受明确的 rows 数组，合法空列表必须由 `rows: []` 表达。 */
+/** 对齐已核实的后端 data.list 分页，同时兼容现有 rows 消费合同。 */
 const normalizeIconPage = (value: unknown): Dim3dIconPageResponse | undefined => {
   if (!value || typeof value !== 'object') return undefined
-  const candidate = value as { total?: unknown; rows?: unknown; code?: unknown; msg?: unknown }
-  if (!Array.isArray(candidate.rows)) return undefined
+  const candidate = value as { total?: unknown; rows?: unknown; list?: unknown; code?: unknown; msg?: unknown }
+  const rows = Array.isArray(candidate.rows) ? candidate.rows : candidate.list
+  if (!Array.isArray(rows)) return undefined
   return {
-    total: typeof candidate.total === 'number' ? candidate.total : candidate.rows.length,
-    rows: candidate.rows as Dim3dIconPageVo[],
+    total: typeof candidate.total === 'number' ? candidate.total : rows.length,
+    rows: rows as Dim3dIconPageVo[],
     code: typeof candidate.code === 'number' ? candidate.code : undefined,
     msg: typeof candidate.msg === 'string' ? candidate.msg : undefined,
   }
@@ -87,6 +95,14 @@ const createIconPageError = (code: number, message: string) => {
   error.code = code
   error.status = code
   return error
+}
+
+/** 业务错误码可能不在全局枚举中，保存入口必须再次确认回执成功，避免失败后关闭表单。 */
+const requireIconMutationSuccess = <T extends { code?: number; msg?: string }>(response: T): T => {
+  if (response?.code !== 200) {
+    throw createIconPageError(response?.code ?? 502, response?.msg || '图片保存失败')
+  }
+  return response
 }
 
 /** 阶段三图标分页接口；不再读取旧 `projectIconInfoList/countMax` 字段。 */
@@ -139,13 +155,13 @@ export function getDim3dIconInfo(id: string, options?: Record<string, unknown>) 
 
 /** 新增图标；文件上传完成后才允许提交 iconFileId。 */
 export function addDim3dIcon(body: Dim3dIconForm, options?: Record<string, unknown>) {
-  return request<Dim3dIconVoidResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/add`, {
+  return request<Dim3dIconCreateResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     data: body,
     passAuth: true,
     ...(options || {}),
-  })
+  }).then(requireIconMutationSuccess)
 }
 
 /** 编辑图标；未替换文件时继续提交详情中的原 iconFileId。 */
@@ -156,7 +172,7 @@ export function editDim3dIcon(id: string, body: Dim3dIconForm, options?: Record<
     data: body,
     passAuth: true,
     ...(options || {}),
-  })
+  }).then(requireIconMutationSuccess)
 }
 
 /** 删除图标。 */
