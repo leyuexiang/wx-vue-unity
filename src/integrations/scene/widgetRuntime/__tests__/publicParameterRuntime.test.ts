@@ -78,11 +78,12 @@ const fixture = (interval = 0) => {
   const widgets = useSceneWidgetStore()
   widgets.totalWidgets = [a, b, other]
   const applyObject = vi.fn()
+  const objects = [model]
   network.mockImplementation(async (_url, options) => ({
     data: { value: `数据${(options?.params as Record<string, string>).id}` },
   }))
   const runtime = new SceneDataPollingRuntime({
-    getSceneObjects: () => [model],
+    getSceneObjects: () => objects,
     getPublicRequests: () => definitions,
     getRequestGlobalConfig: createEmptyRequestGlobalConfig,
     applySceneObject: applyObject,
@@ -101,10 +102,41 @@ const fixture = (interval = 0) => {
         },
       ],
     })
-  return { a, b, other, model, shared, definitions, runtime, widgets, widget, pass, applyObject }
+  return { a, b, other, model, objects, shared, definitions, runtime, widgets, widget, pass, applyObject }
 }
 
 describe('公共接口传参刷新全部订阅者', () => {
+  it('共享响应在途时移除部分订阅，只更新存活目标；同编号恢复复用当前结果且不重复请求', async () => {
+    const f = fixture()
+    await f.runtime.start()
+    let complete!: (value: unknown) => void
+    network.mockClear()
+    network.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+    const pending = f.pass('a', 7)
+    await vi.waitFor(() => expect(complete).toBeTypeOf('function'))
+    f.widgets.totalWidgets = [f.a, f.other]
+    f.objects.splice(0)
+    await f.runtime.start()
+    f.applyObject.mockClear()
+    complete({ data: { value: '共享新值' } })
+    await pending
+    expect(network).toHaveBeenCalledTimes(1)
+    expect(f.a.component.option.value).toBe('共享新值')
+    expect(f.b.component.option.value).toBe('数据0')
+    expect(f.other.component.option.value).toBe('数据0')
+    expect(f.applyObject).not.toHaveBeenCalled()
+    expect(getSceneRequestParameterSourceConfig('model')).toBeNull()
+    const restored = f.widget('b')
+    f.widgets.totalWidgets = [...f.widgets.totalWidgets!, restored]
+    f.objects.push(f.model)
+    await f.runtime.start()
+    // 剩余订阅保留共享响应缓存；恢复订阅只接收当前结果，不复活旧任务也不重发接口。
+    expect(network).toHaveBeenCalledTimes(1)
+    expect(restored.component.option.value).toBe('共享新值')
+    expect(f.applyObject).toHaveBeenCalledTimes(1)
+    expect(getSceneRequestParameterSourceConfig('model')?.dataset.source[0]).toEqual({ value: '共享新值' })
+  })
+
   it('同一动作混合公共与独立请求参数时，各请求仅发送一次且相互隔离', async () => {
     const f = fixture()
     f.a.component.dataConfig!.requests!.push(

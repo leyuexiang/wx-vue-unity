@@ -11,9 +11,12 @@ import type { RenderSceneApiLike, ThreeRuntimeOptions } from '@/types/legacyRunt
 import { INTERACTIVE_EVENT_ENUM } from '@/enums/scenePanelEnum'
 import { evaluateConditionBlock } from '@/utils/renderScene/conditionRuntime'
 import type renderScene from '@/utils/renderScene'
+import type { IotPublicationAccess } from '@/servers/manual/iot/api'
+import type { FixedPublication } from './fixedScenePublication'
 import { createEditorSceneInteractionActionRuntimePort } from './editorSceneInteractionActionRuntime'
 import { getLegacyRenderSceneApiFromRuntime } from './editorLegacyRenderSceneAccess'
 import { loadEditorSceneDefinition } from './editorSceneLoadAdapter'
+import { readImportedVegetationAddress } from './importVegetationPublication'
 import { applyEditorSceneCameraToRuntime } from './editorSceneSettingsAdapter'
 import { readSceneGlobalStateFromDefinition } from './editorSceneGlobalStateAdapter'
 import { SceneDataPollingRuntime } from './widgetRuntime'
@@ -98,6 +101,9 @@ export interface ScenePreviewRuntimeLoaderOptions {
   appendWidgetFragment?: EditorWidgetSceneFragmentApplier
   /** 发布运行态编号；传入后只读取三个完整发布包和按需实例依赖，不再读取编辑草稿。 */
   publicationId?: string
+  /** 固定发布一次读取四包，依赖和测点映射随快照同时进入当前运行时。 */
+  fixedPublication?: FixedPublication
+  getIotPublicationAccess?: () => IotPublicationAccess | null
   /** 测试或宿主可注入分片协调器；生产环境使用真实发布接口。 */
   fragmentLoaderFactory?: (publicationId: string) => SceneRuntimeFragmentLoader
 }
@@ -161,7 +167,11 @@ const stripUnpublishedVegetationDraft = (content: unknown): unknown => {
   const hasEnabledRule =
     Array.isArray(vegetation.rules) &&
     vegetation.rules.some((rule) => isRecord(rule) && rule.enabled === true)
-  if (vegetation.enabled === true && hasEnabledRule) return content
+  const hasImportedTiles = Array.isArray(vegetation.layers) && vegetation.layers.some((layer) =>
+    isRecord(layer) && isRecord(layer.tilesetAsset) && isRecord(layer.tilesetAsset.metadata) &&
+    readImportedVegetationAddress(layer.tilesetAsset.metadata.publicVegetationSource),
+  )
+  if (vegetation.enabled === true && (hasEnabledRule || hasImportedTiles || isRecord(vegetation.publication))) return content
 
   const { vegetation: _unusedVegetation, ...withoutVegetation } = content
   return withoutVegetation
@@ -780,7 +790,17 @@ export const createScenePreviewRuntimeLoader = (
     }
 
     let result: Awaited<ReturnType<typeof loadEditorSceneDefinition>>
-    if (options.publicationId?.trim()) {
+    if (options.fixedPublication) {
+      const { sceneId, sceneJson, threeDJson, twoDJson, dependenciesJson } = options.fixedPublication
+      const scene = assembleSceneDefinitionFromRuntimeFragments({
+        manifest: toAssemblyFragment({
+          publicationId: options.fixedPublication.resources.publicationId,
+          content: { sceneJson, threeDJson, twoDJson, dependenciesJson },
+        }),
+        options: { sceneId },
+      })
+      result = { scene, loadedBy: 'scene-definition' }
+    } else if (options.publicationId?.trim()) {
       /** 发布态严格以 publicationId 为数据源；GIS 与 local3d 共用同一分片协议。 */
       fragmentLoader =
         options.fragmentLoaderFactory?.(options.publicationId.trim()) ??
@@ -852,7 +872,7 @@ export const createScenePreviewRuntimeLoader = (
      * 发布二维分片在当前页面内存中保留全量配置；这里只建立不可持久化的组件缓存，
      * 真正写入二维仓库的组件集合会在首屏阶段按初始有效显隐筛选。
      */
-    cachedWidgetFragment = fragmentLoader ? resolveEditorWidgetSceneFragment(result.scene) : null
+    cachedWidgetFragment = fragmentLoader || options.fixedPublication ? resolveEditorWidgetSceneFragment(result.scene) : null
 
     const nextRuntime =
       options.runtimeFactory?.(result.scene) ?? createDefaultPreviewRuntime(result.scene, options)
@@ -990,10 +1010,11 @@ export const createScenePreviewRuntimeLoader = (
       getPublicRequests: () => sceneRequestState.publicRequests,
       getRequestGlobalConfig: () => sceneRequestState.requestGlobalConfig,
       getRuntimeContext: () => ({ sceneId: result.scene?.id ?? null, publicPreview: true }),
-      // 三维数据仅保全，二维阶段不启动三维远程绑定。
-      getSceneObjects: () => [],
-      applySceneObject: async (object) => {
-        await nextRuntime.upsertObject(object)
+      getIotPublicationAccess: options.getIotPublicationAccess,
+      // 固定发布已加载完整依赖，旧预览仍只运行二维数据任务。
+      getSceneObjects: () => options.fixedPublication ? result.scene?.objects ?? [] : [],
+      applySceneObject: async (object, updateOptions) => {
+        await nextRuntime.upsertObject(object, updateOptions)
         previewSceneStore?.upsertObject(object)
       },
     })

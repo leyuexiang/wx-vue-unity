@@ -1,5 +1,6 @@
 import { buildDim3dResourceUrl, getDim3dResourceInfo } from '@/servers/manual/dim3d/api/resource'
 import { getDim3dOssFileById } from '@/servers/manual/dim3d/api/oss'
+import { readImportedVegetationAddress } from './importVegetationPublication'
 import type {
   Dim3dPublishedResourceMeta,
   Dim3dVegetationRuntimeResourcesData,
@@ -98,6 +99,7 @@ const collectSceneAssetReferences = (dependenciesJson: unknown): SceneAssetRefer
       !stableAssetId ||
       !kind ||
       !RESOLVABLE_ASSET_KINDS.has(kind) ||
+      stableAssetId.startsWith('unity-model:') ||
       isLegacyFallbackAssetReference(resourceKey ?? stableAssetId, stableAssetId)
     ) {
       return
@@ -329,8 +331,8 @@ export const collectScenePackageResourceReferences = (
     })
 
     /**
-     * 植被资源不再写入 dependencies.resources，但编辑态重开仍需按三维包中的物种 assetId
-     * 补齐模型地址。这里只提取 GLB/GLTF 物种模型；清单和瓦片属于植被发布资源接口的职责，
+     * 按三维包物种 assetId 补齐树种和 LOD 模型地址，兼容尚未登记原生依赖的历史场景。
+     * 这里只提取 GLB/GLTF 物种模型；清单和瓦片属于植被发布资源接口的职责，
      * 不能把合成编号送入普通模型资源接口。
      */
     const vegetation = parseJsonRecord(record.vegetation)
@@ -340,12 +342,23 @@ export const collectScenePackageResourceReferences = (
     speciesCatalog.forEach((speciesValue) => {
       const species = parseJsonRecord(speciesValue)
       const modelAsset = parseJsonRecord(species?.modelAsset)
+      const metadata = parseJsonRecord(modelAsset?.metadata)
+      if (readImportedVegetationAddress(metadata?.publicVegetationSource)) return
       const resourceKey =
         getNonEmptyString(modelAsset?.resourceKey) ?? getNonEmptyString(modelAsset?.id)
-      const assetId = getNonEmptyString(modelAsset?.assetId) ?? resourceKey
+      if (resourceKey?.startsWith('unity-model:')) return
+      const assetId = getNonEmptyString(modelAsset?.assetId) ??
+        (resourceKey && /^[1-9]\d*$/.test(resourceKey) ? resourceKey : getNonEmptyString(metadata?.assetId) ?? resourceKey)
       const kind = getNonEmptyString(modelAsset?.kind)
       if (resourceKey && assetId && (kind === 'glb' || kind === 'gltf')) {
         result.push({ resourceKey, assetId, kind })
+      }
+      const variants = Array.isArray(modelAsset?.modelLodVariants) ? modelAsset.modelLodVariants : []
+      for (const value of variants) {
+        const variant = parseJsonRecord(value)
+        const id = getNonEmptyString(variant?.id)
+        const variantKind = getNonEmptyString(variant?.kind)
+        if (id && (variantKind === 'glb' || variantKind === 'gltf')) result.push({ resourceKey: id, assetId: id, kind: variantKind })
       }
     })
   }

@@ -17,8 +17,12 @@
           :aria-pressed="activeStructureCategory === item.value"
           @click="selectStructureCategory(item.value)"
         >
+          <el-icon v-if="item.iconComponent" class="scene-edit-structure-panel__nav-icon" :size="18" aria-hidden="true">
+            <component :is="item.iconComponent" />
+          </el-icon>
           <!-- Figma 为两种状态分别提供矢量资源，直接切换资源可保持路径、透明度和颜色完全一致。 -->
           <img
+            v-else
             class="scene-edit-structure-panel__nav-icon"
             :src="activeStructureCategory === item.value ? item.activeIcon : item.icon"
             alt=""
@@ -28,7 +32,7 @@
       </el-tooltip>
     </aside>
 
-    <div class="scene-edit-structure-panel__content">
+    <div class="scene-edit-structure-panel__content" @click="clearVegetationSelectionFromBlank">
       <!--
         分类按钮、搜索框和创建分组栏共同组成固定区域，仅下方节点列表参与纵向滚动。
         该层级与资源面板一致，可避免长列表滚动时把高频操作入口移出可视区域。
@@ -39,7 +43,7 @@
 
       <div class="scene-edit-structure-group__header scene-edit-structure-panel__group-header">
         <div class="scene-edit-structure-group__title">
-          {{ activeStructureCategory === 'widget' ? '二维组件' : activeSceneObjectLabel }}
+          {{ structureCategoryItems.find(item => item.value === activeStructureCategory)?.label }}
         </div>
         <button
           v-if="activeStructureCategory === 'widget'"
@@ -61,7 +65,7 @@
           <img :src="createGroupIcon" alt="" />
         </button>
         <button
-          v-else
+          v-else-if="activeStructureCategory !== 'vegetation'"
           type="button"
           class="scene-edit-structure-create-group"
           title="创建空业务分组"
@@ -117,6 +121,27 @@
           @click="clearSelectionFromBlank"
           @contextmenu.prevent="hideContextMenu"
         >
+          <div v-if="activeStructureCategory === 'vegetation'" class="scene-edit-structure-group">
+            <button
+              v-for="item in filteredVegetationRegions"
+              :key="item.id"
+              type="button"
+              data-structure-item="true"
+              class="scene-edit-structure-item scene-edit-structure-item--vegetation"
+              :class="{ 'is-active': item.id === selectedVegetationRegionId }"
+              :aria-pressed="item.id === selectedVegetationRegionId"
+              :disabled="vegetationSelectionDisabled"
+              :title="item.name"
+              @click.stop="selectVegetationRegion(item.id)"
+            >
+              <span class="scene-edit-structure-item__name">{{ item.name }}</span>
+              <span class="scene-edit-structure-item__kind">{{ item.kindLabel }}</span>
+            </button>
+            <div v-if="filteredVegetationRegions.length === 0" class="scene-edit-structure-empty">
+              {{ searchKeyword ? '未找到匹配的种植区域' : '暂无种植区域' }}
+            </div>
+          </div>
+
           <!-- 业务层级使用一个滚动窗口，图层标题和节点共用行坐标。 -->
           <div v-if="sceneHierarchyRows" class="scene-edit-structure-group scene-edit-structure-group--scene-objects"
             title="选择节点以编辑属性，按住 Ctrl 或 Command 多选"
@@ -712,6 +737,10 @@ const {
   widgetSortGapTarget,
   filteredWidgetLayerNodes,
   structureCategoryItems,
+  filteredVegetationRegions,
+  selectedVegetationRegionId,
+  vegetationSelectionDisabled,
+  selectVegetationRegion,
   selectStructureCategory,
   isGroupExpanded,
   isSceneLayerExpanded,
@@ -720,6 +749,7 @@ const {
   toggleGroupExpanded,
   hideContextMenu,
   clearSelectionFromBlank,
+  clearVegetationSelectionFromBlank,
   selectItem,
   focusItem,
   selectedHierarchyNode,

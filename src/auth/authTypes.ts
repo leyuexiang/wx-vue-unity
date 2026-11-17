@@ -25,6 +25,8 @@ export interface AuthContext {
   readonly clientId: string
   readonly permissions: readonly string[]
   readonly roles: readonly string[]
+  /** 可信权限/资料响应或宿主提供的授权菜单；缺失时关闭管理入口并提示配置。 */
+  readonly menus?: readonly import('./iotNavigation').ManagementMenu[]
   readonly platformType: PlatformType
   /** Unix 毫秒时间戳；0 或缺省表示由宿主不提供过期时间。 */
   readonly expiresAt?: number
@@ -44,6 +46,8 @@ export interface IframeReadyMessage {
 
 /** 父页面发送给 iframe 子应用的鉴权消息。 */
 export interface IframeAuthPayload {
+  /** 可选授权菜单沿用宿主可信鉴权来源；不从权限或角色补全缺失菜单。 */
+  readonly menus?: readonly import('./iotNavigation').ManagementMenu[]
   readonly type: 'XR_CENTER_AUTH'
   readonly requestId: string
   readonly accessToken: string

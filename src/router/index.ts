@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getCurrentManagementCapabilities } from '@/auth/capabilities'
+import { authContext } from '@/auth/authContext'
+import { canAccessManagementRoute, isManagementRouteName, getManagementFallbackRoute } from '@/auth/managementNavigation'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -9,6 +10,11 @@ const router = createRouter({
       redirect: '/sceneManage',
       component: () => import('@/layout/index.vue'),
       children: [
+        { path: '/management/access', name: 'managementAccess', component: () => import('../views/manageShared/ManagementAccess.vue') },
+        // 编译期注册页面组件；后端菜单只决定授权导航，不能提供动态导入地址。
+        { path: '/iotManage/connectors', name: 'iotConnectors', component: () => import('../views/iotManage/connectors/index.vue') },
+        { path: '/iotManage/bindings', name: 'iotBindings', component: () => import('../views/iotManage/bindings/index.vue') },
+        { path: '/iotManage/messages', name: 'iotMessages', component: () => import('../views/iotManage/messages/index.vue') },
         {
           path: '/resourceManage',
           name: 'resourceManage',
@@ -64,12 +70,12 @@ const router = createRouter({
 })
 
 /**
- * 已挂载后的站内导航再次校验模板页面能力，防止租户端通过脚本或地址栏跳转恢复页面。
- * 首次启动时认证尚未完成，App 会在挂载 RouterView 前执行同一检查。
+ * 七个管理页面共用菜单准入，拒绝地址栏及站内跳转绕过隐藏菜单。
+ * 初次认证尚未完成时由App在业务视图挂载前补做同一检查；空菜单进入恢复页。
  */
 router.beforeEach((to) => {
-  if (to.name === 'templateManage' && !getCurrentManagementCapabilities().template.canAccess) {
-    return { name: 'modelManage', replace: true }
+  if (isManagementRouteName(to.name) && authContext.get() && !canAccessManagementRoute(to.name)) {
+    return { name: getManagementFallbackRoute(), replace: true }
   }
   return true
 })

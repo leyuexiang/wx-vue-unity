@@ -6,7 +6,7 @@ import { writeFile } from 'node:fs/promises'
  * 在独立浏览器上下文验证迁移后的真实页面，不向真实接口写入测试场景。
  * 假鉴权仅存在于隔离浏览器和模拟接口中；生产页面仍使用来源鉴权与编辑锁协议。
  */
-const baseUrl = (process.env.TWOD_SMOKE_BASE_URL || 'http://127.0.0.1:5180/threeWeb').replace(/\/$/, '')
+const baseUrl = (process.env.TWOD_SMOKE_BASE_URL || 'http://127.0.0.1:5180/dts').replace(/\/$/, '')
 const startedAt = Date.now()
 const sceneId = '100001'
 let revision = 1
@@ -38,7 +38,15 @@ page.on('websocket', socket => {
 })
 page.on('response', response => { if (response.status() >= 400 && response.url().includes('/src/')) failedModules.push(response.url()) })
 await context.addInitScript(() => {
-  const context = { accessToken: 'isolated-two-d-test', clientId: 'two-d-browser-test', permissions: ['*:*:*'], roles: ['admin'], platformType: 'operation' }
+  // 管理入口统一后，隔离身份同时携带后台菜单合同，不能凭通配权限生成静态入口。
+  const context = { accessToken: 'isolated-two-d-test', clientId: 'two-d-browser-test', permissions: ['*:*:*'], roles: ['admin'], platformType: 'operation', menus: [
+    { id: '1', name: '资源管理', children: [
+      { id: '2', name: '模型管理', component: 'resourceManage/modelManage/index', children: [] },
+      { id: '3', name: '图片管理', component: 'resourceManage/iconManage/index', children: [] },
+      { id: '4', name: '模板管理', component: 'resourceManage/templateManage/index', children: [] },
+    ] },
+    { id: '5', name: '场景管理', children: [{ id: '6', name: '场景列表', component: 'SceneManage/index', children: [] }] },
+  ] }
   // 同时覆盖来源独立登录和嵌入页签两种启动模式，所有接口均由本脚本拦截。
   sessionStorage.setItem('accessToken', JSON.stringify({ value: context.accessToken }))
   sessionStorage.setItem('xr-center-refresh-auth:twoD-smoke', JSON.stringify({ createdAt: Date.now(), context }))

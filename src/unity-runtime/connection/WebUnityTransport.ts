@@ -1,6 +1,7 @@
 import type { UnityTransport } from './UnityTransport'
 import { authContext } from '@/auth/authContext'
 import { decodeUnityRpcResponse } from './decodeUnityRpcResponse'
+import { loadVegetationModelCatalog, type VegetationModelChoice } from '../runtime/vegetationModelCatalog'
 import type { UnityEditorEventType, UnityEditorMethod, UnityEventEnvelope, UnityRequestEnvelope, UnityResponseEnvelope } from '../protocol/types'
 
 type UnityPlayer = { SendMessage: (target: string, method: string, value: string) => void; Quit: () => Promise<void> }
@@ -48,6 +49,8 @@ export class WebUnityTransport implements UnityTransport {
   private target = ''
   private closed = false
   private connectPromise: Promise<void> | null = null
+  private artDeployment: Bootstrap['art'] | null = null
+  private modelCatalog: Promise<VegetationModelChoice[]> | null = null
   private readonly pending = new Map<string, { resolve: (value: UnityResponseEnvelope<unknown>) => void; reject: (error: Error) => void; timer: number }>()
   private readonly subscribers = new Map<string, Set<(event: UnityEventEnvelope<unknown>) => void>>()
 
@@ -57,6 +60,7 @@ export class WebUnityTransport implements UnityTransport {
     this.canvas.id = `unity-web-canvas-${++nextCanvasId}`
     this.canvas.className = 'unity-web-canvas'
     this.canvas.tabIndex = 0
+    this.canvas.addEventListener('pointerdown', () => this.canvas.focus({ preventScroll: true }))
     this.canvas.style.cssText = 'width:100%;height:100%;display:block;outline:none'
     // 与云端视频保持一致，仅禁用当前画布的默认右键菜单，不阻断Unity接收右键旋转事件。
     this.canvas.addEventListener('contextmenu', (event) => event.preventDefault())
@@ -67,6 +71,15 @@ export class WebUnityTransport implements UnityTransport {
     this.closed = false
     this.connectPromise = this.start().catch((error) => { this.connectPromise = null; throw error })
     return this.connectPromise
+  }
+
+  async listVegetationModels(): Promise<VegetationModelChoice[]> {
+    if (this.closed || !this.artDeployment) throw new Error('Unity 模型资源尚未就绪')
+    if (!this.modelCatalog) this.modelCatalog = loadVegetationModelCatalog(this.artDeployment).catch(error => {
+      this.modelCatalog = null
+      throw error
+    })
+    return this.modelCatalog
   }
 
   private async start(): Promise<void> {
@@ -91,6 +104,7 @@ export class WebUnityTransport implements UnityTransport {
     if (bootstrap.build.threadsRequired && (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer === 'undefined')) {
       throw new Error('Unity WebGPU 原生线程需要网页启用跨源隔离（COOP: same-origin；COEP: credentialless 或 require-corp），配置后请完整刷新页面')
     }
+    this.artDeployment = bootstrap.art
     let frameworkUrl = bootstrap.build.frameworkUrl
     if (bootstrap.build.threadsRequired && new URL(frameworkUrl, document.baseURI).origin !== window.location.origin) {
       // CORS allows script downloads but not a Worker whose entry URL has another origin.
@@ -164,6 +178,8 @@ export class WebUnityTransport implements UnityTransport {
     this.closed = true
     this.connectPromise = null
     this.target = ''
+    this.artDeployment = null
+    this.modelCatalog = null
     window.removeEventListener('jtyf-message', this.onMessage as EventListener)
     for (const pending of this.pending.values()) { window.clearTimeout(pending.timer); pending.reject(new Error('Unity Web 会话已结束')) }
     this.pending.clear()

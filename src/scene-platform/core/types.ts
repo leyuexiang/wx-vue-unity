@@ -881,11 +881,19 @@ export interface VegetationCorridorRule extends VegetationSpeciesPlantingRuleBas
 
 /** 圈选种树规则；密度决定目标数量，最小株距用于限制局部拥挤。 */
 export interface VegetationPolygonRule extends VegetationSpeciesPlantingRuleBase {
+  /** 原生生成的目标株数；实际数量受区域边界和最小株距限制。 */
+  targetCount?: number
   kind: 'polygon'
   polygon: VegetationGeoPolygon
   distribution: 'poisson' | 'grid' | 'random'
   densityPerHectare: number
   minimumSpacingM: number
+  /** 一次影像框选生成的斑块共享区域身份和原始框选角点。 */
+  imageryRegion?: {
+    id: string
+    name: string
+    corners?: [VegetationGeoPosition, VegetationGeoPosition]
+  }
 }
 
 /** 可持久化种植规则联合；生成器按 kind 分派，避免用可选字段拼接不完整规则。 */
@@ -912,6 +920,8 @@ export interface VegetationThreeStreamingOptions {
 
 /** 跨运行时共享的植被质量与资源预算，仅保存可复现的业务配置。 */
 export interface VegetationStreamingOptions {
+  /** 原生实例化按规则确定性生成；缺失时兼容已有瓦片发布数据。 */
+  renderMode?: 'instanced' | 'published-tiles'
   enabled: boolean
   qualityPreset: VegetationQualityPreset
   memoryBudgetMB: number
@@ -966,6 +976,8 @@ export interface VegetationSystemDefinition {
   speciesCatalog: VegetationSpeciesDefinition[]
   /** 海拔带、行道树和圈选种树规则；单株结果由发布生成器按区块派生。 */
   rules: VegetationPlantingRule[]
+  /** Geographic rectangles excluded from imagery-derived planting. */
+  imageryExclusions?: Array<[west: number, south: number, east: number, north: number]>
   /** 生成高程来源与垂直基准；影像底图不能替代该数据。 */
   elevationSource: VegetationElevationSourceDefinition
   streaming: VegetationStreamingOptions

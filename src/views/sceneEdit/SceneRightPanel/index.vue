@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import type { ScrollbarInstance } from 'element-plus'
 import { SCENE_PANEL_ENUM } from '@/enums/scenePanelEnum'
 import { useSceneStore, useSceneWidgetStore } from '@/stores/sceneEditStore'
 import type { CommandBus, SceneStore } from '@/scene-platform'
@@ -13,12 +14,17 @@ import WidgetBasePanel from './components/WidgetPanels/WidgetBasePanel/index.vue
 import WidgetDataPanel from './components/WidgetPanels/WidgetDataPanel/index.vue'
 import WidgetAnimationPanel from './components/WidgetPanels/WidgetAnimationPanel/index.vue'
 import WidgetEventPanel from './components/WidgetPanels/WidgetEventPanel/index.vue'
+import WeatherPanel from './components/WeatherPanel/index.vue'
 import StageSizePanel from './components/ScenePanel/StageSizePanel.vue'
 import SceneMediaServerPanel from './components/ScenePanel/SceneMediaServerPanel.vue'
+import GisSettingsPanel from './components/ScenePanel/GisSettingsPanel.vue'
+import CameraPanel from './components/ScenePanel/CameraPanel.vue'
+import VegetationPanel from './components/ScenePanel/VegetationPanel.vue'
 /** 统一使用领域选中态路由三维属性，Pinia 编号仅作为顶部页签和旧面板的兼容镜像。 */
 const inspectorPanel = defineModel<SCENE_PANEL_ENUM>('inspectorPanel', { default: SCENE_PANEL_ENUM.Base })
 const sceneStore = useSceneStore()
 const widgetStore = useSceneWidgetStore()
+const sceneInspectorScrollbar = ref<ScrollbarInstance>()
 const selection = computed(() => resolveWidgetPanelSelection())
 const isWidget = computed(() => ['widget', 'widgetChild', 'widgetGroup'].includes(selection.value.kind))
 const selectedSceneObjectId = computed(() => sceneStore.currentTransformMaterialUuid)
@@ -31,7 +37,8 @@ let stopScenePlatformStoreSubscription: (() => void) | null = null
 let stopSceneSelectionBinding: (() => void) | null = null
 
 /** 仅在目标类别改变时回到基础页；同类模型之间切换时保留用户正在使用的属性页。 */
-watch(() => [selection.value.kind, isSceneObject.value], () => { inspectorPanel.value = SCENE_PANEL_ENUM.Base })
+// 分别监听两个类别值，避免同类组件数据刷新后因新数组引用误判为选中类别改变。
+watch([() => selection.value.kind, () => isSceneObject.value], () => { inspectorPanel.value = SCENE_PANEL_ENUM.Base })
 
 /**
  * Unity 画布回传的选择先进入 SceneStore；在右侧检查器边界同步兼容编号并排空二维选择，
@@ -88,10 +95,14 @@ onBeforeUnmount(() => {
 <template>
   <div class="scene-edit-right-shell" data-scene-right-panel="true">
     <div class="scene-edit-right-panel scene-edit-panel-surface h-full" data-scene-right-panel="true">
-      <el-scrollbar v-if="!isWidget && !isSceneObject" class="scene-edit-scene-inspector">
+      <el-scrollbar v-if="!isWidget && !isSceneObject" ref="sceneInspectorScrollbar" class="scene-edit-scene-inspector">
         <div v-if="inspectorPanel === SCENE_PANEL_ENUM.Base" class="scene-edit-scene-panel p-3 text-[14px]">
-          <StageSizePanel /><SceneMediaServerPanel />
+          <StageSizePanel /><GisSettingsPanel /><SceneMediaServerPanel />
         </div>
+        <WeatherPanel v-else-if="inspectorPanel === SCENE_PANEL_ENUM.Weather" />
+        <CameraPanel v-else-if="inspectorPanel === SCENE_PANEL_ENUM.Camera" />
+        <VegetationPanel v-else-if="inspectorPanel === SCENE_PANEL_ENUM.Vegetation"
+          @inspector-view-change="sceneInspectorScrollbar?.setScrollTop(0)" />
         <el-empty v-else description="三维运行能力将在二维验收后接入" />
       </el-scrollbar>
       <div v-else-if="isSceneObject" class="scene-edit-inspector-shell">

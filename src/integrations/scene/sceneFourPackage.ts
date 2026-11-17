@@ -10,6 +10,7 @@ import { attachDataBindingOverflow } from './dataBindingOverflow'
 import { isBuiltinSceneAssetId } from './editorBuiltinResourceRegistry'
 import { isProxy, toRaw } from 'vue'
 import { projectInstanceDefinition } from '@/scene-core/model/instanceDefinition'
+import { getPersistableWeatherConfig } from './editorSceneWeatherAdapter'
 
 /**
  * 四包协议允许的 JSON 值。
@@ -1415,9 +1416,13 @@ const collectDependencies = (
   for (const effect of scene.effects)
     for (const asset of effect.assetRefs ?? [])
       register(asset, { domain: 'threeD', ownerType: 'effect', ownerKey: effect.id })
+  if (scene.vegetation?.streaming.renderMode === 'instanced') {
+    for (const species of scene.vegetation.speciesCatalog) {
+      register(species.modelAsset, { domain: 'threeD', ownerType: 'vegetation-native-species', ownerKey: species.id })
+    }
+  }
   /**
-   * 植被资源不在这里登记。threeDJson.vegetation 只保存规则、物种和发布版本引用，模型、清单及瓦片
-   * 地址由后端植被预览资源接口在运行时按发布快照返回，避免 dependencies.resources 形成第二份来源。
+     * 已发布瓦片模式的资源由植被发布快照提供。原生模式上方单独登记树种模板，复用普通模型依赖恢复。
    */
   const readArray = (...keys: string[]) =>
     keys.map((key) => source[key] ?? settings[key]).find(Array.isArray) ?? []
@@ -1489,12 +1494,18 @@ export const createSceneFourPackageDocuments = (
   const scenePanel = getRecord(editor.scenePanel)
   /** 场景级定义只投影一次，避免对大型公共接口列表重复深复制。 */
   const sceneGlobalPackage = collectSceneGlobalPackage(scene)
+  const rendering = getRecord(settings.rendering)
+  const cameraRendering = {
+    ...(typeof rendering.antialias === 'boolean' ? { antialias: rendering.antialias } : {}),
+    ...(hasKeys(rendering.antialiasing) ? { antialiasing: rendering.antialiasing } : {}),
+  }
   /**
    * 三维基础设置使用显式白名单，禁止把加载器注入的 dependencies、发布状态、运行模式或
    * 二维快照再次带回 threeD。新增可持久化设置必须在这里明确评审后加入。
    */
   const threeDBaseSettings = {
     ...(hasKeys(settings.three) ? { three: settings.three } : {}),
+    ...(hasKeys(cameraRendering) ? { rendering: cameraRendering } : {}),
     ...(hasKeys(scenePanel) ? { editor: { scenePanel } } : {}),
     ...(typeof settings.mediaServerId === 'string' ? { mediaServerId: settings.mediaServerId } : {}),
   }
@@ -1519,7 +1530,7 @@ export const createSceneFourPackageDocuments = (
         {
           scene: settings.scene ?? {},
           camera: settings.camera ?? {},
-          weather: settings.weather ?? {},
+          weather: getPersistableWeatherConfig(scene),
           coordinateSystem: scene.coordinateSystem,
           gisLayers: gisLayers.map(toLayer),
           // 二维快照由 twoD/dependencies 负责；这里只保留其它场景及编辑器设置。

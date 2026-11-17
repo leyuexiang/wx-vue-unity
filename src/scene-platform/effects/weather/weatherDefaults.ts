@@ -1,4 +1,5 @@
 import type { EffectSpec } from '../../core/types'
+import { hasWeatherProvider } from './enviroWeatherValidation'
 import type {
   WeatherV2AtmosphereParams,
   WeatherV2CloudParams,
@@ -451,7 +452,7 @@ export function createDefaultWeatherV2Effect(
 }
 
 export function normalizeWeatherV2Effect(effect: EffectSpec): EffectSpec {
-  if (effect.type !== 'weather') return effect
+  if (effect.type !== 'weather' || hasWeatherProvider(effect.params)) return effect
   return {
     ...effect,
     params: normalizeWeatherV2Params(effect.params) as unknown as Record<string, unknown>,

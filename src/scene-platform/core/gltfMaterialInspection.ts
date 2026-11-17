@@ -463,7 +463,7 @@ function rewriteRelativeUris(document: GltfDocumentLite, sourceUrl: string): voi
 /**
  * 解析 JSON glTF 中相对同级资源。
  *
- * `new URL(relative, base)` 要求 base 是完整绝对地址；项目里常见 `/threeWeb/assets/a.gltf` 这类根路径。
+ * `new URL(relative, base)` 要求 base 是完整绝对地址；项目里常见 `/dts/assets/a.gltf` 这类根路径。
  * 这里对根路径和普通相对路径做轻量拼接，既避免抛错，也不引入路径库到浏览器核心层。
  */
 function resolveGltfSiblingUri(uri: string, sourceUrl: string): string {

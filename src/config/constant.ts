@@ -55,7 +55,7 @@ export const SCENE_EDITOR_BRAND_CONFIG = {
   // 默认品牌与公开目录中的运行时配置保持一致，配置文件加载失败时仍能展示正确的平台标识。
   softwareName: '道地药材溯源平台',
   projectNameFallback: 'Scene Editor',
-  // 使用相对 public 资源路径，运行时由品牌配置加载器按 BASE_URL 解析，兼容 /threeWeb/ 子路径部署。
+  // 使用相对 public 资源路径，运行时由品牌配置加载器按 BASE_URL 解析，兼容 /dts/ 子路径部署。
   logoSrc: 'images/scene-editor-brand-logo.png',
   logoAlt: '道地药材溯源平台标识',
 } as const

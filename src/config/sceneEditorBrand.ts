@@ -23,7 +23,7 @@ const joinBaseUrl = (baseUrl: string, path: string) =>
  * 将品牌配置中的本地资源路径挂到应用基路径下。
  *
  * public 配置文件无法读取 Vite 环境变量；统一在这里解析相对路径和根相对路径，
- * 使开发环境的 /images 与生产环境的 /threeWeb/images 都能命中同一份静态资源，
+ * 使开发环境的 /images 与生产环境的 /dts/images 都能命中同一份静态资源，
  * 同时保留外部 http、数据和协议相对地址，方便按项目覆盖品牌图。
  *
  * @param source 品牌配置提供的原始资源地址。

@@ -20,10 +20,8 @@
       </span>
     </div>
     <!--
-      Figma 侧栏中的“资源管理”和“场景管理”是模块分类标识，不是可展开的菜单项。
-      分类使用普通容器承载，业务入口仍交给 Element Plus 菜单注册，以保留路由选中态和键盘导航。
-      模板管理已完成列表与基础操作接入，和模型、图片页面一样注册真实菜单路由；
-      仍未开放的进入、编辑和复制仅保留在模板卡片内并明确禁用。
+      后台授权页面统一投影到原有三类一级目录，二级入口由同一白名单和组件渲染。
+      复用现有菜单注册以保留路由选中态和键盘导航，后端没有授权的页面不补静态副本。
     -->
     <el-menu
       :default-active="activeIndex"
@@ -31,26 +29,8 @@
       class="manage-header__menu"
       @select="handleSelect"
     >
-      <div class="manage-header__category" aria-hidden="true">资源管理</div>
-      <el-menu-item index="modelManage">
-        <span class="manage-sidebar-icon manage-sidebar-icon--model" aria-hidden="true"></span>
-        <span>模型管理</span>
-      </el-menu-item>
-      <el-menu-item index="iconManage">
-        <span class="manage-sidebar-icon manage-sidebar-icon--icon" aria-hidden="true"></span>
-        <!-- 路由键和图形样式类保留 icon 以兼容现有导航，用户可见名称统一为“图片管理”。 -->
-        <span>图片管理</span>
-      </el-menu-item>
-      <!-- 模板管理属于运营端能力；租户端不挂载入口，避免仅靠禁用样式留下可发现页面。 -->
-      <el-menu-item v-if="managementCapabilities.template.canAccess" index="templateManage">
-        <span class="manage-sidebar-icon manage-sidebar-icon--template" aria-hidden="true"></span>
-        <span>模板管理</span>
-      </el-menu-item>
-      <div class="manage-header__category" aria-hidden="true">场景管理</div>
-      <el-menu-item index="sceneManage">
-        <span class="manage-sidebar-icon manage-sidebar-icon--scene" aria-hidden="true"></span>
-        <span>场景列表</span>
-      </el-menu-item>
+      <!-- 全部管理模块消费同一授权树；分类文字和顺序不再分别写死。 -->
+      <ManagementNavigationMenu :nodes="managementNavigation" />
     </el-menu>
 
     <!--
@@ -106,10 +86,12 @@ import { Moon, Sunny, User } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/appStore'
 import { toLogin } from '@/utils/auth'
 import { useManageTheme } from '@/views/manageShared/manageTheme'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { isEmbeddedMode } from '@/auth/runtime'
-import { getCurrentManagementCapabilities } from '@/auth/capabilities'
+import ManagementNavigationMenu from './ManagementNavigationMenu.vue'
+import { getManagementNavigation, isManagementRouteName } from '@/auth/managementNavigation'
+import { authContext } from '@/auth/authContext'
 import {
   getDefaultSceneEditorBrandConfig,
   loadSceneEditorBrandConfig,
@@ -127,8 +109,10 @@ const managementBrand = computed(() => brandConfig.value.managementBrand ?? {
   logoSrc: brandConfig.value.logoSrc,
 })
 const { theme, toggleTheme } = useManageTheme()
-/** 布局在认证完成后挂载，此快照可稳定控制当前平台整个侧栏生命周期。 */
-const managementCapabilities = getCurrentManagementCapabilities()
+/** 重取菜单、切换身份或退出同步更新侧栏，离开布局立即解除订阅。 */
+const managementNavigation = shallowRef(getManagementNavigation())
+const unsubscribeMenus = authContext.subscribe(() => { managementNavigation.value = getManagementNavigation() })
+onBeforeUnmount(unsubscribeMenus)
 
 /**
  * 文案始终描述下一次操作而非当前状态，既能为视觉提示提供准确文本，
@@ -139,20 +123,10 @@ const themeToggleLabel = computed(() =>
 )
 
 /**
- * 侧栏只允许跳转到路由表中已经存在的资源和场景页面。
- * 模板管理现在拥有真实路由，因此纳入白名单；无业务路由的分组文字仍不能触发导航。
- */
-const manageRouteNames = new Set(['modelManage', 'iconManage', 'templateManage', 'sceneManage'] as const)
-
-/**
  * 统一收窄 Element Plus 菜单事件传入的字符串。
  * 只有通过白名单的名称才能写入选中态或交给路由，避免分组索引被误当成页面路由。
  */
-const isManageRouteName = (
-  name: unknown,
-): name is 'modelManage' | 'iconManage' | 'templateManage' | 'sceneManage' =>
-  typeof name === 'string' &&
-  manageRouteNames.has(name as 'modelManage' | 'iconManage' | 'templateManage' | 'sceneManage')
+const isManageRouteName = isManagementRouteName
 
 onBeforeMount(() => {
   setActive(router.currentRoute.value.name)

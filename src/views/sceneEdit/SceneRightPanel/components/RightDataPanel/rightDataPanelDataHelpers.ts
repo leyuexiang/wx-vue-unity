@@ -1,5 +1,6 @@
 import type {
   AjaxRequestConfig,
+  AdapterRequestConfig,
   ChartBindingRule,
   ComponentDataConfig,
   PublicRequestConfig,
@@ -47,6 +48,11 @@ export function createEmptyAjaxRequest(): AjaxRequestConfig {
     resultPath: '',
     useAuth: true,
   }
+}
+
+/** 创建扩展数据源默认配置，具体适配器配置在面板选择后补齐。 */
+export function createEmptyAdapterRequest(): AdapterRequestConfig {
+  return { adapterId: '', config: {} }
 }
 
 /**

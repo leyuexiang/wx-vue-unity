@@ -79,6 +79,60 @@ const createEvent = (
 }
 
 describe('JsonRpcUnityCloudRuntime', () => {
+  it('includes native vegetation in snapshots and explicitly clears it in later scenes', async () => {
+    const { transport, request } = createTransport({ capabilities: { ...capabilities, features: { 'vegetation.instanced': true } } })
+    const runtime = new JsonRpcUnityCloudRuntime(transport)
+    await runtime.connect()
+    const scene = createEmptyScene('forest')
+    const definition = { enabled: true, ruleSetId: 'forest' }
+    scene.settings.vegetation = definition
+    await runtime.loadScene(scene)
+    expect(request).toHaveBeenLastCalledWith('editor.v1.scene.loadDraft', expect.objectContaining({ payload: expect.objectContaining({ vegetation: definition }) }))
+    await runtime.loadScene(createEmptyScene('empty'))
+    expect(request).toHaveBeenLastCalledWith('editor.v1.scene.loadDraft', expect.objectContaining({ payload: expect.objectContaining({ vegetation: null }) }))
+    await runtime.controlVegetation({ action: 'get' })
+    expect(request).toHaveBeenLastCalledWith('editor.v1.vegetation.control', expect.objectContaining({ sceneId: 'empty', sceneGeneration: 2, payload: { action: 'get' } }))
+  })
+
+  it('keeps old players compatible and explains why native vegetation controls need an update', async () => {
+    const { transport, request } = createTransport()
+    const runtime = new JsonRpcUnityCloudRuntime(transport)
+    await runtime.connect()
+    const scene = createEmptyScene('legacy')
+    scene.settings.vegetation = { enabled: true }
+    await runtime.loadScene(scene)
+    const payload = (request.mock.calls.at(-1)?.[1] as unknown as { payload: Record<string, unknown> }).payload
+    expect(payload).not.toHaveProperty('vegetation')
+    await expect(runtime.controlVegetation({ action: 'get' })).rejects.toThrow('播放器需要更新')
+    expect(request).not.toHaveBeenCalledWith('editor.v1.vegetation.control', expect.anything())
+  })
+
+  it('can apply camera settings while a live camera read is awaiting its response', async () => {
+    const { transport, request } = createTransport({ capabilities: { ...capabilities, features: { 'camera.control': true } } })
+    const runtime = new JsonRpcUnityCloudRuntime(transport)
+    await runtime.connect()
+    await runtime.loadScene(createEmptyScene('camera'))
+    const reply = request.getMockImplementation()!
+    let finishRead!: () => void
+    const readGate = new Promise<void>(resolve => { finishRead = resolve })
+    request.mockImplementationOnce(async (...args) => {
+      await readGate
+      return reply(...args)
+    })
+
+    const read = runtime.controlCamera({ action: 'get' })
+    await Promise.resolve()
+    const edit = runtime.controlCamera({ action: 'apply', config: { fov: 45 } })
+    try {
+      await vi.waitFor(() => expect(request).toHaveBeenLastCalledWith('editor.v1.camera.control', expect.objectContaining({
+        payload: { action: 'apply', config: { fov: 45 } },
+      })))
+    } finally {
+      finishRead()
+      await Promise.all([read, edit])
+    }
+  })
+
   it('sends geographic origins and layers to a GIS-capable player', async () => {
     const { transport, request } = createTransport({ capabilities: { ...capabilities, sceneTypes: ['local3d', 'gis'] } })
     const runtime = new JsonRpcUnityCloudRuntime(transport)

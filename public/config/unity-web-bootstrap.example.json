@@ -1,11 +1,11 @@
 {
   "build": {
     "threadsRequired": true,
-    "loaderUrl": "/threeWeb/unity-web/Build/player.loader.js",
-    "dataUrl": "/threeWeb/unity-web/Build/player.data",
-    "frameworkUrl": "/threeWeb/unity-web/Build/player.framework.js",
-    "codeUrl": "/threeWeb/unity-web/Build/player.wasm",
-    "streamingAssetsUrl": "/threeWeb/unity-web/StreamingAssets"
+    "loaderUrl": "/dts/unity-web/Build/player.loader.js",
+    "dataUrl": "/dts/unity-web/Build/player.data",
+    "frameworkUrl": "/dts/unity-web/Build/player.framework.js",
+    "codeUrl": "/dts/unity-web/Build/player.wasm",
+    "streamingAssetsUrl": "/dts/unity-web/StreamingAssets"
   },
   "art": {
     "projectId": "<项目编号>",

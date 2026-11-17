@@ -1,4 +1,7 @@
 import { buildSceneNodeIndex } from '@/scene-platform/core/sceneNodeIndex'
+import { getRuntimeEnviroWeatherConfig } from '@/integrations/scene/editorSceneWeatherAdapter'
+import { getUnityCameraConfig } from './editorCameraConfig'
+import { getEditorGisAppearance } from '@/integrations/scene/editorSceneGisAdapter'
 import type { SceneDefinition as EditorScene, SceneObject as EditorObject } from '@/scene-platform'
 import { resolveSceneStreamingConfigForRuntime } from '@/scene-platform/core/sceneStreamingPolicy'
 import type { SceneDefinition as UnityScene, SceneObject as UnityObject, SceneTransform as UnityTransform } from '@/scene-core'
@@ -17,10 +20,10 @@ export const isUnityDeferredObject = (object: EditorObject): boolean => !unityDr
 export const getUnityModelAssetId = (object: EditorObject): string =>
   String(object.asset?.metadata?.assetId ?? object.asset?.id ?? '').trim()
 
-export const getUnityDeferredRenderWarnings = (scene: EditorScene): string[] => {
+export const getUnityDeferredRenderWarnings = (scene: EditorScene, weatherSupported = false): string[] => {
   const names = [...new Set([
     ...scene.objects.filter(isUnityDeferredObject).map((object) => `${object.name || object.id}（${object.type}）`),
-    ...scene.effects.filter((effect) => effect.params.enabled !== false).map((effect) => effect.type),
+    ...scene.effects.filter((effect) => effect.params.enabled !== false && !(weatherSupported && effect.type === 'weather' && effect.params.provider === 'enviro3')).map((effect) => effect.type),
   ])]
   if (!names.length) return []
   return [`以下对象或特效暂未接入 Unity，配置仍保留：${names.slice(0, 6).join('、')}${names.length > 6 ? `等 ${names.length} 项` : ''}`]
@@ -150,6 +153,8 @@ export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
     ...(scene.coordinateSystem.kind === 'wgs84' ? { geospatial: {
       origin: [scene.coordinateSystem.defaultLongitude, scene.coordinateSystem.defaultLatitude, scene.coordinateSystem.defaultHeight] as [number, number, number],
       terrainEnabled: scene.coordinateSystem.terrainEnabled,
+      ...(scene.settings.three && typeof scene.settings.three === 'object' && 'gis' in scene.settings.three
+        ? { appearance: getEditorGisAppearance(scene) } : {}),
       layers: scene.layers.filter((layer) => ['imagery', 'terrain', 'tileset', 'vector'].includes(layer.type)).map((layer) => ({
         id: layer.id, name: layer.name, type: layer.type as 'imagery' | 'terrain' | 'tileset' | 'vector',
         visible: layer.visible, order: layer.order,
@@ -159,7 +164,11 @@ export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
         ...(layer.options ? { options: layer.options } : {}),
       })),
     } } : {}),
-    objects, resources: [...resources.values()], settings: {},
+    objects, resources: [...resources.values()], settings: {
+      weather: getRuntimeEnviroWeatherConfig(scene),
+      ...(scene.vegetation ? { vegetation: scene.vegetation } : {}),
+    },
+    camera: getUnityCameraConfig(scene.settings, scene.type),
     // 复用编辑器的持久化定义与覆盖规则；缺失保持兼容，显式关闭不能在引擎侧丢失。
     ...(scene.streaming ? { streaming: resolveSceneStreamingConfigForRuntime(scene.streaming, 'editor') } : {}),
     twoD: { canvas: {}, components: [], layerTree: [] },

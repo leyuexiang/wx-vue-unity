@@ -1,4 +1,5 @@
 import type { EffectSpec } from '../../core/types'
+import { hasWeatherProvider, validateEnviroWeatherConfig } from './enviroWeatherValidation'
 
 const WEATHER_V2_MODES = new Set(['clear', 'cloudy', 'fog', 'rain', 'snow', 'night'])
 const WEATHER_V2_QUALITY_PROFILES = new Set(['editor-low', 'balanced', 'showcase'])
@@ -61,6 +62,7 @@ export function isLegacyWeatherEffectSpec(effect: unknown): boolean {
 
   const params = effect.params
   if (!isRecord(params)) return false
+  if (hasWeatherProvider(params)) return false
 
   return LEGACY_WEATHER_PARAM_KEYS.some((key) => key in params)
 }
@@ -74,6 +76,12 @@ export function validateWeatherV2EffectSpec(
   const issues: string[] = []
   const params = effect.params
   if (!isRecord(params)) return issues
+  if (hasWeatherProvider(params)) {
+    // Future schemas remain readable/exportable, but cannot enter the Enviro editor or transport.
+    return params.provider === 'enviro3' && params.schemaVersion === 1
+      ? validateEnviroWeatherConfig(params, labelPrefix)
+      : []
+  }
 
   if (params.mode !== undefined && !WEATHER_V2_MODES.has(String(params.mode))) {
     issues.push(`${labelPrefix} weather mode must be a supported Weather V2 mode.`)

@@ -33,7 +33,7 @@ beforeEach(async () => {
   fixture.platformType = 'operation'
   fixture.sessionVersion = 1
   vi.stubEnv('VITE_DIM3D_SERVER_URL', 'https://reference.invalid')
-  vi.stubGlobal('window', { location: { origin: 'http://localhost', pathname: '/threeWeb/sceneManage' } })
+  vi.stubGlobal('window', { location: { origin: 'http://localhost', pathname: '/dts/sceneManage' } })
   fixture.refresh.mockResolvedValue(false)
   fixture.replay.mockResolvedValue(new Response('{}'))
   await import('@/request')
@@ -117,7 +117,7 @@ it('内嵌认证失败只通知宿主，不调用独立刷新或登录', async (
 it('独立编辑页签交接身份失效时通知画布，不借用独立刷新', async () => {
   fixture.standalone = false
   const dispatch = vi.fn()
-  vi.stubGlobal('window', { location: { origin: 'http://localhost', pathname: '/threeWeb/sceneEdit' }, dispatchEvent: dispatch })
+  vi.stubGlobal('window', { location: { origin: 'http://localhost', pathname: '/dts/sceneEdit' }, dispatchEvent: dispatch })
   vi.stubGlobal('CustomEvent', class { constructor(readonly type: string) {} })
   await expect(fixture.responseHook!(unauthorized(), { url })).rejects.toMatchObject({ code: 401 })
   expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'xr-center-auth-expired' }))

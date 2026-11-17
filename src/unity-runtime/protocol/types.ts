@@ -1,5 +1,7 @@
-import type { SceneObject, SceneResource, UnityGeospatialScene } from '@/scene-core'
-import type { SceneStreamingConfig } from '@/scene-platform/core/types'
+import type { RuntimeWeatherConfig } from './weather'
+import type { SceneStreamingConfig, VegetationSystemDefinition } from '@/scene-platform/core/types'
+import type { SceneObject, SceneResource, UnityCameraConfig, UnityGeospatialScene } from '@/scene-core'
+export type { UnityCameraConfig } from '@/scene-core'
 
 export const UNITY_EDITOR_PROTOCOL_VERSION = 1 as const
 export const UNITY_EDITOR_CLIENT = 'web-unity' as const
@@ -14,6 +16,7 @@ export const UNITY_EDITOR_ERROR_CODES = {
   RuntimeBusy: 'RUNTIME_BUSY',
   RuntimeTeardown: 'RUNTIME_TEARDOWN',
   InvalidPayload: 'INVALID_PAYLOAD',
+  WeatherNotReady: 'WEATHER_NOT_READY',
 } as const
 
 export type UnityEditorErrorCode = typeof UNITY_EDITOR_ERROR_CODES[keyof typeof UNITY_EDITOR_ERROR_CODES]
@@ -40,6 +43,23 @@ export interface UnitySessionInitializePayload {
     accessToken: string
     downloadOrigins: readonly string[]
   }
+  /** 只读发布会话按资源键和固定修订签发，和编辑登录鉴权互斥。 */
+  publicationResources?: {
+    apiBaseUrl: string
+    publicationId: string
+    ticket: string
+    downloadOrigins: readonly string[]
+    catalog: Readonly<Record<string, {
+      resourceId: string
+      revision: string
+      contentHash: string
+      manifestSha256: string
+      contentFormat: string
+      platform: string
+      appCompatibility: string
+      manifestPath: string
+    }>>
+  }
 }
 
 export interface UnitySessionInitializeResponse {
@@ -49,13 +69,25 @@ export interface UnitySessionInitializeResponse {
 }
 
 export interface UnitySceneSnapshotDto {
+  vegetation?: VegetationSystemDefinition | null
   sceneId: string
   revisionNo: number
   sceneType: 'local3d' | 'gis'
   objects: SceneObject[]
   resources: SceneResource[]
+  environment?: { weather: RuntimeWeatherConfig | null; weatherRevision: number }
   geospatial?: UnityGeospatialScene
   streaming?: SceneStreamingConfig
+  camera?: UnityCameraConfig
+}
+
+export interface UnityCameraState extends UnityCameraConfig {
+  position: [number, number, number]
+  orientation: { heading: number; pitch: number; roll: number }
+  fov: number
+  near: number
+  far: number
+  automaticClipping: boolean
 }
 
 export interface UnityRequestEnvelope<T = unknown> {
@@ -87,6 +119,11 @@ export interface UnityEventEnvelope<T = unknown> {
 }
 
 export type UnityEditorMethod =
+  | 'editor.v1.vegetation.control'
+  | 'editor.v1.camera.control'
+  | 'editor.v1.weather.describe'
+  | 'editor.v1.weather.apply'
+  | 'editor.v1.weather.getState'
   | 'editor.v1.session.initialize'
   | 'editor.v1.scene.loadDraft'
   | 'editor.v1.scene.pickWorldPosition'
@@ -116,6 +153,7 @@ export type UnityInteractionActionDto =
     }
 
 export type UnityEditorEventType =
+  | 'editor.v1.weather.state.changed'
   | 'editor.v1.runtime.ready'
   | 'editor.v1.scene.progress'
   | 'editor.v1.scene.loaded'

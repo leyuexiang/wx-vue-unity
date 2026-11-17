@@ -19,6 +19,25 @@ describe('dual Unity render contract', () => {
     expect(scene.objects.map((object) => object.id)).toEqual(['parent', 'child', 'other'])
   })
 
+  it('projects legacy GIS camera settings without changing the saved camera or path', () => {
+    const scene = createSceneDefinition({ id: 'camera-gis', name: 'GIS', type: 'gis',
+      coordinateSystem: { kind: 'wgs84', defaultLongitude: 110, defaultLatitude: 19, defaultHeight: 0, terrainEnabled: false } })
+    const orientation = { heading: 0.3, pitch: -0.5, roll: 0 }
+    scene.settings = { camera: { kind: 'cesium', destination: [110, 19, 800], orientation, fov: 45, near: 0.5, far: 1e8 },
+      rendering: { antialias: false } }
+    scene.cameraPaths = [{ id: 'route', name: '巡视', enabled: true, loop: false, autoPlay: true, durationMs: 4500,
+      waypoints: [
+        { id: 'first', kind: 'geo', destination: [110, 19, 800], orientation, timeMs: 0, interpolation: 'linear' },
+        { id: 'last', kind: 'geo', destination: [110.1, 19.1, 850], orientation, timeMs: 3000, interpolation: 'ease-in-out' },
+      ] }]
+    expect(projectSceneForUnity(scene).camera).toEqual({ position: [110, 19, 800], orientation, fov: 45,
+      near: 0.5, far: 1e8, antialiasing: { mode: 'none' } })
+    const saved = JSON.parse(serializeSceneDefinitionToFourPackages(scene).threeDJson)
+    expect(saved.baseConfig.camera).toEqual(scene.settings.camera)
+    expect(saved.baseConfig.settings.rendering).toEqual(scene.settings.rendering)
+    expect(saved.cameraPaths).toEqual(scene.cameraPaths)
+  })
+
   it.each(['gis', 'local3d'] as const)('loads a mixed %s scene without losing deferred cameras or other objects from save packages', (type) => {
     const scene = createSceneDefinition({ id: 'mixed', name: 'Mixed', type,
       coordinateSystem: type === 'gis' ? { kind: 'wgs84', defaultLongitude: 110, defaultLatitude: 19, defaultHeight: 0, terrainEnabled: false }

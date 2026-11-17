@@ -1,0 +1,30 @@
+{
+  "passed": false,
+  "phase": "isolation",
+  "marker": "web-isolation-mwbjrcri",
+  "checks": [
+    {
+      "name": "证书及静态深链接校验",
+      "passed": true
+    },
+    {
+      "name": "真实登录与三个同级分类",
+      "passed": true
+    },
+    {
+      "name": "网页新增连接器并回读默认停用",
+      "passed": true
+    },
+    {
+      "name": "网页编辑及未保存取消",
+      "passed": false,
+      "errorType": "TimeoutError",
+      "detail": "locator.waitFor: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('row').filter({ hasText: 'web-isolation-mwbjrcri-edited' }) to be visible\u001b[22m\n"
+    }
+  ],
+  "pageErrors": [],
+  "apiMocked": false,
+  "deployedStaticFiles": true,
+  "certificatePinned": true,
+  "scope": "真实静态包、标准登录及12525服务；并发客户端只修改本次标记样本"
+}

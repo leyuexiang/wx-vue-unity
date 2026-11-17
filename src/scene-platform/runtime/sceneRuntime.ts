@@ -278,7 +278,8 @@ export interface SceneRuntime {
    */
   clearScene: () => void | Promise<void>
 
-  upsertObject: (object: SceneObject) => Promise<void>
+  /** 运行态属性更新只应用到引擎，不能触发用户编辑事件。 */
+  upsertObject: (object: SceneObject, options?: { runtimeOnly?: boolean }) => Promise<void>
   /** 删除对象。返回 Promise，确保引擎异步销毁完成后才开始下一项同步。 */
   /**
    * 删除对象。同步运行时可立即完成，异步运行时可返回 Promise；桥接层会逐个等待完成，

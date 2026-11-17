@@ -17,6 +17,13 @@ export interface SceneTransform {
 export interface UnityGeospatialScene {
   origin: [number, number, number]
   terrainEnabled: boolean
+  appearance?: {
+    terrainExaggeration: number
+    brightness: number
+    contrast: number
+    saturation: number
+    originConfigured: boolean
+  }
   layers: Array<{
     id: string
     name: string
@@ -56,7 +63,18 @@ export interface SceneResource {
   }
 }
 
+export interface UnityCameraConfig {
+  position?: [number, number, number]
+  target?: [number, number, number]
+  orientation?: { heading?: number; pitch?: number; roll?: number }
+  fov?: number
+  near?: number
+  far?: number
+  antialiasing?: { mode: string; msaaSamples?: number; supersampleScale?: number }
+}
+
 export interface SceneDefinition {
+  camera?: UnityCameraConfig
   schemaVersion: 1
   id: string
   name: string

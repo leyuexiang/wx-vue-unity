@@ -85,7 +85,7 @@ GIS 由 Unity 工程中的 Cesium for Unity 渲染，网页不安装 CesiumJS。
 
 1. 右键这个 bat，选「编辑」。把开头的 `set UNITY_PROJECT=` 改成自己的 Unity 根目录，也就是里面有 `Assets` 的那一层。保存。
 2. 回到资源管理器，双击 `启动WebGPU网关.bat`。窗口留着。它会先检查本机证书，再启动网关。出现 `Unity Web local gateway listening on https://localhost:5191` 后不要关。关掉窗口等于 WebGPU 入口断开。
-3. 浏览器打开 `http://localhost:5180/threeWeb/sceneManage`。未登录时按页面提示登录。对普通三维或 GIS 场景点「进入」，在「选择渲染方式」里点「Unity WebGPU」。
+3. 浏览器打开 `http://localhost:5180/dts/sceneManage`。未登录时按页面提示登录。对普通三维或 GIS 场景点「进入」，在「选择渲染方式」里点「Unity WebGPU」。
 4. 编辑页中间先显示加载百分比，再到「Unity 场景已就绪」。包来自 `UNITY_PROJECT` 下面的 `webgpu\player`。
 
 「Unity WebGPU」是灰色时，检查 `.env.development.local` 里的 `VITE_UNITY_WEB_BOOTSTRAP_URL` 是否为 `https://localhost:5191/bootstrap`，保存后重新运行 `pnpm dev`。按钮写着浏览器不支持时，换 Chrome 或 Edge，地址必须是 `localhost`。
@@ -116,7 +116,7 @@ GIS 由 Unity 工程中的 Cesium for Unity 渲染，网页不安装 CesiumJS。
 `--webserver.host` 改成自己 `.env.development.local` 里的信令主机，保留 `ws://`，不要加端口，端口已经写在下一参数 `--webserver.port=8923`。`--process.path.unity` 改成自己机器上的 `<Unity工程>\cloud\CloudRenderLaunch.exe`。保存并关闭记事本。
 
 3. 回到资源管理器，双击刚保存的 `启动Launcher-正式模式.bat`。黑色窗口要一直留着。窗口里出现 WebSocket 连接成功后，Launcher 已经在信令上登记。这时还不会出现 Unity 画面。
-4. 浏览器回到 `http://localhost:5180/threeWeb/sceneManage`。对非 GIS 场景点「进入」，在「选择渲染方式」里点「Unity 云渲染」。
+4. 浏览器回到 `http://localhost:5180/dts/sceneManage`。对非 GIS 场景点「进入」，在「选择渲染方式」里点「Unity 云渲染」。
 5. 点下去之后，Launcher 才启动 `<Unity工程>\cloud\CloudRenderLaunch.exe`，再由它打开旁边的 `cloud\player\CloudRender.exe`。播放器窗口可以留在后台。网页编辑页中间的视频出现模型和地面后，这条链路就通了。
 
 不要直接双击 `cloud\player\CloudRender.exe`，那样没有资源目录和信令参数。页面停在「等待 Launcher 启动 Unity」时，看黑色窗口是否还在、bat 里的 exe 路径在资源管理器里是否真的存在、信令是否还有空闲席位。要换调试模式时，先关掉这个黑窗口，再改运行同目录的 `启动Launcher-调试模式.bat`。

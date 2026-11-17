@@ -54,6 +54,13 @@
   --manage-color-line-hover: rgb(124 169 255 / 28%);
   --manage-color-line-soft: rgb(124 169 255 / 8%);
   --manage-color-accent: #51a195;
+  /* 品牌色与交互色分离，普通文字和实心按钮分别使用可读的前景/背景。 */
+  --manage-color-action: #8dd9cb;
+  --manage-color-action-fill: #28786d;
+  --manage-color-action-fill-hover: #1f6359;
+  --manage-color-on-action: #ffffff;
+  --manage-sidebar-text: #dce9e6;
+  --manage-color-danger-readable: #ffadb4;
   --manage-color-accent-2: #61e8ff;
   --manage-color-accent-surface: rgb(97 232 255 / 4%);
   --manage-color-accent-tint: rgb(97 232 255 / 5%);
@@ -196,16 +203,20 @@ html:not([data-manage-theme='dark']) .manage-message-box {
 
   /* Figma 亮色输入框节点 2143:10355 的实际描边为 #d9d9d9，不复用页签分割线 #e5e5e5。 */
   --manage-color-filter-line: #d9d9d9;
-  --manage-color-filter-placeholder: #cccccc;
+  --manage-color-filter-placeholder: #68736e;
   --manage-color-input: #ffffff;
   --manage-color-shell-overlay: rgb(255 255 255 / 92%);
   --manage-color-panel-overlay: rgb(255 255 255 / 98%);
   --manage-color-panel-deep-overlay: rgb(246 248 249 / 98%);
   --manage-color-dialog-deep-overlay: rgb(246 248 249 / 98%);
-  --manage-color-text-primary: #595959;
-  --manage-color-text-secondary: rgb(89 89 89 / 68%);
-  --manage-color-text-secondary-strong: rgb(89 89 89 / 66%);
-  --manage-color-text-tertiary: #b8b9bb;
+  /* 按用户反馈柔化浅色主题：正文为中灰绿，辅助信息再弱一级，避免近黑色压迫感。 */
+  --manage-color-text-primary: #606d68;
+  --manage-color-text-secondary: #69756f;
+  --manage-color-text-secondary-strong: #69756f;
+  --manage-color-text-tertiary: #6a7772;
+  --manage-color-action: #397f74;
+  --manage-sidebar-text: #ffffff;
+  --manage-color-danger-readable: #ad3544;
 
   /* 亮色卡片容器沿用同一 40% 主色，避免回退为浏览器默认灰色滑块。 */
   --manage-color-scrollbar-thumb: rgb(81 161 149 / 40%);
@@ -257,12 +268,12 @@ html:not([data-manage-theme='dark']) .manage-message-box {
   /* Figma 亮色分页节点 2143:10681 的普通按钮描边为 #f0f3f5，不复用页面分隔线。 */
   --manage-pagination-control-border: #f0f3f5;
   --manage-pagination-control-hover: rgb(81 161 149 / 8%);
-  --manage-pagination-active-surface: #51a195;
+  --manage-pagination-active-surface: var(--manage-color-action-fill);
   --manage-pagination-active-text: #ffffff;
   --manage-pagination-text: #595959;
   --manage-pagination-total-text: #595959;
-  --manage-pagination-muted-text: #999999;
-  --manage-pagination-copyright-text: #c5cacc;
+  --manage-pagination-muted-text: #62706b;
+  --manage-pagination-copyright-text: #62706b;
   --manage-sidebar-surface-image: url('../../assets/images/manage/sidebar-surface-light.svg');
   --manage-sidebar-active-image: url('../../assets/images/manage/sidebar-active-light.svg');
   --manage-sidebar-model-icon: url('../../assets/images/manage/sidebar-icon-model-light.svg');
@@ -301,7 +312,7 @@ html[data-manage-theme='dark'] .manage-message-box {
   --manage-color-text-primary: rgb(255 255 255 / 80%);
   --manage-color-text-secondary: rgb(255 255 255 / 68%);
   --manage-color-text-secondary-strong: rgb(255 255 255 / 66%);
-  --manage-color-text-tertiary: rgb(255 255 255 / 40%);
+  --manage-color-text-tertiary: #a9bbb5;
   --manage-color-line: rgb(255 255 255 / 14%);
   --manage-color-line-component: rgb(255 255 255 / 16%);
   --manage-color-line-hover: rgb(255 255 255 / 28%);
@@ -572,7 +583,7 @@ html[data-manage-theme='dark'] .manage-message-box {
   width: 36px;
   height: 36px;
   padding: 0;
-  color: var(--manage-text-2);
+  color: var(--manage-sidebar-text);
   cursor: pointer;
   background: var(--manage-color-accent-tint);
   border: 1px solid var(--manage-color-accent-border-soft);
@@ -587,7 +598,7 @@ html[data-manage-theme='dark'] .manage-message-box {
 }
 .manage-header__theme-toggle:hover,
 .manage-header__theme-toggle[aria-pressed='true'] {
-  color: var(--manage-text);
+  color: var(--manage-sidebar-text);
   background: var(--manage-color-accent-soft);
   border-color: var(--manage-color-accent-border-strong);
 }
@@ -621,7 +632,7 @@ html[data-manage-theme='dark'] .manage-message-box {
   font-size: 14px;
   font-weight: 400;
   line-height: 48px;
-  color: rgb(255 255 255 / 60%);
+  color: var(--manage-sidebar-text);
   user-select: none;
 }
 .manage-header__category,
@@ -690,11 +701,11 @@ html[data-manage-theme='dark'] .manage-message-box {
   transition: opacity 120ms ease-out;
 }
 html:not([data-manage-theme='dark']) .manage-header__menu .el-menu-item {
-  /* 亮色设计的非选中入口为纯白文字，分类标识保持较弱的白色透明度。 */
-  color: #ffffff;
+  /* 按用户反馈恢复原青绿侧栏白字风格，品牌水印与原层级保持。 */
+  color: var(--manage-sidebar-text);
 }
 html:not([data-manage-theme='dark']) .manage-header__menu .el-menu-item.is-active {
-  color: #ffffff !important;
+  color: var(--manage-sidebar-text) !important;
   background: transparent !important;
   box-shadow: none;
 }
@@ -703,7 +714,7 @@ html:not([data-manage-theme='dark']) .manage-header__menu .el-menu-item.is-activ
 }
 html[data-manage-theme='dark'] .manage-header__menu .el-menu-item.is-active {
   /* 暗色设计没有选中胶囊，唯一强调为 Figma 主色 #51A195。 */
-  color: #51a195 !important;
+  color: var(--manage-color-action) !important;
   background: transparent !important;
   box-shadow: none;
 }
@@ -740,7 +751,7 @@ html[data-manage-theme='dark'] .manage-header__menu .el-menu-item.is-active .man
 }
 .manage-header__menu .el-menu-item:hover:not(.is-active),
 .manage-header__menu .el-menu-item:focus-visible:not(.is-active) {
-  color: #ffffff !important;
+  color: var(--manage-sidebar-text) !important;
   background: transparent !important;
 }
 .manage-header__menu .el-menu-item:focus-visible {
@@ -901,7 +912,7 @@ html[data-manage-theme='dark'] .manage-resource-content-panel {
   font-size: 16px;
   font-weight: 400;
   line-height: 22px;
-  color: #51a195;
+  color: var(--manage-color-action);
 }
 .manage-page-top-bar__breadcrumb {
   overflow: hidden;
@@ -912,9 +923,13 @@ html[data-manage-theme='dark'] .manage-resource-content-panel {
   font-size: 12px;
   font-weight: 400;
   line-height: 16px;
-  color: #b8b9bb;
+  color: var(--manage-color-text-secondary);
   white-space: nowrap;
   font-synthesis: none;
+}
+
+.manage-header .manage-header__user {
+  color: var(--manage-sidebar-text);
 }
 html[data-manage-theme='dark'] .manage-page-top-bar__breadcrumb {
   /* 暗色节点使用纯白六成透明度，不能复用带蓝色调的通用次级文字变量。 */
@@ -946,8 +961,8 @@ html[data-manage-theme='dark'] .manage-page-top-bar__breadcrumb {
   font-weight: 400;
   line-height: 22px;
   color: #ffffff;
-  background: #51a195;
-  border-color: #51a195;
+  background: var(--manage-color-action-fill);
+  border-color: var(--manage-color-action);
   border-radius: 4px;
   box-shadow: none;
   font-synthesis: none;
@@ -969,7 +984,7 @@ html[data-manage-theme='dark'] .manage-page-top-bar__breadcrumb {
   height: 32px;
   padding: 5px 8px;
   color: #ffffff;
-  background: #51a195;
+  background: var(--manage-color-action-fill);
   border: 0;
   border-radius: 4px;
   box-shadow: none;
@@ -977,8 +992,8 @@ html[data-manage-theme='dark'] .manage-page-top-bar__breadcrumb {
 .manage-model-page.manage-page .manage-model-page__add-button.el-button:hover,
 .manage-model-page.manage-page .manage-model-page__add-button.el-button:focus-visible {
   color: #ffffff;
-  background: #51a195;
-  border-color: #51a195;
+  background: var(--manage-color-action-fill);
+  border-color: var(--manage-color-action);
   box-shadow: none;
 }
 
@@ -989,8 +1004,8 @@ html[data-manage-theme='dark'] .manage-page-top-bar__breadcrumb {
 .manage-template-page.manage-page .manage-model-page__add-button.el-button.is-disabled {
   color: #ffffff;
   cursor: not-allowed;
-  background: #51a195;
-  border-color: #51a195;
+  background: var(--manage-color-action-fill);
+  border-color: var(--manage-color-action);
   opacity: 0.58;
 }
 .manage-model-page__add-button:focus-visible {
@@ -1086,17 +1101,17 @@ html[data-manage-theme='dark'] .manage-page-top-bar__tabs::before {
   background: transparent;
 }
 .manage-page-top-bar__tab.is-active {
-  color: #51a195;
+  color: var(--manage-color-action);
 }
 html[data-manage-theme='dark'] .manage-page-top-bar__tab {
   /* 暗色节点的未选中页签为纯白六成透明度，不复用带不同透明度的通用次级文案。 */
   color: rgb(255 255 255 / 60%);
 }
 html[data-manage-theme='dark'] .manage-page-top-bar__tab.is-active {
-  color: #51a195;
+  color: var(--manage-color-action);
 }
 .manage-page-top-bar__tab.is-active::after {
-  background: #51a195;
+  background: var(--manage-color-action-fill);
 }
 .manage-page-top-bar__tab:focus-visible {
   outline: 2px solid var(--manage-accent);
@@ -1105,35 +1120,33 @@ html[data-manage-theme='dark'] .manage-page-top-bar__tab.is-active {
 .manage-filter-bar {
   /*
    * 共享顶部筛选栏复用 Figma 节点 2143:10350 / 2155:17930 的已验收几何：
-   * 单行面板固定 94px，高度内含 16px 内边距；字段与操作由页面插槽注入。
+   * 最小高度94px，字段与操作独立成列，字段变多或窗口变窄时允许自然增高。
    * 不加外描边，避免把真实内容起点从 x=320/y=134 错推到 x=321/y=135；面板颜色也
    * 单独令牌化，不能影响管理卡片或编辑器页面的通用面板颜色。
    */
   box-sizing: border-box;
-  display: flex;
-  flex: 0 0 94px;
-  flex-wrap: wrap;
-  gap: 24px;
-  align-items: flex-end;
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+  min-height: 94px;
   padding: 16px;
   background: var(--manage-color-filter-panel);
   border: 0;
   border-radius: 8px;
 }
 .manage-filter-bar__fields {
-  display: flex;
-
-  /* 不占满剩余空间，保证模型页查询按钮仍紧跟第三个字段；空间不足时才收缩换行。 */
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  gap: 24px;
-  align-items: center;
+  /* 按180px最小宽度自动分列，四字段页面可在1440视口保持整齐的一行。 */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 16px;
+  align-items: end;
   min-width: 0;
 }
 .manage-filter-bar__field {
-  /* 每个页面筛选字段均占用设计稿的 242×62px 轨道，字段数量可由页面独立变化。 */
+  /* 字段宽度由共享网格分配，避免固定242px把按钮挤到另一行。 */
   display: flex;
-  flex: 0 0 242px;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
@@ -1142,7 +1155,7 @@ html[data-manage-theme='dark'] .manage-page-top-bar__tab.is-active {
 .manage-filter-bar__label {
   height: 22px;
   font-family: 'Source Han Sans SC', sans-serif;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   line-height: 22px;
   color: var(--manage-color-text-primary);
@@ -1152,9 +1165,9 @@ html[data-manage-theme='dark'] .manage-page-top-bar__tab.is-active {
 .manage-page .manage-filter-bar__field .el-select {
   /*
    * 通用管理页控件规则位于本文件后部且同样带 .manage-page；此处显式保留该父级并增加
-   * 筛选字段层级，确保 Figma 的 242×32px 不会被通用 36px 控件覆盖。
+   * 筛选字段层级，保持32px高度；宽度跟随网格，不影响表单的36px控件。
    */
-  width: 242px;
+  width: 100%;
   height: 32px;
 
   --el-input-height: 32px;
@@ -1208,23 +1221,19 @@ html[data-manage-theme='dark'] .manage-page-top-bar__tab.is-active {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
   margin-left: 0;
 }
 
 /*
- * 选择器包含 .manage-page，优先级高于后方通用按钮的 36px 规则；覆盖范围仍限定在模型筛选区。
- * Element Plus 会给相邻按钮默认加 12px 外边距，因此相邻组合必须显式清零，实际间距只由父级 16px gap 决定。
+ * 所有管理列表共用32px筛选按钮；清除组件库相邻外边距，间距统一由父级gap控制。
  */
-.manage-model-page.manage-page .manage-model-page__filter-actions .el-button,
-.manage-icon-page.manage-page .manage-icon-page__filter-actions .el-button,
-.manage-scene-page.manage-page .manage-scene-page__filter-actions .el-button {
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button {
   box-sizing: border-box;
-  width: 52px;
-  min-width: 52px;
+  min-width: 64px;
   height: 32px;
-  padding: 0;
+  padding: 0 12px;
   margin-left: 0;
   font-family: 'Source Han Sans SC', sans-serif;
   font-size: 14px;
@@ -1234,61 +1243,32 @@ html[data-manage-theme='dark'] .manage-page-top-bar__tab.is-active {
   box-shadow: none;
   font-synthesis: none;
 }
-.manage-model-page.manage-page .manage-model-page__filter-actions .el-button + .el-button,
-.manage-icon-page.manage-page .manage-icon-page__filter-actions .el-button + .el-button,
-.manage-scene-page.manage-page .manage-scene-page__filter-actions .el-button + .el-button {
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button + .el-button {
   margin-left: 0;
 }
-.manage-model-page.manage-page .manage-model-page__query-button.el-button,
-.manage-icon-page.manage-page .manage-icon-page__query-button.el-button,
-.manage-scene-page.manage-page .manage-scene-page__query-button.el-button {
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button--primary {
   color: #ffffff;
-  background: #51a195;
-  border-color: #51a195;
+  background: var(--manage-color-action-fill);
+  border-color: var(--manage-color-action-fill);
 }
-.manage-model-page.manage-page .manage-model-page__query-button.el-button:hover,
-.manage-model-page.manage-page .manage-model-page__query-button.el-button:focus-visible,
-.manage-icon-page.manage-page .manage-icon-page__query-button.el-button:hover,
-.manage-icon-page.manage-page .manage-icon-page__query-button.el-button:focus-visible,
-.manage-scene-page.manage-page .manage-scene-page__query-button.el-button:hover,
-.manage-scene-page.manage-page .manage-scene-page__query-button.el-button:focus-visible {
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button--primary:hover,
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button--primary:focus-visible {
   color: #ffffff;
-  background: #3f887d;
-  border-color: #3f887d;
+  background: var(--manage-color-action-fill-hover);
+  border-color: var(--manage-color-action-fill-hover);
   box-shadow: none;
 }
-.manage-model-page.manage-page .manage-model-page__reset-button.el-button,
-.manage-icon-page.manage-page .manage-icon-page__reset-button.el-button,
-.manage-scene-page.manage-page .manage-scene-page__reset-button.el-button {
-  color: #51a195;
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button:not(.el-button--primary) {
+  color: var(--manage-color-action);
   background: transparent;
-  border-color: #51a195;
+  border-color: var(--manage-color-action);
 }
-.manage-model-page.manage-page .manage-model-page__reset-button.el-button:hover,
-.manage-model-page.manage-page .manage-model-page__reset-button.el-button:focus-visible,
-.manage-icon-page.manage-page .manage-icon-page__reset-button.el-button:hover,
-.manage-icon-page.manage-page .manage-icon-page__reset-button.el-button:focus-visible,
-.manage-scene-page.manage-page .manage-scene-page__reset-button.el-button:hover,
-.manage-scene-page.manage-page .manage-scene-page__reset-button.el-button:focus-visible {
-  color: #3f887d;
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button:not(.el-button--primary):hover,
+.manage-page .manage-filter-bar .manage-filter-bar__actions .el-button:not(.el-button--primary):focus-visible {
+  color: var(--manage-color-action);
   background: rgb(81 161 149 / 8%);
-  border-color: #3f887d;
+  border-color: var(--manage-color-action);
   box-shadow: none;
-}
-html[data-manage-theme='dark']
-  .manage-model-page.manage-page
-  .manage-model-page__filter-actions
-  .el-button,
-html[data-manage-theme='dark']
-  .manage-icon-page.manage-page
-  .manage-icon-page__filter-actions
-  .el-button,
-html[data-manage-theme='dark']
-  .manage-scene-page.manage-page
-  .manage-scene-page__filter-actions
-  .el-button {
-  /* Figma 暗色按钮节点 2155:17969/17973 为 2px 圆角，亮色仍保留其 4px 设计值。 */
-  border-radius: 2px;
 }
 .manage-model-page__categories {
   box-sizing: border-box;
@@ -1380,7 +1360,7 @@ html[data-manage-theme='dark']
   height: 30px;
   padding: 4px 6px 4px 14px;
   font-weight: 400;
-  color: #51a195;
+  color: var(--manage-color-action);
   background: rgb(81 161 149 / 10%);
   border-radius: 8px;
 }
@@ -1392,7 +1372,7 @@ html[data-manage-theme='dark'] .manage-model-page__category:not(.is-active) {
   color: rgb(255 255 255 / 80%);
 }
 html[data-manage-theme='dark'] .manage-model-page__category.is-active {
-  color: #51a195;
+  color: var(--manage-color-action);
   background: rgb(90 178 165 / 10%);
 }
 .manage-grid-layout--fixed .manage-grid-layout__scroll {
@@ -1608,14 +1588,14 @@ html[data-manage-theme='dark'] .manage-scene-page .manage-model-card__status.is-
   /* 免费和价格属于普通卡片信息，按 Figma 使用常规字重，不再作为粗体强调。 */
   font-weight: 400;
   line-height: 23px;
-  color: #51a195;
+  color: var(--manage-color-action);
   white-space: nowrap;
 }
 .manage-model-card__payment--paid {
   color: #ff5b00;
 }
 .manage-model-card__payment--free {
-  color: #51a195;
+  color: var(--manage-color-action);
 }
 html[data-manage-theme='dark'] .manage-model-card__payment--paid {
   color: #ff8a4c;
@@ -1707,6 +1687,23 @@ html[data-manage-theme='dark'] .manage-model-card__more {
   }
 }
 
+@media (width > 768px) and (width <= 1360px) {
+  /* 四字段在中等宽度下采用2×2，不留下孤立的第四项。 */
+  .manage-filter-bar__fields:has(> .manage-filter-bar__field:nth-child(4)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (width <= 1100px) {
+  /* 内容区较窄时将动作放到独立底行，保证输入框仍可阅读和点击。 */
+  .manage-filter-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .manage-filter-bar__actions {
+    justify-content: flex-end;
+  }
+}
+
 @media (width <= 768px) {
   .manage-page-top-bar__heading-copy {
     flex-direction: column;
@@ -1723,6 +1720,7 @@ html[data-manage-theme='dark'] .manage-model-card__more {
     align-items: stretch;
   }
   .manage-filter-bar__fields {
+    grid-template-columns: minmax(0, 1fr);
     width: 100%;
   }
   .manage-filter-bar__field {
@@ -1821,12 +1819,22 @@ html[data-manage-theme='dark'] .manage-model-card__more {
 .manage-page .el-button--primary,
 .manage-dialog .el-button--primary,
 .manage-scene-card__enter {
-  color: var(--manage-text);
-  background: var(--manage-gradient-primary);
-  border-color: var(--manage-color-accent-border-strong);
-  box-shadow:
-    inset 0 0 0 1px var(--manage-color-accent-soft),
-    0 10px 20px var(--manage-shadow-shell);
+  color: var(--manage-color-on-action);
+  background: var(--manage-color-action-fill);
+  border-color: var(--manage-color-action-fill);
+  box-shadow: none;
+}
+.manage-page .el-button--primary:not(.is-link, .is-text):hover,
+.manage-dialog .el-button--primary:not(.is-link, .is-text):hover {
+  color: var(--manage-color-on-action);
+  background: var(--manage-color-action-fill-hover);
+  border-color: var(--manage-color-action-fill-hover);
+}
+.manage-page .el-button:focus-visible,
+.manage-dialog .el-button:focus-visible,
+.manage-dropdown-popper .el-dropdown-menu__item:focus-visible {
+  outline: 2px solid var(--manage-color-action);
+  outline-offset: 2px;
 }
 .manage-page .el-button--success,
 .manage-toolbar-button--success {
@@ -2740,16 +2748,16 @@ html:has(.el-overlay:not([style*='display: none'])) .manage-grid-layout__scroll 
   background: #e34d59;
 }
 .manage-message-box--online .el-message-box__title {
-  color: #51a195 !important;
+  color: var(--manage-color-action) !important;
 }
 .manage-message-box--online .el-message-box__title::before {
-  background: #51a195;
+  background: var(--manage-color-action-fill);
 }
 .manage-message-box--scene-locked .el-message-box__title {
-  color: #51a195 !important;
+  color: var(--manage-color-action) !important;
 }
 .manage-message-box--scene-locked .el-message-box__title::before {
-  background: #51a195;
+  background: var(--manage-color-action-fill);
 }
 .manage-message-box--offline .el-message-box__title {
   color: #ed7b2f !important;
@@ -2865,7 +2873,7 @@ html:has(.el-overlay:not([style*='display: none'])) .manage-grid-layout__scroll 
   background: #e34d59 !important;
 }
 .manage-message-box .manage-message-box__confirm--online {
-  background: #51a195 !important;
+  background: var(--manage-color-action-fill) !important;
 }
 .manage-message-box--scene-locked .el-message-box__btns > .manage-message-box__confirm {
   /* 图1“知道了”和图2“预览”均使用约 80px 的主按钮宽度。 */
@@ -3116,12 +3124,12 @@ html[data-manage-theme='dark'] .manage-card-menu-popper .el-dropdown-menu__item:
   background: rgb(255 255 255 / 8%);
 }
 .manage-card-menu-popper .el-dropdown-menu__item.manage-card-menu-popper__danger {
-  /* 危险语义在亮暗主题下都固定使用 Figma 红色，优先级必须高于菜单普通文字主题规则。 */
-  color: #e3565d !important;
+  /* 危险动作保持红色语义，但亮暗主题使用各自可读的前景。 */
+  color: var(--manage-color-danger-readable) !important;
 }
 .manage-card-menu-popper .el-dropdown-menu__item.manage-card-menu-popper__danger:hover,
 .manage-card-menu-popper .el-dropdown-menu__item.manage-card-menu-popper__danger:focus {
-  color: #e3565d !important;
+  color: var(--manage-color-danger-readable) !important;
   background: rgb(227 86 93 / 8%);
 }
 .manage-dropdown-popper.manage-select-popper.el-popper,

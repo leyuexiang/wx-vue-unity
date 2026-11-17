@@ -1,0 +1,226 @@
+{
+  "scope": "正式Vue页面与接口传输替身；不代表真实网关、认证服务、数据库或消息系统联验",
+  "checks": [
+    {
+      "name": "首次直接地址进入：真实Vue页面、标准权限菜单及租户头；列表不逐行读取运行状态",
+      "passed": true
+    },
+    {
+      "name": "物联网与资源、场景管理同级分类，授权入口直接展开并保留后端名称及组件白名单",
+      "passed": true
+    },
+    {
+      "name": "详情编号精度与失效租约展示：不将历史CONNECTED显示为实时在线",
+      "passed": true
+    },
+    {
+      "name": "连接测试缺凭据显示受控失败，不伪造成功",
+      "passed": true
+    },
+    {
+      "name": "旧配置版本冲突保留原表单，禁用盲目重复保存",
+      "passed": true
+    },
+    {
+      "name": "新增与MQTT结构预校验走真实请求适配器，保存后列表刷新",
+      "passed": true
+    },
+    {
+      "name": "筛选、空状态和重置使用数据库分页参数",
+      "passed": true
+    },
+    {
+      "name": "设备绑定编辑：非法映射不发请求，合法映射保存并刷新",
+      "passed": true
+    },
+    {
+      "name": "失败事件重放：只提示请求提交，刷新后的处理中不会显示已发布",
+      "passed": true
+    },
+    {
+      "name": "服务失败有独立错误与重试，不保留误导性旧列表",
+      "passed": true
+    },
+    {
+      "name": "1024宽度无整页横向溢出，表格在内容区域滚动",
+      "passed": true
+    },
+    {
+      "name": "只读账号隐藏写入按钮，缺少菜单或查询权限不能直接进入绑定路由",
+      "passed": true
+    },
+    {
+      "name": "新身份无授权菜单时不继承旧菜单或开放全量入口",
+      "passed": true
+    }
+  ],
+  "pageErrors": [],
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/get",
+      "params": {
+        "id": "9007199254740993"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/runtime",
+      "params": {
+        "id": "9007199254740993"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/admin-api/iot/connector/test-mqtt",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/get",
+      "params": {
+        "id": "9007199254740993"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/admin-api/iot/connector/update",
+      "params": {}
+    },
+    {
+      "method": "POST",
+      "path": "/admin-api/iot/connector/validate-mqtt-config",
+      "params": {}
+    },
+    {
+      "method": "POST",
+      "path": "/admin-api/iot/connector/create",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/page",
+      "params": {
+        "connectorId": "missing",
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/device-binding/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/device-binding/get",
+      "params": {
+        "id": "201"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/admin-api/iot/device-binding/update",
+      "params": {}
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/device-binding/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/message-inbox/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/admin-api/iot/message-inbox/replay",
+      "params": {
+        "eventId": "browser-event-01"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/message-inbox/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/message-inbox/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/message-inbox/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/message-inbox/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/admin-api/iot/connector/page",
+      "params": {
+        "pageNo": "1",
+        "pageSize": "10"
+      }
+    }
+  ],
+  "passed": true
+}

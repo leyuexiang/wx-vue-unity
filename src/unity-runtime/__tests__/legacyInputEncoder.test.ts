@@ -33,6 +33,19 @@ describe('LegacyInputEncoder', () => {
     expect(view(packet).getFloat32(stateOffset + 4, true)).toBeCloseTo(540)
   })
 
+  it.each([
+    [0, -100, 1], [0, 100, -1],
+    [1, -3, 1], [1, 3, -1],
+    [2, -1, 1], [2, 1, -1],
+    [0, -10, 0.1],
+  ])('normalizes browser wheel units (mode %s, delta %s) into Unity steps', (deltaMode, deltaY, expected) => {
+    const encoder = new LegacyInputEncoder()
+    const event = { type: 'wheel', clientX: 320, clientY: 180, movementX: 0, movementY: 0,
+      buttons: 0, deltaX: 0, deltaY, deltaMode } as WheelEvent
+    const packet = encoder.pointer(event, { left: 0, top: 0, width: 640, height: 360 } as DOMRect, 1920, 1080)!
+    expect(view(packet).getFloat32(12 + 24 + 20, true)).toBeCloseTo(expected)
+  })
+
   it('保留 Unity 主动事件的会话和场景代次', () => {
     const event = parseUnityRuntimeEvent('editor.v1.selection.changed', {
       params: {

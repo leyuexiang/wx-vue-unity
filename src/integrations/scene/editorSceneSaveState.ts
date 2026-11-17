@@ -41,6 +41,7 @@ type EditorSceneSaveStateListener = (snapshot: EditorSceneSaveStateSnapshot) => 
 const DATA_CHANGE_EVENTS: Record<SceneStoreEvent['type'], boolean> = {
   sceneLoaded: false,
   sceneSettingsUpdated: true,
+  sceneGisUpdated: true,
   sceneStreamingUpdated: true,
   objectUpserted: true,
   objectRemoved: true,

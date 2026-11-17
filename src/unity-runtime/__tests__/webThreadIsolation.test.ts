@@ -14,7 +14,7 @@ describe('Unity native thread prerequisites', () => {
     vi.clearAllMocks()
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => bootstrap }))
     // 画布已注册右键菜单拦截；模拟元素需具备浏览器事件接口，才能继续验证线程隔离前置条件。
-    vi.stubGlobal('document', { baseURI: 'http://app.test/', createElement: () => ({ style: {}, addEventListener: vi.fn(), remove: vi.fn() }), head: { append: appendLoader } })
+    vi.stubGlobal('document', { baseURI: 'http://app.test/', createElement: () => ({ style: {}, remove: vi.fn(), addEventListener: vi.fn(), focus: vi.fn() }), head: { append: appendLoader } })
     vi.stubGlobal('window', { location: { origin: 'http://app.test' }, addEventListener: vi.fn(), removeEventListener: vi.fn() })
   })
   afterEach(() => vi.unstubAllGlobals())

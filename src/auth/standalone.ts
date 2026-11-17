@@ -1,4 +1,5 @@
 import { authContext } from './authContext'
+import { parseManagementMenus } from './iotNavigation'
 import { normalizeAccessToken } from './accessToken'
 import { DIM3D_SERVER_URL as server } from '@/servers/manual/dim3d/api/constants'
 import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
@@ -28,6 +29,8 @@ export interface StandaloneTokens {
 }
 /** 后端原始资料：运营端返回 nickName，参考租户端返回 userName，头像允许为空。 */
 export interface StandaloneProfileResponse {
+  /** 参考服务可同步返回授权菜单；缺失时由管理访问页提示配置。 */
+  menus?: unknown
   user: {
     userId: string | number
     nickName?: string | null
@@ -40,6 +43,8 @@ export interface StandaloneProfileResponse {
 }
 /** 页面内部资料投影：显示名称统一为 nickName，不要求后端两种用户表使用同名字段。 */
 export interface StandaloneProfile {
+  /** 来自可信资料/权限响应，跟随当前会话清理和重新查询。 */
+  menus?: readonly import('./iotNavigation').ManagementMenu[]
   user: { userId: string | number; nickName: string; avatar?: string | number; deptId?: string | number }
   permissions: string[]
   roles: string[]
@@ -107,11 +112,12 @@ function validateProfile(profile: StandaloneProfile): void {
 /** 在网络边界适配真实租户名称字段；不猜测用户编号、不补权限，登录和页面恢复共用此入口。 */
 async function loadProfile(tokens: StandaloneTokens, platformType: PlatformType): Promise<StandaloneProfile> {
   if (DIM3D_ADMIN_API) {
-    const response = await call<{ user: { id: string | number; nickname: string; avatar?: string; deptId?: string | number }; permissions: string[]; roles: string[] }>(
+    const response = await call<{ user: { id: string | number; nickname: string; avatar?: string; deptId?: string | number }; permissions: string[]; roles: string[]; menus?: unknown }>(
       '/system/auth/get-permission-info', undefined, tokens)
     const profile: StandaloneProfile = { user: { userId: response.user?.id, nickName: response.user?.nickname,
       ...(response.user?.avatar == null ? {} : { avatar: response.user.avatar }),
-      ...(response.user?.deptId == null ? {} : { deptId: response.user.deptId }) }, permissions: response.permissions, roles: response.roles }
+      ...(response.user?.deptId == null ? {} : { deptId: response.user.deptId }) }, permissions: response.permissions, roles: response.roles,
+      menus: parseManagementMenus(response.menus) }
     validateProfile(profile)
     return profile
   }
@@ -131,6 +137,7 @@ async function loadProfile(tokens: StandaloneTokens, platformType: PlatformType)
     },
     permissions: response.permissions,
     roles: response.roles,
+    ...(response.menus === undefined ? {} : { menus: parseManagementMenus(response.menus) }),
   }
   validateProfile(profile)
   return profile
@@ -142,6 +149,7 @@ function applySession(session: Session): void {
   authContext.set({
     accessToken: normalizeAccessToken(session.tokens.access_token), clientId: session.tokens.client_id,
     permissions: session.profile.permissions, roles: session.profile.roles, platformType: session.platformType,
+    menus: session.profile.menus,
     expiresAt: session.expiresAt,
     ...(session.tokens.tenantId ? { tenantId: session.tokens.tenantId } : {}),
   })

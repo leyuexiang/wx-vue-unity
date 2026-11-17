@@ -24,6 +24,9 @@ import {
   type SceneType,
 } from '@/scene-platform'
 import { BUILTIN_SCENE_ASSET_ID_PREFIX, getBuiltinSceneAsset, getBuiltinSceneResourceUrl } from './editorBuiltinResourceRegistry'
+import { readImportedVegetationAddress } from './importVegetationPublication'
+import { restorePersistedWeatherEffects } from './editorSceneWeatherAdapter'
+import { hasWeatherProvider } from '@/scene-platform/effects/weather'
 
 /** 真实运行态接口返回的通用发布分片。字段均来自 OpenAPI 的实际声明。 */
 export interface SceneRuntimePublishedFragment {
@@ -418,11 +421,22 @@ const hydrateVegetationAsset = (
   const resourceKey = getString(record?.id) ?? getString(record?.resourceKey)
   if (!record || !resourceKey) return undefined
   const indexed = resourceIndex.get(resourceKey)
-  const resolvedUrl = getString(resolvedAssetUrls[resourceKey]) ?? indexed?.url
+  const nativeMetadata = getRecord(record.metadata)
+  const nativeUrl = resourceKey.startsWith('unity-model:') && nativeMetadata?.source === 'unity-catalog' && getString(nativeMetadata.assetId)
+    ? `unity-resource:model/${encodeURIComponent(String(nativeMetadata.assetId))}` : undefined
+  const importedUrl = readImportedVegetationAddress(nativeMetadata?.publicVegetationSource)
+  const resolvedUrl = importedUrl ?? getString(resolvedAssetUrls[resourceKey]) ?? indexed?.url ?? nativeUrl
   if (!resolvedUrl) return record
   return {
     ...record,
     url: resolvedUrl,
+    ...(Array.isArray(record.modelLodVariants)
+      ? { modelLodVariants: record.modelLodVariants.map(value => {
+          const variant = getRecord(value)
+          const id = getString(variant?.id)
+          return variant && id && resolvedAssetUrls[id] ? { ...variant, url: resolvedAssetUrls[id] } : value
+        }) }
+      : {}),
     ...(indexed?.kind ? { kind: indexed.kind } : {}),
     ...(getString(record.version)
       ? { version: record.version }
@@ -1302,13 +1316,31 @@ const createWidgetDependencyIndex = (
   return { dataBindingsByInstance, behaviorsByInstance, deviceBindingsByInstance }
 }
 
-/** 从结构化数据绑定的可逆快照恢复现有二维数据面板协议。 */
+/** 有历史请求快照时完整恢复；只含正式适配器字段的发布也能恢复数据源和映射。 */
 const restoreWidgetDataConfig = (bindings: readonly JsonRecord[]): JsonRecord | undefined => {
   const ordered = [...bindings].sort(
     (left, right) => getNumber(left.sortNo, 0) - getNumber(right.sortNo, 0),
   )
   const requestSnapshots = ordered
-    .map((binding) => getRecord(getContentRecord(binding.contentJson).requestSnapshot))
+    .map((binding): JsonRecord | undefined => {
+      if (binding.enabled === false) return undefined
+      const snapshot = getRecord(getContentRecord(binding.contentJson).requestSnapshot)
+      if (snapshot) return snapshot
+      const source = getRecord(binding.source)
+      const config = getRecord(source?.requestConfig)
+      const id = getString(binding.bindingKey)
+      if (!id || source?.type !== 'adapter' || !getString(config?.adapterId)) return undefined
+      const mapping = getRecord(binding.mappingConfig)
+      return {
+        id, name: id, enabled: true,
+        collapsed: false,
+        request: { type: 'adapter', config },
+        extractor: getRecord(binding.extractorConfig) ?? {},
+        dataset: { dimensions: getArray(getRecord(binding.schemaConfig)?.dimensions), source: [] },
+        bindings: getArray(mapping?.bindings),
+        deletedAutoMappingTargets: getArray(mapping?.deletedAutoMappingTargets),
+      }
+    })
     .filter((request): request is JsonRecord => request !== undefined)
   const firstRequest = requestSnapshots[0]
   if (!firstRequest) return undefined
@@ -1606,7 +1638,7 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
     },
     ...(getRecord(baseConfig.scene) ? { scene: baseConfig.scene } : {}),
     ...(getRecord(baseConfig.camera) ? { camera: baseConfig.camera } : {}),
-    ...(getRecord(baseConfig.weather) ? { weather: baseConfig.weather } : {}),
+    ...(getRecord(baseConfig.weather) && !hasWeatherProvider(baseConfig.weather) ? { weather: baseConfig.weather } : {}),
   }
 
   const coordinateSystem =
@@ -1620,7 +1652,7 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
     objects: restoredObjects,
     ...(streaming ? { streaming } : {}),
     layers,
-    effects: getArray(threeDSeed.effects).map(value => {
+    effects: restorePersistedWeatherEffects(getArray(threeDSeed.effects).map(value => {
       const effect = getRecord(value)
       if (!effect || !Array.isArray(effect.assetRefs)) return value
       return {
@@ -1635,7 +1667,7 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
           return { ...asset, ...resolved, url: resolved?.url ?? getString(asset?.url) ?? '' }
         }),
       }
-    }),
+    }).filter(value => getRecord(value)) as SceneDefinition['effects'], baseConfig.weather),
     settings,
     metadata,
     cameraPaths: Array.isArray(threeDSeed.cameraPaths) ? threeDSeed.cameraPaths : [],

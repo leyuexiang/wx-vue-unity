@@ -8,6 +8,7 @@ import {
 } from '@/scene-platform'
 import { getDim3dSceneInfo, type Dim3dSceneDetailVo } from '@/servers/manual/dim3d/api/scene'
 import { listDim3dVegetationPublicationHistory } from '@/servers/manual/dim3d/api/vegetation'
+import { readPublishedVegetationModelUrls } from './importVegetationPublication'
 import { appLogger } from '@/utils/logger'
 import { assembleSceneDefinitionFromRuntimeFragments } from './sceneRuntimeFragmentAssembler'
 import { mergeDataBindingOverflow } from './dataBindingOverflow'
@@ -107,6 +108,7 @@ const stripCopiedVegetationPublication = (threeDJson: string): string => {
 const resolveSavedVegetationPublicationUrls = async (
   sceneId: string,
   threeDJson: unknown,
+  resolvedAssetUrls: Readonly<Record<string, string>>,
 ): Promise<SavedVegetationPublicationResolution> => {
   const threeD = parseJsonRecord(threeDJson)
   const vegetation = parseJsonRecord(threeD?.vegetation)
@@ -157,6 +159,27 @@ const resolveSavedVegetationPublicationUrls = async (
   const rootTilesetId = `vegetation-tileset:${sceneId}:${publicationVersion}`
   urls[manifestId] = matchedPublication.manifestUrl
   urls[rootTilesetId] = matchedPublication.tilesetUrl
+
+  const unresolvedModels = (Array.isArray(vegetation?.speciesCatalog) ? vegetation.speciesCatalog : [])
+    .flatMap(value => {
+      const model = parseJsonRecord(parseJsonRecord(value)?.modelAsset)
+      const key = typeof model?.id === 'string' ? model.id : ''
+      const metadata = parseJsonRecord(model?.metadata)
+      const assetId = typeof metadata?.assetId === 'string' ? metadata.assetId : key
+      return key && !resolvedAssetUrls[key] && !hasUrl(model?.url) && !hasUrl(metadata?.publicVegetationSource)
+        ? [{ key, assetId }] : []
+    })
+  if (unresolvedModels.length) {
+    try {
+      const models = await readPublishedVegetationModelUrls(matchedPublication.manifestUrl)
+      for (const { key, assetId } of unresolvedModels) {
+        const url = models.get(assetId)
+        if (url) urls[key] = url
+      }
+    } catch (error) {
+      appLogger.warn('Dim3dSceneRepository', '植被发布清单无法补全物种地址', { sceneId, error })
+    }
+  }
 
   layerRecords.forEach((layer) => {
     const layerId = typeof layer.id === 'string' && layer.id.trim() ? layer.id.trim() : ''
@@ -251,6 +274,7 @@ export const parseFourPackageRevision = async (
         const vegetationPublication = await resolveSavedVegetationPublicationUrls(
           String(detail.sceneId ?? ''),
           revision.threeDJson,
+          resolvedAssetUrls,
         )
         savedVegetationUrls = vegetationPublication.urls
         copiedSceneVegetation = vegetationPublication.copiedScene

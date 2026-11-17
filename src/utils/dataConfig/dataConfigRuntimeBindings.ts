@@ -24,6 +24,7 @@ import {
   getPublicRequests,
 } from './dataRequestHelpers'
 import { extractResult } from './dataRequestExecution'
+import { getDataSourceAdapter } from './dataSourceAdapters'
 import { appLogger } from '@/utils/logger'
 import { isDatasetValueWidgetKeyName } from './widgetDataInference'
 import { applyMarketImageValue } from '@/packages/components/Widget/Image/imageSource'
@@ -266,6 +267,17 @@ export const resolveComponentData = (
         requestType: 'public',
         publicRequest,
       },
+    }
+  }
+
+  if (dataConfig.request.type === 'adapter') {
+    const requestConfig = dataConfig.request.config as { adapterId?: unknown }
+    const adapterId = typeof requestConfig.adapterId === 'string' ? requestConfig.adapterId : ''
+    const adapter = getDataSourceAdapter(adapterId)
+    return {
+      dimensions: adapter?.dimensions ? [...adapter.dimensions] : dataConfig.dataset.dimensions,
+      source: Array.isArray(dataConfig.dataset.source) ? dataConfig.dataset.source : [],
+      meta: { requestType: 'adapter', adapterId },
     }
   }
 

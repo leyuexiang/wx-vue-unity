@@ -5,6 +5,7 @@ import type { WidgetConfig } from '@/stores/sceneEditStore'
 import TextConfig from '@/packages/components/Widget/TextCommon/config'
 import { createEmptyDataConfig, createEmptyRequestGlobalConfig, type ComponentDataConfig, type StaticRequestConfig, type PublicRequestConfig, type RequestGlobalConfig } from '@/types/data-config'
 import { createEditorSceneDataPollingController } from '../editorSceneDataPollingController'
+import { setWidgetPreviewState } from '../widgetRuntime/ports'
 
 /** 隔离网络执行，只检验真实响应式配置是否触发唯一调度器，避免把结果回填误判成配置修改。 */
 const fixture = vi.hoisted(() => ({
@@ -12,7 +13,7 @@ const fixture = vi.hoisted(() => ({
   requests: {} as { scenePublicRequestList: PublicRequestConfig[]; sceneRequestGlobalConfig: RequestGlobalConfig },
   scene: {} as { id: string; objects: Array<{ id: string; metadata?: Record<string, unknown> }> },
   getSceneObjects: null as (() => readonly unknown[]) | null,
-  start: vi.fn(), dispose: vi.fn(),
+  start: vi.fn(), stop: vi.fn(), dispose: vi.fn(),
 }))
 vi.mock('@/stores/sceneEditStore', () => ({ useSceneWidgetStore: () => fixture.widgets }))
 vi.mock('@/stores/sceneAuxiliaryStores', () => ({
@@ -24,12 +25,13 @@ vi.mock('../widgetRuntime', () => ({ SceneDataPollingRuntime: class {
     fixture.getSceneObjects = options.getSceneObjects ?? (() => [])
   }
   start = fixture.start
+  stop = fixture.stop
   dispose = fixture.dispose
 } }))
 
 describe('二维编辑器数据配置监听', () => {
   let controller: ReturnType<typeof createEditorSceneDataPollingController> | undefined
-  afterEach(() => { controller?.dispose(); vi.useRealTimers(); vi.clearAllMocks() })
+  afterEach(() => { controller?.dispose(); setWidgetPreviewState(false); vi.useRealTimers(); vi.clearAllMocks() })
 
   const setup = async () => {
     vi.useFakeTimers()
@@ -91,5 +93,39 @@ describe('二维编辑器数据配置监听', () => {
     await vi.advanceTimersByTimeAsync(10)
 
     expect(fixture.start).toHaveBeenCalledTimes(2)
+  })
+
+  it('进入预览时等待相同配置已经开始的刷新，不重复创建请求任务', async () => {
+    await setup()
+    let complete!: () => void
+    fixture.start.mockImplementationOnce(() => new Promise<void>((resolve) => { complete = resolve }))
+    const config = fixture.scene.objects[0]!.metadata!.dataConfig as ComponentDataConfig
+    ;(config.requests![0]!.request.config as StaticRequestConfig).data = [{ value: '预览最新值' }]
+    await nextTick()
+    vi.advanceTimersByTime(10)
+    let ready = false
+    const entering = controller!.start().then(() => { ready = true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(ready).toBe(false)
+    expect(fixture.start).toHaveBeenCalledTimes(2)
+    complete()
+    await entering
+    expect(ready).toBe(true)
+  })
+
+  it('退出预览同步失效旧请求，再按编辑配置重建，销毁后不再响应模式切换', async () => {
+    await setup()
+    setWidgetPreviewState(true)
+    setWidgetPreviewState(false)
+    // 必须先于二维快照恢复同步停止；等待防抖窗口会留下旧响应覆盖编辑态的空隙。
+    expect(fixture.stop).toHaveBeenCalledTimes(1)
+    expect(fixture.start).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(fixture.start).toHaveBeenCalledTimes(2)
+    controller!.dispose()
+    setWidgetPreviewState(true)
+    setWidgetPreviewState(false)
+    expect(fixture.stop).toHaveBeenCalledTimes(1)
   })
 })

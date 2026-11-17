@@ -53,7 +53,9 @@ function createVegetationRuntimeSignature(
   vegetation: VegetationSystemDefinition | undefined,
 ): string {
   if (!vegetation) return 'none'
+  if (vegetation.streaming.renderMode === 'instanced') return JSON.stringify(vegetation)
   return JSON.stringify({
+    renderMode: vegetation.streaming.renderMode,
     enabled: vegetation.enabled,
     streamingEnabled: vegetation.streaming.enabled,
     layers: vegetation.layers.map((layer) => ({
@@ -547,6 +549,7 @@ export function createRuntimeBridge(
 
   const handleEvent = (event: SceneStoreEvent) => {
     switch (event.type) {
+      case 'sceneGisUpdated':
       case 'objectHierarchyChanged':
       case 'sceneLoaded': {
         stateWork.clear()
