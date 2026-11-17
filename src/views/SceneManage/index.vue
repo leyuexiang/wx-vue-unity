@@ -1,4 +1,5 @@
 <template>
+  <FixedPublicationDialog v-if="DIM3D_ADMIN_API" v-model="fixedPublishVisible" :scene-id="fixedPublishSceneId" @published="getList" />
   <div class="manage-page manage-theme manage-list-page manage-scene-page">
     <ManagePageTopBar title="场景列表" breadcrumb="场景管理/场景列表">
       <template #actions>
@@ -466,6 +467,11 @@
 </template>
 
 <script setup lang="ts">
+import FixedPublicationDialog from '@/components/FixedPublicationDialog.vue'
+import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
+import { revokeFixedPublication } from '@/integrations/scene/fixedPublicationManagement'
+const fixedPublishVisible = ref(false)
+const fixedPublishSceneId = ref('')
 import SceneJsonDownload from './components/SceneJsonDownload/index.vue'
 import ResourceLayout from './layout/index.vue'
 import { toData } from '@/utils/asyncHandler'
@@ -637,6 +643,11 @@ const authorizationDialog = reactive({
 })
 
 const openPublishDialog = async (record: TransferListItem) => {
+  if (DIM3D_ADMIN_API) {
+    fixedPublishSceneId.value = String(record.id ?? '')
+    fixedPublishVisible.value = true
+    return
+  }
   publishDialog.visible = true
   publishDialog.title = '确认发布'
   publishDialog.step = 'form'
@@ -1201,7 +1212,8 @@ const loadSceneDictionaries = async () => {
   try {
     const [[categoryError, categoryData], [accessModeError, accessModeData]] = await Promise.all([
       toData(getDim3dSceneCategoryDictionary({ suppressNotFoundNotification: true })),
-      toData(getDim3dAccessModeDictionary({ suppressNotFoundNotification: true })),
+      // 当前固定发布服务提供自己的能力，不能把空旧字典补成未实现的公开权限。
+      DIM3D_ADMIN_API ? Promise.resolve([undefined, []] as const) : toData(getDim3dAccessModeDictionary({ suppressNotFoundNotification: true })),
     ])
 
     sceneCategoryOptions.value =
@@ -1415,8 +1427,10 @@ const OperateActionMap = {
     } catch {
       return
     }
-    // 已发布分支只允许调用新版取消发布接口；该接口使用 PUT 且没有请求体。
-    const [error] = await toData(cancelDim3dScene(String(sceneId)))
+    // 固定发布撤销只作用于当前记录；其他平台沿用原取消发布接口。
+    const [error] = await toData(DIM3D_ADMIN_API
+      ? revokeFixedPublication(record.publishedPublicationId || '').then(data => ({ data }))
+      : cancelDim3dScene(String(sceneId)))
     if (error) {
       ElMessage.error('取消发布场景失败，请稍后重试')
       return
