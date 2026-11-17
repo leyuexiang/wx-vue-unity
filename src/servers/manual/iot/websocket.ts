@@ -31,14 +31,19 @@ const toWebSocketUrl = (token: string, tenantId?: string, apiBaseUrl?: string) =
   const base = apiBaseUrl || DIM3D_SERVER_URL || globalThis.location?.origin || 'http://localhost'
   const url = new URL(base, globalThis.location?.href || 'http://localhost')
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  url.pathname = `${url.pathname.replace(/\/$/, '')}/dimensions/ws`
+  // 专用入口强制认证且不触发旧业务队列重放；服务端和部署可配置相同的路径。
+  const path = String(import.meta.env.VITE_IOT_STATE_WEBSOCKET_PATH || '/dimensions/ws/iot-state').trim()
+  if (!/^\/[A-Za-z0-9/_.-]+$/.test(path) || path.includes('//') || path.includes('..') || path.endsWith('/')) {
+    throw new Error('物联网长连接路径配置无效')
+  }
+  url.pathname = `${url.pathname.replace(/\/$/, '')}${path}`
   url.search = ''
   url.searchParams.set('token', token)
   if (tenantId) url.searchParams.set('tenant-id', tenantId)
   return url.toString()
 }
 
-/** 复用三维服务现有认证 WebSocket，管理 IoT 状态订阅和断线重连。 */
+/** 使用三维专用认证 WebSocket，管理 IoT 状态订阅和断线重连。 */
 export class IotStateWebSocketClient {
   private socket: WebSocket | null = null
   private opening: Promise<void> | null = null

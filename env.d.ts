@@ -2,6 +2,8 @@
 /// <reference types="unplugin-icons/types/vue" />
 
 interface ImportMetaEnv {
+  /** IoT 专用认证端点路径，与服务端和网关配置同步；服务器根地址继续复用三维配置。 */
+  readonly VITE_IOT_STATE_WEBSOCKET_PATH?: string
   /** GIS 切片服务根地址，省略时使用同源 /gis-source。 */
   readonly VITE_GIS_SOURCE_URL?: string
   readonly VITE_DEV_SERVER_PORT?: string
