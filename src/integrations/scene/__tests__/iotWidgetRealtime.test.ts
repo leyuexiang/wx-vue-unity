@@ -16,7 +16,7 @@ vi.mock('@/servers/manual/iot/websocket', () => ({ createIotStateWebSocketClient
 }) }))
 
 const snapshot = (value: number) => ({ eventId: 'e1', schemaVersion: '1.0', eventTime: '2026-11-17T00:00:00Z', tenantId: 2, deviceId: 'd1', pointCode: 'temperature', value, valueType: 'NUMBER' })
-afterEach(() => { state.widgets = []; state.handlers.clear(); state.reconnect.clear(); state.subscribe.mockClear(); state.unsubscribe.mockClear(); vi.mocked(getIotState).mockReset() })
+afterEach(() => { state.widgets = []; state.handlers.clear(); state.reconnect.clear(); state.subscribe.mockClear(); state.unsubscribe.mockClear(); vi.mocked(getIotState).mockReset(); vi.useRealTimers() })
 
 it.each(['draft', 'published', 'anonymous'] as const)('二维实时请求按域授权、版本合并、重连补偿并隔离销毁 (%s)', async (mode) => {
   const config = createEmptyDataConfig()
@@ -79,5 +79,29 @@ it('多请求独立映射，修改一个请求只替换自身订阅，删除组�
     state.handlers.get(second.subscriptionId)!({ ...snapshot(999), stateVersion: '999' })
     expect(widget.component.option.suffixText).toBe(9)
     expect(state.unsubscribe).toHaveBeenCalledTimes(3)
+  } finally { runtime.dispose() }
+})
+
+it('配置保存前订阅被拒绝时退避重订阅，确认后才查询快照，销毁后停止重试', async () => {
+  vi.useFakeTimers()
+  const config = createEmptyDataConfig()
+  config.request = { type: 'adapter', config: { adapterId: 'iot-state', config: { deviceId: 'd1', pointCode: 'temperature', delivery: 'websocket' } } }
+  config.requests![0]!.bindings = [{ kind: 'widget', targetPath: 'value', sourceField: 'value', valueType: 'number' }]
+  const widget = { id: 'saving-widget', component: { info: { packageName: 'Widget', keyName: 'VNumber' }, option: { value: 0 }, dataConfig: config } } as unknown as WidgetConfig
+  state.widgets = [widget]
+  state.subscribe.mockRejectedValueOnce(new Error('当前保存修订未配置此点位'))
+  vi.mocked(getIotState).mockResolvedValue(snapshot(29.5))
+  const runtime = new SceneDataPollingRuntime({ getPublicRequests: () => [], getRequestGlobalConfig: () => ({ requestOriginUrl: '', requestInterval: null, requestIntervalUnit: 'second', requestParams: { Header: {} } }), getRuntimeContext: () => ({ sceneId: '42' }) })
+  try {
+    await runtime.start()
+    expect(getIotState).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(state.subscribe).toHaveBeenCalledTimes(2)
+    expect(widget.component.option.value).toBe(29.5)
+    expect(getIotState).toHaveBeenCalledTimes(1)
+    runtime.dispose()
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(state.subscribe).toHaveBeenCalledTimes(2)
+    expect(getIotState).toHaveBeenCalledTimes(1)
   } finally { runtime.dispose() }
 })

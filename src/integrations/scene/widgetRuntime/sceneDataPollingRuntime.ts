@@ -68,6 +68,8 @@ type IotStateTask = {
   timer?: ReturnType<typeof setInterval>
   unsubscribe?: () => void
   lastStateVersion?: string
+  /** 首次配置尚未保存或服务暂不可达时，仅重试订阅，不把实时模式改成轮询。 */
+  subscribeRetryAttempt?: number
 }
 
 type SceneDataRemoteEntry = WidgetPreviewRemoteEntry | SceneObjectRemoteEntry
@@ -692,13 +694,18 @@ export class SceneDataPollingRuntime {
         return
       }
       task.unsubscribe = unsubscribe
+      task.subscribeRetryAttempt = 0
       await this.executeIotStateTask(task, generation)
     } catch (error) {
       if (task.delivery === 'auto' && this.running && generation === this.generation && this.iotStateTasks.get(task.key) === task) {
         task.timer = setInterval(() => void this.executeIotStateTask(task, generation), task.intervalMs)
         await this.executeIotStateTask(task, generation)
-      } else if (generation === this.generation) {
+      } else if (this.running && generation === this.generation && this.iotStateTasks.get(task.key) === task) {
         appLogger.error('SceneDataPollingRuntime', `物联网实时订阅失败 (${task.objectId})`, error)
+        // 后端只授权已保存修订，面板提交到保存完成之间可能暂时被拒绝；完成后自动重新确认。
+        const delay = Math.min(30000, 1000 * 2 ** Math.min(task.subscribeRetryAttempt ?? 0, 5))
+        task.subscribeRetryAttempt = (task.subscribeRetryAttempt ?? 0) + 1
+        task.timer = setTimeout(() => { void this.subscribeIotStateTask(task, generation) }, delay)
       }
     }
   }
