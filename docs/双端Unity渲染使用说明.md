@@ -1,12 +1,25 @@
 # 双端 Unity 渲染使用说明
 
-网页工程不包含 Unity 播放器。它只在编辑页中间那块区域挂上 Unity 的画面，四周仍是现在的 Vue 面板。场景数据、保存和发布还是网页自己的。
+网页播放器和模型资源保存在当前前端项目公共资源目录内，默认稳定包为 `public/unity-web/`，其中包含 `player/`、`art/9tyf/` 和 `ArtStartupRelease.json`。稳定包和研发包的位置及生效版本通过管理页配置。编辑页中间挂载 Unity 画面，四周使用现有 Vue 面板，场景数据、保存和发布由网页处理。
 
 GIS 和非 GIS 均加载 Unity 的完整 `StartScene`。GIS 直接使用其中已有的地理根、地表和影像；非 GIS 隐藏地理地表，使用本地坐标、底板及网格。网页加载的业务配置用于添加或编辑对象，不会切换到另一个 Unity Scene。两种模式分别保留相机视角；首次进入 GIS 会避免沿用只有数米高度的本地相机位置。
 
 当前为联调临时使用 Cesium ion 的 Sentinel-2 影像（`CesiumIonRasterOverlay.ionAssetID=3954`），仍由 Unity 原生 GIS 渲染。原 Google 影像 `3830182` 曾返回 429，切换并未使用内网影像。Sentinel-2 的近景清晰度较低；以后更换资源需更新 StartScene 并重新发布播放器。
 
-正式产物放在 Unity 工程里、和 `Assets` 同级的 `webgpu`、`cloud` 两个目录。网页不保存这个目录，进场景时也不会在磁盘上搜索 Unity 工程。
+运行 `pnpm build` 后，网页交付文件复制到 `dist/web-unity/unity-web/`，启动网关交付到 `dist/web-unity/server/unityWebDevGateway.ts`。前端、播放器和网关可作为整个 `dist/web-unity` 目录部署，文件定位跟随所在项目目录。云端播放器沿用 Unity 工程的云渲染交付流程。
+
+生产部署时，将应用子目录下的 `unity-runtime/` 请求去掉该前缀后转发到网关，配置接口和按版本隔离的播放器文件均走此入口。网关的 `/art/` 和 `/session/` 接口通过同一加密站点转发。设置服务端 `UNITY_WEB_DEV_BACKEND` 为业务后端根地址、`UNITY_WEB_DEV_PAGE_ORIGIN` 为前端来源、`UNITY_WEB_DEV_PUBLIC_ORIGIN` 为对外加密根来源后，在交付根目录执行 `node --experimental-strip-types server/unityWebDevGateway.ts`。这些服务地址由部署环境提供。
+
+### 管理稳定版本和研发版本
+
+运营端侧栏进入“系统管理 → 配置管理 → 网页渲染包”。默认稳定版本位置为 `unity-web/player`，研发版本暂未配置。
+
+1. 将稳定包完整放入 `public/unity-web/`，研发包完整放入 `public/unity-web-development/`。每个目录分别包含 `player/Build/`、`art/` 和 `ArtStartupRelease.json`，两个包不要混用资源。
+2. 点击对应版本的“选择文件夹”，在弹窗中进入 `unity-web/player` 或 `unity-web-development/player`，点击“选择此文件夹”。弹窗浏览网关所在项目的公共资源目录，并自动回填播放器这一层的相对路径。研发包未准备时可以留空，旧版保存的交付根目录会自动兼容转换到 `player` 层。
+3. 点击“检查资源包”检查播放器、启动描述和美术资源发布清单。选择需要使用的版本，点击“保存并生效”；所选版本检查不通过时不会覆盖原配置。
+4. 重新进入场景并选择网页渲染。新打开的场景使用保存后的版本，无需重启网关；已经打开的场景保持原来的包和美术资源，所以旧目录需要保留。退出场景后再切换，可查看另一版本。
+
+配置保存到项目内的 `config/webgpu-packages.json`。执行 `pnpm build` 会交付该配置、两个资源包和网关模块；发布后路径相对于部署根目录，网关进程需要配置目录的写权限。线上后续更换包时，先上传到新的独立目录，再在配置页切换路径，避免覆盖正在使用的文件。重新部署时需保留线上修改后的配置文件，或将配置文件存放目录挂载为持久目录。
 
 ## 0. 第一次接手
 
@@ -38,7 +51,7 @@ VITE_UNITY_CLOUD_SIGNAL_URL=<信令地址，例如 ws://192.168.10.148:8923>
 VITE_UNITY_CLOUD_APP_ID=1
 VITE_UNITY_CLOUD_SCENE_KEY=<向信令维护人要；联调用过 web-unity-gm1>
 VITE_UNITY_CLOUD_CLIENT_ID=
-VITE_UNITY_WEB_BOOTSTRAP_URL=https://localhost:5191/bootstrap
+VITE_UNITY_WEB_BOOTSTRAP_URL=./unity-runtime/bootstrap
 ```
 
 `VITE_UNITY_CLOUD_CLIENT_ID` 留空。改完环境文件后重新执行 `pnpm dev`。浏览器只打开 `http://localhost:5180`，不要用 `127.0.0.1` 或局域网 IP。用业务账号登录。
@@ -55,7 +68,7 @@ GIS 由 Unity 工程中的 Cesium for Unity 渲染，网页不安装 CesiumJS。
 两条都会花较长时间，并切换 Unity 的当前平台。完成后应有：
 
 ```text
-<Unity工程>\webgpu\player\Build\
+<网页工程>\public\unity-web\player\Build\
 <Unity工程>\cloud\player\CloudRender.exe
 <Unity工程>\cloud\CloudRenderLaunch.exe
 ```
@@ -67,13 +80,13 @@ GIS 由 Unity 工程中的 Cesium for Unity 渲染，网页不安装 CesiumJS。
 播放器包里没有场景用的模型。两个端还要各有一份资源发布，而且不能互换：
 
 ```text
-<Unity工程>\webgpu\art\
-<Unity工程>\webgpu\ArtStartupRelease.json
+<网页工程>\public\unity-web\art\9tyf\
+<网页工程>\public\unity-web\ArtStartupRelease.json
 <Unity工程>\cloud\art\
 <Unity工程>\cloud\ArtStartupRelease.json
 ```
 
-已有发布目录时，整份拷进对应的 `art`，并把其中的 `ArtStartupRelease.json` 放到 `player` 的上一级。还没有发布时，在 Unity 里打开 `产品工具 / 资源热更工作台`，Web 平台发布到 `webgpu\art`，Windows 平台发布到 `cloud\art`。Web 单个资源包不要超过 32 MiB。缺这两个目录时，网关起不来，云渲染启动器也会在拉起播放器前退出。
+已有完整发布时，将网页平台资源复制到前端 `public/unity-web/art/9tyf/`，将对应的启动描述保存为 `public/unity-web/ArtStartupRelease.json`。资源通过 Unity 的「产品工具 / 资源热更工作台」构建，网页单包上限为 32 MiB。云端资源继续按其启动器目录交付。
 
 ### 0.4 启动 WebGPU 并进入场景
 
@@ -83,12 +96,12 @@ GIS 由 Unity 工程中的 Cesium for Unity 渲染，网页不安装 CesiumJS。
 <网页工程>\scripts\启动WebGPU网关.bat
 ```
 
-1. 右键这个 bat，选「编辑」。把开头的 `set UNITY_PROJECT=` 改成自己的 Unity 根目录，也就是里面有 `Assets` 的那一层。保存。
+1. 确认 `public/unity-web/` 已放入完整交付文件。启动入口默认使用此项目相对路径。
 2. 回到资源管理器，双击 `启动WebGPU网关.bat`。窗口留着。它会先检查本机证书，再启动网关。出现 `Unity Web local gateway listening on https://localhost:5191` 后不要关。关掉窗口等于 WebGPU 入口断开。
-3. 浏览器打开 `http://localhost:5180/dts/sceneManage`。未登录时按页面提示登录。对普通三维或 GIS 场景点「进入」，在「选择渲染方式」里点「Unity WebGPU」。
-4. 编辑页中间先显示加载百分比，再到「Unity 场景已就绪」。包来自 `UNITY_PROJECT` 下面的 `webgpu\player`。
+3. 浏览器打开 `http://localhost:18065/threeWeb/sceneManage`。未登录时按页面提示登录。对普通三维或 GIS 场景点「进入」，在「选择渲染方式」里点「Unity WebGPU」。
+4. 编辑页中间先显示加载百分比，再到「Unity 场景已就绪」。播放器读取当前前端项目的 `public/unity-web/player/`。
 
-「Unity WebGPU」是灰色时，检查 `.env.development.local` 里的 `VITE_UNITY_WEB_BOOTSTRAP_URL` 是否为 `https://localhost:5191/bootstrap`，保存后重新运行 `pnpm dev`。按钮写着浏览器不支持时，换 Chrome 或 Edge，地址必须是 `localhost`。
+「Unity WebGPU」是灰色时，检查 `.env.development.local` 里的 `VITE_UNITY_WEB_BOOTSTRAP_URL` 是否为 `./unity-runtime/bootstrap`，保存后重新运行 `pnpm dev`。按钮写着浏览器不支持时，使用支持网页图形接口的浏览器和安全页面来源。
 
 线程版播放器需要主网页提供 `Cross-Origin-Opener-Policy: same-origin` 和 `Cross-Origin-Embedder-Policy: credentialless`（或 `require-corp`），并使用 HTTPS 或受信任的 localhost。Vite 开发与预览服务已提供这些头；生产环境须在网页服务器上配置，不能只加在播放器资源服务器。部署配置的 `build.threadsRequired` 应设为 `true`。修改响应头后完整刷新页面，浏览器中 `crossOriginIsolated` 应为 `true`。
 
@@ -141,12 +154,12 @@ WebGPU 的加载在 `WebUnityTransport`：向 `VITE_UNITY_WEB_BOOTSTRAP_URL` 要
 
 ## 2. 打包工具
 
-别人的电脑工程不在 `D:\` 时，不能把盘符写进播放器或启动器。打包工具只认「当前 Unity 工程根目录」，两个端都输出到和 `Assets` 同级的目录：
+Unity 构建工具生成播放器后，将网页播放器和匹配资源更新到当前前端项目的以下目录，再执行前端构建。云渲染使用其原有交付目录。
 
 ```text
-<工程根>/webgpu/player
-<工程根>/webgpu/art
-<工程根>/webgpu/ArtStartupRelease.json
+<网页工程>/public/unity-web/player
+<网页工程>/public/unity-web/art/9tyf
+<网页工程>/public/unity-web/ArtStartupRelease.json
 <工程根>/cloud/player/CloudRender.exe
 <工程根>/cloud/art
 <工程根>/cloud/ArtStartupRelease.json
@@ -175,9 +188,9 @@ powershell -ExecutionPolicy Bypass -File .\Tools\DualRender\package.ps1 -Target 
 powershell -ExecutionPolicy Bypass -File .\Tools\DualRender\package.ps1 -Target launcher
 ```
 
-模型资源仍用 `AssetBundelTools` 发布。WebGPU 发布到 `webgpu\art`，云渲染发布到 `cloud\art`，两边各放自己的 `ArtStartupRelease.json`。Web 单个资源包不要超过 32 MiB。Windows 资源包不能拿来当 Web 资源包。网页自己的 `pnpm build` 只打网站。
+模型资源通过现有 Unity 发布工具构建，网页交付更新到前端 `public/unity-web/art/9tyf/` 并同步启动描述。网页单个资源包上限为 32 MiB。前端执行 `pnpm build` 时会一同交付网页、播放器、资源和启动网关。
 
-另一台电脑启动网页网关时，编辑 `<网页工程>\scripts\启动WebGPU网关.bat` 开头的 `UNITY_PROJECT`，然后双击。不要沿用别人机器上的盘符。网关读取的仍是该工程下的 `webgpu\player` 和 `webgpu\art`。
+另一台电脑启动网页网关时，保留当前项目的 `public/unity-web/` 交付目录，双击 `scripts/启动WebGPU网关.bat`。默认相对路径由脚本定位到当前项目根目录。
 
 ## 3. 改了 Unity 代码，要不要打包
 
@@ -199,11 +212,11 @@ powershell -ExecutionPolicy Bypass -File .\Tools\DualRender\package.ps1 -Target 
 2. 浏览器打开 `http://localhost:5180`。WebGPU 不要用 `127.0.0.1` 或局域网 IP。
 3. 登录。
 
-`.env.development.local` 里要有云渲染信令、appId、sceneKey，以及 Web 的 `VITE_UNITY_WEB_BOOTSTRAP_URL=https://localhost:5191/bootstrap`。改完要重启 `pnpm dev`。
+`.env.development.local` 里填写当前环境的云渲染配置，以及网页入口 `VITE_UNITY_WEB_BOOTSTRAP_URL=./unity-runtime/bootstrap`。改完要重启 `pnpm dev`。
 
 ### 4.1 看 WebGPU
 
-Unity 编辑器不用开，也不用按 Play。确认 `webgpu\player` 和 `webgpu\art` 已经在 Unity 工程里。编辑 `<网页工程>\scripts\启动WebGPU网关.bat` 里的 `UNITY_PROJECT`，双击后窗口留着。看到监听 `https://localhost:5191` 后，在场景列表点「进入」，选「Unity WebGPU」。网页会下载 wasm，状态走到「Unity 场景已就绪」后就是当前 Web 包。
+确认当前前端项目的 `public/unity-web/` 已有播放器、网页资源和启动描述，双击 `scripts/启动WebGPU网关.bat`，保持网关运行。在场景列表点「进入」，选「Unity WebGPU」，状态走到「Unity 场景已就绪」后即可操作。
 
 ### 4.2 看打包好的 Windows 云渲染
 

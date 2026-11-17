@@ -31,6 +31,15 @@
     >
       <!-- 全部管理模块消费同一授权树；分类文字和顺序不再分别写死。 -->
       <ManagementNavigationMenu :nodes="managementNavigation" />
+      <!-- 全局部署配置归入系统管理，租户端不挂载该入口。 -->
+      <template v-if="managementCapabilities.systemConfig.canAccess">
+        <div class="manage-header__category" aria-hidden="true">系统管理</div>
+        <el-menu-item index="configManage">
+          <!-- 复用侧栏统一的绝对定位图标类，使图标左边缘和文字起点与上方菜单一致。 -->
+          <Setting class="manage-sidebar-icon" aria-hidden="true" />
+          <span>配置管理</span>
+        </el-menu-item>
+      </template>
     </el-menu>
 
     <!--
@@ -82,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { Moon, Sunny, User } from '@element-plus/icons-vue'
+import { Moon, Setting, Sunny, User } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/appStore'
 import { toLogin } from '@/utils/auth'
 import { useManageTheme } from '@/views/manageShared/manageTheme'
@@ -92,6 +101,7 @@ import { isEmbeddedMode } from '@/auth/runtime'
 import ManagementNavigationMenu from './ManagementNavigationMenu.vue'
 import { getManagementNavigation, isManagementRouteName } from '@/auth/managementNavigation'
 import { authContext } from '@/auth/authContext'
+import { getCurrentManagementCapabilities } from '@/auth/capabilities'
 import {
   getDefaultSceneEditorBrandConfig,
   loadSceneEditorBrandConfig,
@@ -109,6 +119,8 @@ const managementBrand = computed(() => brandConfig.value.managementBrand ?? {
   logoSrc: brandConfig.value.logoSrc,
 })
 const { theme, toggleTheme } = useManageTheme()
+/** 全局部署配置仅运营端可见，权限取自当前已验证的登录上下文。 */
+const managementCapabilities = getCurrentManagementCapabilities()
 /** 重取菜单、切换身份或退出同步更新侧栏，离开布局立即解除订阅。 */
 const managementNavigation = shallowRef(getManagementNavigation())
 const unsubscribeMenus = authContext.subscribe(() => { managementNavigation.value = getManagementNavigation() })
@@ -126,7 +138,8 @@ const themeToggleLabel = computed(() =>
  * 统一收窄 Element Plus 菜单事件传入的字符串。
  * 只有通过白名单的名称才能写入选中态或交给路由，避免分组索引被误当成页面路由。
  */
-const isManageRouteName = isManagementRouteName
+const isManageRouteName = (name: unknown): name is string =>
+  name === 'configManage' || isManagementRouteName(name)
 
 onBeforeMount(() => {
   setActive(router.currentRoute.value.name)

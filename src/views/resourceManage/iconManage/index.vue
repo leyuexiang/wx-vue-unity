@@ -195,7 +195,7 @@
       :originCategories="originCategories"
       :categories="categories"
       :editRecord="editRecord"
-      @updateList="getList"
+      @updateList="refreshAfterSave"
     />
 
     <PreviewDialog
@@ -292,7 +292,7 @@ const formatList = (list?: Dim3dIconPageVo[]) => {
         ? item.id.toString()
         : createStableIconKey(item, index),
     name: item.iconName?.trim() || '--',
-    imgPath: item.iconFileId ? iconUrlByOssId.value.get(String(item.iconFileId)) || '' : '',
+    imgPath: item.iconFileId ? iconUrlByOssId.value.get(String(item.iconFileId))?.url || '' : '',
     updateTime: item.updateTime || '',
     // 正式字典的 dictLabel 是唯一分类展示来源；dictValue 只参与筛选和接口提交。
     category:
@@ -417,19 +417,25 @@ const getCardMenuPopperClass = (record: TransferListItem) =>
     ? 'manage-dropdown-popper manage-card-menu-popper'
     : 'manage-dropdown-popper manage-card-menu-popper manage-card-menu-popper--compact'
 
-/** OSS 文件地址按编号缓存，避免翻页或筛选时重复查询同一个图标文件。 */
-const iconUrlByOssId = ref(new Map<string, string>())
+/** 签名地址只缓存当前页，在服务端十分钟有效期前刷新，避免无限累积及持有过期地址。 */
+const iconUrlByOssId = ref(new Map<string, { url: string; expiresAt: number }>())
 
 /** 仅查询当前页缺失的 OSS 编号；缺失文件保留占位图，不拼接猜测地址。 */
 const resolveIconUrls = async (rows: Dim3dIconPageVo[], requestId: number) => {
+  const pageIds = new Set(rows.map((row) => String(row.iconFileId ?? '').trim()).filter(Boolean))
+  const now = Date.now()
+  const next = new Map([...iconUrlByOssId.value].filter(([id, value]) => pageIds.has(id) && value.expiresAt > now))
   const ids = [
     ...new Set(
       rows
         .map((row) => String(row.iconFileId ?? '').trim())
-        .filter((id) => id && !iconUrlByOssId.value.has(id)),
+        .filter((id) => id && !next.has(id)),
     ),
   ]
-  if (!ids.length) return
+  if (!ids.length) {
+    if (requestId === latestRequestId.value) iconUrlByOssId.value = next
+    return
+  }
 
   const results = await Promise.all(
     ids.map(async (id) => {
@@ -442,9 +448,8 @@ const resolveIconUrls = async (rows: Dim3dIconPageVo[], requestId: number) => {
     }),
   )
   if (requestId !== latestRequestId.value) return
-  const next = new Map(iconUrlByOssId.value)
   results.forEach((result) => {
-    if (result) next.set(result.id, result.url)
+    if (result) next.set(result.id, { url: result.url, expiresAt: Date.now() + 9 * 60 * 1000 })
   })
   iconUrlByOssId.value = next
 }
@@ -580,6 +585,21 @@ const getList = async () => {
   }
 }
 
+/** 保存后回到首屏，并同步刷新各分类数量，继续使用当前筛选和真实文件编号。 */
+const refreshAfterSave = async () => {
+  pagination.page = 1
+  iconUrlByOssId.value.clear()
+  await Promise.all([getList(), loadCategoryTotals(originCategories.value)])
+}
+
+onBeforeUnmount(() => {
+  // 已离开的页面不接收迟到的列表、统计或签名结果，释放当前页持有的缓存。
+  latestRequestId.value++
+  latestCategoryTotalRequestId++
+  inFlightListRequests.clear()
+  iconUrlByOssId.value.clear()
+})
+
 const handlePaginationChange = (data: { page: number; size: number }) => {
   // 受控属性回写可能再次携带相同值；同值直接返回，保证一次分页交互只发出一次列表请求。
   if (pagination.page === data.page && pagination.size === data.size) return
@@ -622,12 +642,23 @@ const selectCategory = (value: string) => {
 }
 
 const OperateActionMap = {
-  [OperateEnum.Preview]: (record: TransferListItem) => {
+  [OperateEnum.Preview]: async (record: TransferListItem) => {
     // 预览弹窗同时展示分类、状态和更新时间，先保存完整记录，避免重复请求详情接口。
     previewRecord.value = record
     previewDialogVisible.value = true
     // 卡片和预览共用同一占位图；OSS 地址缺失时不把空路径传给图片组件，避免破损图片。
     previewPath.value = record.imgPath || CoverModel
+    if (!record.iconFileId) return
+    // 页面长时间停留后预览仍重新签发，过期签名不会成为永久图片地址。
+    const [error, files] = await toData(getDim3dOssFileById(String(record.iconFileId)))
+    if (!previewDialogVisible.value || previewRecord.value?.id !== record.id) return
+    const file = files?.find((item) => String(item.ossId) === String(record.iconFileId))
+    if (error || !file?.url) {
+      previewPath.value = CoverModel
+      ElMessage.error(error?.message || '图片读取失败，请重新加载')
+      return
+    }
+    previewPath.value = file.url
   },
   [OperateEnum.Edit]: async (record: TransferListItem) => {
     if (!getCardCapabilities(record).canEdit) {

@@ -50,6 +50,34 @@ it('租户登录上下文令业务请求使用租户路径和当前身份', () =
   expect(result.options.headers).toMatchObject({ Authorization: 'Bearer test-access', ClientId: 'test-client' })
 })
 
+/** 经真实新增场景入口和请求拦截器复现旧临时凭据残留，确保读写请求共用当前登录身份。 */
+it.each(['operation', 'tenant'] as const)('%s 新增场景不使用本地残留的临时凭据', async (platformType) => {
+  fixture.platformType = platformType
+  vi.stubEnv('VITE_DIM3D_API_MODE', 'admin')
+  const storedCredentials: Record<string, string> = {
+    'jtyf.dim3d.temp-token': 'expired-temporary-token',
+    'jtyf.dim3d.client-id': 'legacy-client',
+  }
+  Object.assign(window, {
+    localStorage: {
+      getItem: (key: string) => storedCredentials[key] ?? null,
+    },
+  })
+  const { addDim3dScene } = await import('@/servers/manual/dim3d/api/scene')
+  // 只替换最终传输，保留业务入口生成的全部选项，再执行真实请求拦截器。
+  fixture.replay.mockImplementationOnce((address, options) => fixture.requestHook!(address, options))
+  const result = await addDim3dScene({ name: '鉴权回归场景', sceneType: 'local3d' }) as unknown as {
+    url: string; options: Record<string, unknown>
+  }
+  expect(result.url).toBe('https://reference.invalid/admin-api/dim3d/scene/add')
+  expect(result.options.headers).toMatchObject({ Authorization: 'Bearer test-access', ClientId: 'test-client' })
+  expect(result.options.__standaloneAuth).toBe(true)
+  // 当前身份真正失效时仍应进入统一登录处理，避免新增表单反复提交同一失效凭据。
+  await expect(fixture.responseHook!(unauthorized(), { ...result.options, url: result.url }))
+    .rejects.toMatchObject({ code: 401 })
+  expect(fixture.login).toHaveBeenCalledOnce()
+})
+
 it('切换登录平台后，旧请求的 401 不清除新身份', async () => {
   const options = fixture.requestHook!(url, { passAuth: true }).options
   fixture.sessionVersion++

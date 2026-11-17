@@ -15,6 +15,7 @@ import { redirectScenePreviewToTenantLogin } from '@/auth/scenePreviewLoginRedir
 import router from '@/router'
 import { canAccessManagementRoute, isManagementRouteName, getManagementFallbackRoute } from '@/auth/managementNavigation'
 import { loadManagementMenus } from '@/auth/loadManagementMenus'
+import { getCurrentManagementCapabilities } from '@/auth/capabilities'
 
 const appStore = useAppStore()
 const authReady = ref(false)
@@ -82,6 +83,17 @@ const redirectRestrictedManagementRoute = async () => {
   await router.isReady()
   if (isManagementRouteName(router.currentRoute.value.name) && !canAccessManagementRoute(router.currentRoute.value.name)) {
     await router.replace({ name: getManagementFallbackRoute() })
+    return
+  }
+  // 首次认证完成后补查系统配置权限，防止租户直接通过地址栏挂载运营设置页。
+  if (router.currentRoute.value.name === 'configManage' && !getCurrentManagementCapabilities().systemConfig.canAccess) {
+    await router.replace({ name: 'sceneManage' })
+  }
+  if (
+    router.currentRoute.value.name === 'templateManage' &&
+    !getCurrentManagementCapabilities().template.canAccess
+  ) {
+    await router.replace({ name: 'modelManage' })
   }
 }
 
