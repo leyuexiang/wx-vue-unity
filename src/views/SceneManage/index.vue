@@ -206,6 +206,9 @@
                 </span>
                 <template #dropdown>
                   <el-dropdown-menu>
+                     <el-dropdown-item v-if="DIM3D_ADMIN_API" @click.stop="openPublishDialog(record)">
+                       发布管理
+                     </el-dropdown-item>
                      <el-dropdown-item
                        v-if="canUseSceneCardAction(sceneCardCapabilities, 'copy')"
                        @click.stop="handleOperate(OperateEnum.Copy, record)"
