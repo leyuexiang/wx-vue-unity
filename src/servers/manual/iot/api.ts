@@ -73,7 +73,7 @@ export interface IotPublicationAccess {
   publicationTicket: string
   apiBaseUrl?: string
 }
-type IotStateScope = { sceneId: string; objectId: string } | (IotPublicationAccess & { objectId: string })
+type IotStateScope = ({ sceneId: string } | IotPublicationAccess) & { objectId: string; domain?: 'twoD' | 'threeD' }
 interface Envelope<T> { code: number; data: T; msg?: string }
 export const IOT_RESOURCES = { connectors: 'connector', bindings: 'device-binding', messages: 'message-inbox' } as const
 export const IOT_VERSION_CONFLICT = 1009001011
@@ -170,7 +170,8 @@ export async function getIotState(deviceId: string, pointCode: string, scope?: I
     method: 'GET',
     params: {
       deviceId: normalizedDeviceId, pointCode: normalizedPointCode,
-      ...(scope ? { objectId: scope.objectId } : {}),
+      // 二维消费实例显式带域，历史三维调用保持缺省语义。
+      ...(scope ? { objectId: scope.objectId, ...(scope.domain ? { domain: scope.domain } : {}) } : {}),
       ...(published ? { publicationId: published.publicationId } : scope && 'sceneId' in scope ? { sceneId: scope.sceneId } : {}),
     },
     // 票据仅走请求头，查询参数和运行态日志都不应带出票据。

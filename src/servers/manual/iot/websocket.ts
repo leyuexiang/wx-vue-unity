@@ -5,6 +5,8 @@ import type { IotPublicationAccess, IotStateSnapshot } from './api'
 export type IotStateSubscription = {
   subscriptionId: string
   objectId?: string
+  /** 消费目标域，缺省沿用三维实例订阅。 */
+  domain?: 'twoD' | 'threeD'
   deviceId: string
   pointCode: string
 } & ({ sceneId?: string; publication?: never } | { sceneId?: never; publication: () => IotPublicationAccess | null })
@@ -173,7 +175,7 @@ export class IotStateWebSocketClient {
 
   /** 发布票据在建连、续租时现场读取，且只放在帧首部。 */
   private sendSubscription(requestId: string, request: IotStateSubscription) {
-    const { subscriptionId, objectId, deviceId, pointCode } = request
+    const { subscriptionId, objectId, domain, deviceId, pointCode } = request
     const publication = request.publication?.()
     if (request.publication && !publication) {
       const pending = this.pendingRequests.get(requestId)
@@ -191,7 +193,7 @@ export class IotStateWebSocketClient {
       ...(publication
         ? { publicationId: publication.publicationId, publicationTicket: publication.publicationTicket }
         : { sceneId: request.sceneId }),
-      bindings: [{ subscriptionId, objectId, deviceId, pointCode }],
+      bindings: [{ subscriptionId, objectId, ...(domain ? { domain } : {}), deviceId, pointCode }],
     })
   }
 

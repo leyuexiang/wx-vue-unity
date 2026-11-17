@@ -632,8 +632,8 @@ export const useRightDataPanel = (options: UseRightDataPanelOptions = {}) => {
     )
   })
 
-  // 当前场景调度器仅对三维实例启用物联网实时数据源。
-  const requestTypeOptions = computed(() => selectionKind.value === 'object'
+  // 二维部件和三维实例复用扩展数据源，通信及生命周期由场景调度器统一管理。
+  const requestTypeOptions = computed(() => ['object', 'widget'].includes(selectionKind.value)
     ? RIGHT_DATA_PANEL_REQUEST_TYPE_OPTIONS
     : RIGHT_DATA_PANEL_REQUEST_TYPE_OPTIONS.filter(item => item.value !== 'adapter'))
 

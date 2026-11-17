@@ -52,6 +52,11 @@ type SceneObjectRemoteEntry = {
 }
 
 type IotStateTask = {
+  /** 域、实例、请求项构成任务身份，配置输出不参与输入签名。 */
+  key: string
+  signature: string
+  domain?: 'twoD'
+  widgetEntry?: WidgetPreviewRemoteEntry
   objectId: string
   deviceId: string
   pointCode: string
@@ -251,7 +256,8 @@ export class SceneDataPollingRuntime {
   /** 参数覆盖属于运行态；二维持久化配置不变，避免其监听器重启全部请求。 */
   private readonly widgetRequestOverrides = new Map<string, ComponentDataConfig>()
   private readonly ajaxEntriesByTarget = new Map<string, Map<string, SceneDataRemoteEntry>>()
-  /** 三维对象设备绑定的状态查询任务；状态只写入当前运行时快照，不进入场景保存数据。 */
+  /** 二维与三维消费目标共享点位任务生命周期；状态不进入场景保存数据。 */
+  private iotTaskSequence = 0
   private readonly iotStateTasks = new Map<string, IotStateTask>()
   /** 当前场景复用一条已认证连接，避免每个模型实例各自建立 WebSocket。 */
   private readonly iotStateWebSocket: ReturnType<typeof createIotStateWebSocketClient>
@@ -324,7 +330,8 @@ export class SceneDataPollingRuntime {
       this.sourceSignatures.delete(`object:${id}`)
       this.staticObjectSignatures.delete(id)
     }
-    const iotStateWork = this.syncIotStateTasks(sceneObjects, generation)
+    const widgetEntries = this.widgetDataService?.collectRemoteEntries() ?? []
+    const iotStateWork = this.syncIotStateTasks(sceneObjects, widgetEntries, generation)
     const retainedStaticWidgets = new Set<string>()
     this.widgetDataService?.applyStaticDataConfigs((widget, config) => {
       retainedStaticWidgets.add(widget.id)
@@ -356,7 +363,10 @@ export class SceneDataPollingRuntime {
     })
     const staticWork = this.applyStaticSceneObjectData(staticObjects, generation)
     const entries = [
-      ...(this.widgetDataService?.collectRemoteEntries() ?? []),
+      ...widgetEntries.filter((entry) => {
+        const config = this.widgetDataService?.getDataConfigForEntry(entry)
+        return !(entry.requestType === 'adapter' && (config?.request.config as { adapterId?: string })?.adapterId === 'iot-state')
+      }),
       ...this.collectSceneObjectEntries(sceneObjects),
     ].filter(
       (entry) =>
@@ -479,7 +489,7 @@ export class SceneDataPollingRuntime {
     // 首轮只执行新增或自身输入变化的任务，同时登记目标就绪屏障供后续配置动作等待。
     const work: Promise<unknown>[] = [staticWork, ...iotStateWork]
     for (const entry of created) {
-      if (entry.requestType !== 'ajax') continue
+      if (entry.requestType === 'public') continue
       const task = this.tasks.get(this.getEntryKey(entry))!
       const pending = this.executeAjaxEntry(entry, generation)
       task.initialWork = pending
@@ -603,24 +613,49 @@ export class SceneDataPollingRuntime {
     return { deviceId, pointCode, bindings, intervalMs: Math.max(1000, intervalSeconds * 1000), delivery }
   }
 
-  private syncIotStateTasks(sceneObjects: readonly SceneObject[], generation: number): Promise<void>[] {
-    this.iotStateTasks.forEach((task) => {
+  /** 三维模型与二维组件共享连接，逐请求协调并保留未变化的订阅和状态版本。 */
+  private syncIotStateTasks(sceneObjects: readonly SceneObject[], widgets: WidgetPreviewRemoteEntry[], generation: number): Promise<void>[] {
+    const candidates: Array<Omit<IotStateTask, 'subscriptionId' | 'running'>> = []
+    const context = this.options.getRuntimeContext?.()
+    if (!(context?.publicPreview && !this.options.getIotPublicationAccess?.())) {
+      for (const object of sceneObjects) {
+        const binding = this.getIotStateBinding(object)
+        if (!binding) continue
+        candidates.push({ ...binding, objectId: object.id, key: JSON.stringify(['threeD', object.id]), signature: JSON.stringify([binding, context, this.options.getIotPublicationAccess?.()?.publicationId]) })
+      }
+      for (const entry of widgets) {
+        if (entry.requestType !== 'adapter') continue
+        const data = this.widgetDataService?.getDataConfigForEntry(entry)
+        const request = data?.request.config as { adapterId?: string; config?: unknown } | undefined
+        if (request?.adapterId !== 'iot-state') continue
+        const config = getDataSourceAdapter(request.adapterId)?.normalizeConfig(request.config)
+        if (!config || !data) continue
+        candidates.push({
+          key: JSON.stringify(['twoD', entry.target.id, entry.requestId]),
+          signature: JSON.stringify([requestInputSignature(getDataConfigRequests(data)[0]!), context, this.options.getIotPublicationAccess?.()?.publicationId]),
+          domain: 'twoD', objectId: entry.target.id, widgetEntry: entry,
+          deviceId: config.deviceId, pointCode: config.pointCode, bindings: data.bindings,
+          intervalMs: Math.max(1000, config.pollIntervalSeconds * 1000), delivery: config.delivery,
+        })
+      }
+    }
+    // 按键直接比较输入，避免场景组件较多时在协调循环内反复扫描。
+    const retained = new Map(candidates.map(candidate => [candidate.key, candidate.signature]))
+    for (const [key, task] of this.iotStateTasks) {
+      if (retained.get(key) === task.signature) continue
+      // 先撤销任务身份，拒绝已发送但迟到的快照和推送。
+      this.iotStateTasks.delete(key)
       if (task.timer) clearInterval(task.timer)
       task.unsubscribe?.()
-    })
-    this.iotStateTasks.clear()
-    if (this.options.getRuntimeContext?.()?.publicPreview && !this.options.getIotPublicationAccess?.()) return []
-    return sceneObjects.flatMap((object) => {
-      const binding = this.getIotStateBinding(object)
-      if (!binding) return []
-      const task: IotStateTask = {
-        objectId: object.id, deviceId: binding.deviceId, pointCode: binding.pointCode,
-        bindings: binding.bindings,
-        intervalMs: binding.intervalMs, running: false,
-        delivery: binding.delivery,
-        subscriptionId: `iot-${generation}-${object.id}`,
+    }
+    return candidates.flatMap((candidate) => {
+      const current = this.iotStateTasks.get(candidate.key)
+      if (current) {
+        current.widgetEntry = candidate.widgetEntry
+        return []
       }
-      this.iotStateTasks.set(object.id, task)
+      const task: IotStateTask = { ...candidate, running: false, subscriptionId: `iot-${generation}-${++this.iotTaskSequence}` }
+      this.iotStateTasks.set(task.key, task)
       if (task.delivery === 'polling') {
         task.timer = setInterval(() => void this.executeIotStateTask(task, generation), task.intervalMs)
         return [this.executeIotStateTask(task, generation)]
@@ -638,10 +673,12 @@ export class SceneDataPollingRuntime {
           subscriptionId: task.subscriptionId,
           ...(publication ? { publication } : { sceneId: this.options.getRuntimeContext?.()?.sceneId || undefined }),
           objectId: task.objectId,
+          ...(task.domain ? { domain: task.domain } : {}),
           deviceId: task.deviceId,
           pointCode: task.pointCode,
         },
         (update) => {
+          if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.key) !== task) return
           if (update.stateVersion && task.lastStateVersion && update.stateVersion <= task.lastStateVersion) return
           task.lastStateVersion = update.stateVersion || update.eventId
           void this.applyIotSnapshot(task, update, generation).catch(error => {
@@ -650,14 +687,14 @@ export class SceneDataPollingRuntime {
         },
         () => { void this.executeIotStateTask(task, generation) },
       )
-      if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.objectId) !== task) {
+      if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.key) !== task) {
         unsubscribe()
         return
       }
       task.unsubscribe = unsubscribe
       await this.executeIotStateTask(task, generation)
     } catch (error) {
-      if (task.delivery === 'auto' && this.running && generation === this.generation && this.iotStateTasks.get(task.objectId) === task) {
+      if (task.delivery === 'auto' && this.running && generation === this.generation && this.iotStateTasks.get(task.key) === task) {
         task.timer = setInterval(() => void this.executeIotStateTask(task, generation), task.intervalMs)
         await this.executeIotStateTask(task, generation)
       } else if (generation === this.generation) {
@@ -667,23 +704,24 @@ export class SceneDataPollingRuntime {
   }
 
   private async executeIotStateTask(task: IotStateTask, generation: number): Promise<void> {
-    if (!this.running || generation !== this.generation || task.running) return
+    if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.key) !== task || task.running) return
     task.running = true
     try {
       const context = this.options.getRuntimeContext?.()
       const publication = this.options.getIotPublicationAccess?.()
       // 发布票据失效时结束本次查询，禁止回退到草稿或租户级查询。
       if ((context?.publicPreview || this.options.getIotPublicationAccess) && !publication) return
+      const target = { objectId: task.objectId, ...(task.domain ? { domain: task.domain } : {}) }
       const scope = publication
-        ? { ...publication, objectId: task.objectId }
-        : context?.sceneId ? { sceneId: context.sceneId, objectId: task.objectId } : undefined
+        ? { ...publication, ...target }
+        : context?.sceneId ? { sceneId: context.sceneId, ...target } : undefined
       const versionBeforeQuery = task.lastStateVersion
       const snapshot: IotStateSnapshot | null = scope
         ? await getIotState(task.deviceId, task.pointCode, scope)
         : await getIotState(task.deviceId, task.pointCode)
       // 查询发出后收到的推送优先，避免较晚返回的首屏快照覆盖实时值。
       if (versionBeforeQuery !== task.lastStateVersion) return
-      if (!snapshot || !this.running || generation !== this.generation || this.iotStateTasks.get(task.objectId) !== task) return
+      if (!snapshot || !this.running || generation !== this.generation || this.iotStateTasks.get(task.key) !== task) return
       await this.applyIotSnapshot(task, snapshot, generation)
     } catch (error) {
       if (generation === this.generation) appLogger.error('SceneDataPollingRuntime', `物联网状态查询失败 (${task.objectId})`, error)
@@ -697,7 +735,15 @@ export class SceneDataPollingRuntime {
     snapshot: IotStateSnapshot,
     generation: number,
   ): Promise<void> {
-    if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.objectId) !== task) return
+    if (!this.running || generation !== this.generation || this.iotStateTasks.get(task.key) !== task) return
+    if (task.widgetEntry) {
+      const config = this.widgetDataService?.getDataConfigForEntry(task.widgetEntry)
+      if (!config) return
+      // 推送和快照均经过当前请求的提取、过滤及映射，不把请求二的结果套到请求一。
+      const normalized = transformRequestPayloadToRows(snapshot, config.extractor?.resultPath, config.filterFn)
+      this.widgetDataService?.applyRemoteExecutionResult({ kind: 'widget', target: task.widgetEntry.target, dataConfig: config, requestId: task.widgetEntry.requestId, ...normalized })
+      return
+    }
     const object = this.getSceneObject(task.objectId)
     if (!object) return
     const row = { ...snapshot, value: snapshot.value, [snapshot.pointCode]: snapshot.value }

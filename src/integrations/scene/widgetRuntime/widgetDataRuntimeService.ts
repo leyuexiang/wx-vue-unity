@@ -31,7 +31,7 @@ export type WidgetPreviewRemoteEntry = {
   target: WidgetConfig
   intervalSeconds: number | null
   intervalUnit: RequestIntervalUnit | null
-  requestType: 'ajax' | 'public'
+  requestType: 'ajax' | 'public' | 'adapter'
   publicRequestId?: string | null
   requestId: string
 }
@@ -116,7 +116,8 @@ export class WidgetDataRuntimeService {
       if (!dataConfig) return entries
       const requestItems = getDataConfigRequests(dataConfig)
       const remoteItems = requestItems.filter((item) =>
-        ['ajax', 'public'].includes(item.request.type),
+        // 扩展数据源进入同一请求收集流程，持续订阅由场景调度器接管。
+        ['ajax', 'public', 'adapter'].includes(item.request.type),
       )
       /** 测验协议要求一次响应包含完整题库，故一个实例只执行首个远程请求项。 */
       const executableItems =
@@ -145,7 +146,7 @@ export class WidgetDataRuntimeService {
           target: widget,
           intervalSeconds: seconds,
           intervalUnit: unit,
-          requestType: item.request.type as 'ajax' | 'public',
+          requestType: item.request.type as 'ajax' | 'public' | 'adapter',
           publicRequestId,
           requestId: item.id,
         })
