@@ -95,6 +95,7 @@ import {
 } from '@/integrations/scene/scenePreviewAccess'
 import { authContext } from '@/auth/authContext'
 import { hasIotPermission } from '@/auth/iotNavigation'
+import { issuePublicationTicket, renewManagedPreviewTicket, type PublicationReadTicket } from '@/integrations/scene/fixedPublicationManagement'
 import { loadFixedScenePublication, type FixedPublication } from '@/integrations/scene/fixedScenePublication'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
 import { unityRenderConfig } from '@/unity-runtime/renderMode'
@@ -423,6 +424,7 @@ const getFixedPublicationId = () => {
   const publicationId = route.query.publicationId
   return (Array.isArray(publicationId) ? publicationId[0] : publicationId)?.trim() || ''
 }
+let stopManagedTicketRenewal: (() => void) | undefined
 
 const mountSceneDefinitionPreview = async (
   publishedPublicationId: string,
@@ -544,6 +546,8 @@ const mountSceneDefinitionPreview = async (
  */
 const clearPreviewAuthOnExit = (event?: Event) => {
   if (event && 'persisted' in event && Boolean((event as PageTransitionEvent).persisted)) return
+  stopManagedTicketRenewal?.()
+  stopManagedTicketRenewal = undefined
   previewTicketRefresher?.stop()
   previewTicketRefresher = null
   previewTicketRefreshPassword = ''
@@ -579,7 +583,19 @@ const openPreview = async (password?: string) => {
       return
     }
     previewAccessState.value = 'need-ticket'
-    if (!password) return
+    let managedTicket: PublicationReadTicket | undefined
+    if (!password) {
+      // 有管理权限的当前账号现场签发短期凭证；无权签发时仍可手动输入获授凭证。
+      try {
+        const issued = await issuePublicationTicket(fixedId)
+        if (previewClosed) return
+        password = issued.token
+        managedTicket = issued
+      } catch {
+        previewAccessMessage.value = '无法自动获取访问凭证，请输入管理员提供的短期只读凭证。'
+        return
+      }
+    }
     if (!unityRenderConfig.webgpu.bootstrapUrl) throw new Error('固定发布的 Unity WebGPU 播放器尚未配置。')
     const fixed = await loadFixedScenePublication(fixedId, password)
     if (previewClosed) return
@@ -588,6 +604,17 @@ const openPreview = async (password?: string) => {
     }
     previewAccessState.value = 'ready'
     previewAccessMessage.value = ''
+    stopManagedTicketRenewal?.()
+    if (managedTicket) stopManagedTicketRenewal = renewManagedPreviewTicket(managedTicket, {
+      onTicket: ticket => { fixed.resources.ticket = ticket.token },
+      onExpired: () => {
+        // 续期失败时中止当前运行态，不能继续展示为具有有效访问权限。
+        previewRuntimeController?.dispose()
+        previewRuntimeController = null
+        previewAccessState.value = 'need-ticket'
+        previewAccessMessage.value = '访问凭证已到期，请重新获取或输入有效凭证。'
+      },
+    })
     return
   }
   if (!runtimeElement || !sceneId) {

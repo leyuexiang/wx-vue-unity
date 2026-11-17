@@ -1,4 +1,5 @@
 <template>
+  <FixedPublicationDialog v-if="DIM3D_ADMIN_API" v-model="fixedPublishVisible" :scene-id="fixedPublishSceneId" editor @published="store.setSceneIsPublish(true)" />
   <!-- #scene 必须始终挂载；场景锁只控制编辑器外壳可见性和画布初始化，避免 Teleport 在异步加锁前找不到目标。 -->
   <div
     ref="sceneEditRootRef"
@@ -139,6 +140,10 @@
 </template>
 
 <script setup lang="ts">
+import FixedPublicationDialog from '@/components/FixedPublicationDialog.vue'
+import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
+const fixedPublishVisible = ref(false)
+const fixedPublishSceneId = ref('')
 import { setEditorWeatherEditGuard } from '@/integrations/scene/editorSceneWeatherAdapter'
 import { setEditorGisEditGuard } from '@/integrations/scene/editorSceneGisAdapter'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
@@ -1291,6 +1296,16 @@ const releaseScene = async () => {
   }
   if (sceneDataLoadState.value !== 'ready') {
     ElMessage.warning('场景数据尚未成功加载，暂不能发布')
+    return
+  }
+  if (DIM3D_ADMIN_API) {
+    flushEditorSceneEdits()
+    if (sceneOperationRef.value?.sceneSaveState.dirty || sceneSaving.value) {
+      ElMessage.warning('请先保存当前修改，再确认发布版本')
+      return
+    }
+    fixedPublishSceneId.value = String(Array.isArray(route.query.id) ? route.query.id[0] : route.query.id || '')
+    fixedPublishVisible.value = true
     return
   }
   const release = beginEditorSceneOperation('publish')
