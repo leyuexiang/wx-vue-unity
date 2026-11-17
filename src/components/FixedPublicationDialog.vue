@@ -5,7 +5,7 @@ import { createDim3dSceneClientKey } from '@/servers/manual/dim3d/api/scene'
 import { createFixedPublicationDialogController } from '@/integrations/scene/fixedPublicationDialogController'
 import { fixedPublicationPath, getFixedPublicationCapabilities, getPublicationScene, issuePublicationTicket, publishCurrentScene, revokePublicationTicket } from '@/integrations/scene/fixedPublicationManagement'
 
-const props = defineProps<{ modelValue: boolean; sceneId: string }>()
+const props = defineProps<{ modelValue: boolean; sceneId: string; editor?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; published: [] }>()
 const controller = createFixedPublicationDialogController({ capabilities: getFixedPublicationCapabilities, scene: getPublicationScene, publish: publishCurrentScene, issue: issuePublicationTicket, revokeTicket: revokePublicationTicket, requestId: createDim3dSceneClientKey })
 const state = controller.state
@@ -28,7 +28,8 @@ const copy = async (value: string) => {
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" title="发布场景" width="560px" :close-on-click-modal="false" :close-on-press-escape="!state.busy" :show-close="!state.busy" @close="close">
+  <!-- 传送到页面根节点的弹窗必须显式复用入口主题，避免编辑器深色底板继承黑色文字。 -->
+  <el-dialog :model-value="modelValue" :class="editor ? 'scene-edit-dialog' : 'manage-dialog'" title="发布场景" width="560px" :close-on-click-modal="false" :close-on-press-escape="!state.busy" :show-close="!state.busy" @close="close">
     <div v-loading="state.loading" class="fixed-publication-dialog">
       <p v-if="state.sceneName">场景：{{ state.sceneName }}</p>
       <p v-if="state.revisionNo">已保存版本：{{ state.revisionNo }}</p>

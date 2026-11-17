@@ -1,5 +1,5 @@
 <template>
-  <FixedPublicationDialog v-if="DIM3D_ADMIN_API" v-model="fixedPublishVisible" :scene-id="fixedPublishSceneId" @published="store.setSceneIsPublish(true)" />
+  <FixedPublicationDialog v-if="DIM3D_ADMIN_API" v-model="fixedPublishVisible" :scene-id="fixedPublishSceneId" editor @published="store.setSceneIsPublish(true)" />
   <!-- #scene 必须始终挂载；场景锁只控制编辑器外壳可见性和画布初始化，避免 Teleport 在异步加锁前找不到目标。 -->
   <div
     ref="sceneEditRootRef"
