@@ -37,7 +37,8 @@ let stopScenePlatformStoreSubscription: (() => void) | null = null
 let stopSceneSelectionBinding: (() => void) | null = null
 
 /** 仅在目标类别改变时回到基础页；同类模型之间切换时保留用户正在使用的属性页。 */
-watch(() => [selection.value.kind, isSceneObject.value], () => { inspectorPanel.value = SCENE_PANEL_ENUM.Base })
+// 分别监听两个类别值，避免同类组件数据刷新后因新数组引用误判为选中类别改变。
+watch([() => selection.value.kind, () => isSceneObject.value], () => { inspectorPanel.value = SCENE_PANEL_ENUM.Base })
 
 /**
  * Unity 画布回传的选择先进入 SceneStore；在右侧检查器边界同步兼容编号并排空二维选择，
