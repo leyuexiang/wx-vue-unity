@@ -40,8 +40,9 @@ const config = computed(() => scene.value ? getUnityCameraConfig(scene.value.set
 const aa = computed(() => config.value.antialiasing ?? { mode: 'default' })
 const axes = computed(() => gis.value ? ['经度', '纬度', '椭球高（米）'] : ['X（米）', 'Y（米）', 'Z（米）'])
 const angleFields = [{ key: 'heading', label: '航向' }, { key: 'pitch', label: '俯仰' }, { key: 'roll', label: '横滚' }] as const
+// 清除场景覆盖后使用所选渲染方式的默认画质，网页端会应用编辑器的超采样比例。
 const antialiasModes = [
-  ['default', '播放器默认'], ['none', '关闭'], ['fxaa', 'FXAA'], ['smaa', 'SMAA'], ['msaa', 'MSAA'], ['ssaa', 'SSAA'],
+  ['default', '默认'], ['none', '关闭'], ['fxaa', 'FXAA'], ['smaa', 'SMAA'], ['msaa', 'MSAA'], ['ssaa', 'SSAA'],
 ]
 let stopStore = () => {}, scope = 0
 let readingScope: number | undefined

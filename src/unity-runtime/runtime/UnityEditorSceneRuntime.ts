@@ -24,7 +24,7 @@ import type {
   ObjectInteractionMoveCameraOptions,
   ObjectInteractionSwitchViewOptions,
 } from '@/scene-platform/runtime/sceneRuntime'
-import type { UnityInteractionActionDto, UnitySessionInitializePayload } from '../protocol/types'
+import type { UnityCameraConfig, UnityInteractionActionDto, UnitySessionInitializePayload } from '../protocol/types'
 import { getUnityCameraConfig } from './editorCameraConfig'
 import type { VegetationSystemDefinition } from '@/scene-platform/core/types'
 import { checkVegetationTilesForUnity } from './vegetationTilesPreflight'
@@ -190,7 +190,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
 
   async updateSceneSettings(settings: SceneSettings): Promise<void> {
     if (!this.scene) return
-    const config = getUnityCameraConfig(settings, this.type)
+    const config = this.withDefaultCameraAntialiasing(getUnityCameraConfig(settings, this.type))
     this.scene = { ...this.scene, settings }
     const signature = JSON.stringify(config)
     if (this.cameraAvailable && this.appliedCameraConfig !== signature) {
@@ -202,6 +202,15 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
         throw error
       }
     }
+  }
+
+  /**
+   * 网页编辑画布用 1.25 倍超采样覆盖播放器的低分辨率默认值，兼顾全屏开销。
+   * 装载与实时同步共用此默认值，明确保存的设置优先；公开发布继续使用发布快照的配置。
+   */
+  private withDefaultCameraAntialiasing(config: UnityCameraConfig): UnityCameraConfig {
+    if (this.options.mode !== 'webgpu' || this.options.publicationResources || config.antialiasing) return config
+    return { ...config, antialiasing: { mode: 'ssaa', supersampleScale: 1.25 } }
   }
 
   constructor(type: SceneDefinition['type'], private readonly options: UnityEditorSceneRuntimeOptions) {
@@ -640,6 +649,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     const draft = this.projectedInstanceIds === null
       ? projectSceneForUnity(projectionScene)
       : projectSceneForUnityLoadedInstances(projectionScene, this.projectedInstanceIds)
+    const camera = this.withDefaultCameraAntialiasing(draft.camera ?? {})
     const childrenByParent = new Map<string, string[]>()
     for (const object of draft.objects) {
       if (!object.parentInstanceId) continue
@@ -668,9 +678,9 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       }
       const objects = omitted.size ? draft.objects.filter((object) => !omitted.has(object.instanceId)) : draft.objects
       try {
-        await unity.loadScene({ ...draft, objects, resources })
+        await unity.loadScene({ ...draft, objects, resources, camera })
         this.deferredDescendants = descendants
-        this.appliedCameraConfig = JSON.stringify(draft.camera)
+        this.appliedCameraConfig = JSON.stringify(camera)
         return
       }
       catch (error) {

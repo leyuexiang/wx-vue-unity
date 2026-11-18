@@ -33,8 +33,11 @@ export default class RenderScene {
       await this.runtime.connect()
       if (this.disposed) return
       if (!this.runtime.capabilities?.features['model.preview']) throw new Error('当前网页播放器需要更新后才能预览模型')
-      // 独立空草稿承载预览，管理页提供受管资源编号或已解析的历史文件地址。
-      await this.runtime.loadScene(createEmptyScene(`model-preview-${crypto.randomUUID()}`))
+      // 独立预览用现有相机协议覆盖网页包的低分辨率默认值。以 1.5 倍分辨率绘制后缩回画布，
+      // 平滑模型轮廓和贴图细线；小视口使用此比例平衡画质与开销，普通场景不应用此配置。
+      const scene = createEmptyScene(`model-preview-${crypto.randomUUID()}`)
+      scene.camera = { antialiasing: { mode: 'ssaa', supersampleScale: 1.5 } }
+      await this.runtime.loadScene(scene)
       this.ready = !this.disposed
     })
     return this.starting
