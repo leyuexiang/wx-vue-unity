@@ -623,7 +623,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       warnings.push('当前 Unity 播放器需更新后才能应用高程夸张、影像调色和场景原点；配置已保留。')
     const missing = this.scene.objects.filter((object) => object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
     if (missing.length) {
-      warnings.push(`以下模型未在当前 Unity 美术版本发布，暂未显示，配置仍保留：${missing.slice(0, 6).map((object) => `${object.name}（资源 ${getUnityModelAssetId(object)}）`).join('、')}${missing.length > 6 ? `等 ${missing.length} 项` : ''}。请发布对应 Unity 资源后重新进入场景。`)
+      warnings.push(`以下模型资源当前不可用，暂未显示，配置仍保留：${missing.slice(0, 6).map((object) => `${object.name}（资源 ${getUnityModelAssetId(object)}）`).join('、')}${missing.length > 6 ? `等 ${missing.length} 项` : ''}。请恢复资源或访问权限后重新进入场景。`)
     }
     this.options.onWarnings?.(warnings)
   }
@@ -657,8 +657,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       if (siblings) siblings.push(object.instanceId)
       else childrenByParent.set(object.parentInstanceId, [object.instanceId])
     }
-    // Only an explicit catalog miss can degrade a model. Network, integrity and other load errors remain fatal.
-    // Every retry removes at least one resource from this transient projection, bounding the loop by resource count.
+    // 仅目录缺项或当前指针明确不可见时暂缓模型表现；网络、鉴权和完整性失败继续向上抛出。
+    // 每次重试至少移除一个临时投影资源，逻辑存档和其未知字段始终保留，循环次数受资源数约束。
     while (true) {
       const resources = draft.resources.filter((resource) => !this.missingModelAssetIds.has(resource.assetId))
       const resourceKeys = new Set(resources.map((resource) => resource.resourceKey))
@@ -684,11 +684,11 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
         return
       }
       catch (error) {
-        const match = error instanceof Error ? /^当前美术版本不存在资源键[:：]\s*(\S+)\s*$/u.exec(error.message) : null
+        const match = error instanceof Error ? /^(?:当前美术版本不存在资源键|当前资源不可用)[:：]\s*(\S+)\s*$/u.exec(error.message) : null
         const missing = match ? resources.find((resource) => resource.assetId === match[1] || `model/${resource.assetId}` === match[1]) : undefined
         if (!missing) throw error
         this.missingModelAssetIds.add(missing.assetId)
-        this.options.onStatus(`模型资源 ${missing.assetId} 尚未在 Unity 发布，正在加载其余场景`)
+        this.options.onStatus(`模型资源 ${missing.assetId} 当前不可用，正在加载其余场景`)
       }
     }
   }

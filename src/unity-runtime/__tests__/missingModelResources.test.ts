@@ -82,7 +82,21 @@ describe('missing models in a Unity art release', () => {
     expect(unity.loadScene).toHaveBeenCalledTimes(2)
   })
 
-  it.each(['资源包完整性校验失败', '资源请求超时', '当前美术版本不存在资源键: unknown-id'])('does not hide an unrelated failure: %s', async (message) => {
+  it.each(['cloud', 'webgpu'] as const)('当前资源明确不可见时保全逻辑存档并加载其余场景（%s）', async (mode) => {
+    const { runtime, scene, unity, onWarnings } = createFixture(mode)
+    const saved = serializeSceneDefinitionToFourPackages(scene)
+    unity.loadScene.mockImplementation(async (draft) => {
+      if (draft.resources.some((resource) => resource.assetId === missingId)) throw new Error(`当前资源不可用: ${missingId}`)
+    })
+    await runtime.loadScene(scene)
+    expect(unity.loadScene).toHaveBeenCalledTimes(2)
+    expect(runtime.hasObject('missing')).toBe(true)
+    expect(serializeSceneDefinitionToFourPackages(scene)).toEqual(saved)
+    expect(onWarnings).toHaveBeenLastCalledWith([expect.stringContaining(missingId)])
+    expect(unity.loadScene.mock.calls[1]![0].objects.map((object) => object.instanceId)).toEqual(['published', 'box'])
+  })
+
+  it.each(['资源包完整性校验失败', '资源请求超时', '当前美术版本不存在资源键: unknown-id', '当前资源不可用: unknown-id', '当前资源不可用: ' + missingId + ' extra'])('does not hide an unrelated failure: %s', async (message) => {
     const { runtime, scene, unity } = createFixture()
     unity.loadScene.mockRejectedValue(new Error(message))
     await expect(runtime.loadScene(scene)).rejects.toThrow(message)
