@@ -209,9 +209,12 @@
       v-model:visible="previewDialogVisible"
       class="manage-dialog"
       :path="previewPath"
+      :resource-id="previewManagedResourceId"
+      :source-error="previewError"
       :record="previewRecord"
       :can-edit="previewRecord ? getCardCapabilities(previewRecord).canEdit : false"
       @update:visible="previewDialogVisible = $event"
+      @retry="retryModelPreview"
       @edit="handlePreviewEdit"
     />
   </div>
@@ -239,6 +242,7 @@ import {
 import { getDim3dOssFileById } from '@/servers/manual/dim3d/api/oss'
 import {
   buildDim3dResourceUrl,
+  getDim3dManagedModelId,
   getDim3dResourceInfo,
 } from '@/servers/manual/dim3d/api/resource'
 import {
@@ -446,6 +450,9 @@ const addDialogVisible = ref(false)
 const editRecord = ref<TransferListItem>()
 const previewDialogVisible = ref(false)
 const previewPath = ref('')
+const previewManagedResourceId = ref<string>()
+// 来源解析错误交给弹窗展示，并允许在原入口重新查询资源。
+const previewError = ref('')
 const previewRecord = ref<TransferListItem>()
 const previewRequestId = ref(0)
 
@@ -750,7 +757,7 @@ const openAddDialog = () => {
 
 /**
  * 预览中的编辑操作沿用资源管理已有的编辑弹窗和数据模型。
- * 先关闭 Three.js 预览以释放画布资源，再传递当前记录打开编辑，避免两个弹窗叠加后遮挡操作区。
+ * 先关闭网页播放器预览以释放画布资源，再传递当前记录打开编辑，避免两个弹窗叠加后遮挡操作区。
  */
 const handlePreviewEdit = () => {
   if (!previewRecord.value) return
@@ -767,32 +774,52 @@ const getResourceStringId = (record: TransferListItem) => {
 }
 
 /**
- * 解析新模型的预览资源地址。列表接口不返回模型文件字段时，先请求详情拿到 modelFileId，
- * 再调用 resource/info 查询相对路径；禁止直接使用编号或未经查询的相对路径。
+ * 先读取模型详情和当前发布：受管模型交给引擎按稳定资源编号加载；明确没有发布的历史模型
+ * 才调用 resource/info 查询文件地址。编号和私有发布相对路径均不能直接拼到公开存储地址。
  */
 const openModelPreview = async (record: TransferListItem) => {
   const requestId = ++previewRequestId.value
   previewRecord.value = record
   previewDialogVisible.value = true
-  previewPath.value = record.artResRelativePath ? concatMinioUrl(record.artResRelativePath) : ''
+  previewError.value = ''
+  previewManagedResourceId.value = undefined
+  // 等发布归属确认后只加载最终资源，避免先请求旧地址、再切受管编号而重复下载或产生加载竞争。
+  const fallbackPath = record.artResRelativePath ? concatMinioUrl(record.artResRelativePath) : ''
+  previewPath.value = ''
 
   const resourceId = getResourceStringId(record)
   if (!resourceId) {
-    ElMessage.warning('当前模型缺少有效编号，暂不可预览')
+    previewPath.value = fallbackPath
+    previewError.value = previewPath.value ? '' : '当前模型缺少有效编号，暂不可预览'
     return
   }
 
   const [error, response] = await to(getDim3dModelInfo(resourceId))
   if (requestId !== previewRequestId.value || !previewDialogVisible.value) return
   if (error) {
-    ElMessage.error('模型详情获取失败，暂不可预览')
+    previewPath.value = fallbackPath
+    previewError.value = previewPath.value ? '' : '模型详情获取失败，请重新加载'
     return
   }
 
   const detail = response?.data
-  const modelFileId = String(detail?.modelFileId ?? '').trim()
+  const modelFileId = String(detail?.resourceId ?? detail?.modelFileId ?? '').trim()
   if (!modelFileId) {
-    ElMessage.warning('模型详情未返回可预览资源')
+    previewPath.value = fallbackPath
+    previewError.value = previewPath.value ? '' : '模型详情未返回可预览资源'
+    return
+  }
+
+  // 新导入的资源位于私有发布桶，按稳定资源编号交给引擎签名下载；历史目录才解析旧文件地址。
+  const [currentError, managedId] = await to(getDim3dManagedModelId(String(detail?.resourceId ?? modelFileId)))
+  if (requestId !== previewRequestId.value || !previewDialogVisible.value) return
+  if (currentError) {
+    previewError.value = '模型发布信息读取失败，请重新加载'
+    return
+  }
+  if (managedId) {
+    previewPath.value = ''
+    previewManagedResourceId.value = managedId
     return
   }
 
@@ -809,10 +836,16 @@ const openModelPreview = async (record: TransferListItem) => {
     resource?.resourceType !== 'MODEL' ||
     !resource.resourceRelativePath
   ) {
-    ElMessage.warning('模型资源未返回有效预览地址')
+    previewPath.value = fallbackPath
+    previewError.value = previewPath.value ? '' : '模型资源未返回有效预览地址'
     return
   }
   previewPath.value = buildDim3dResourceUrl(resource.resourceRelativePath)
+}
+
+/** 来源失败时沿用同一资源查询入口，递增请求编号会自动忽略上次迟到响应。 */
+const retryModelPreview = () => {
+  if (previewRecord.value) void openModelPreview(previewRecord.value)
 }
 
 /**

@@ -36,8 +36,9 @@ const withTimeout = <T>(work: Promise<T>, label: string, ms = 30000): Promise<T>
 const loadScript = (url: string): Promise<void> => new Promise((resolve, reject) => {
   const script = document.createElement('script')
   script.src = url
-  script.onload = () => resolve()
-  script.onerror = () => reject(new Error('Unity Web 加载脚本失败'))
+  // 全局加载函数已注册后移除脚本节点，多次打开预览不会在文档中积累节点。
+  script.onload = () => { script.remove(); resolve() }
+  script.onerror = () => { script.remove(); reject(new Error('Unity Web 加载脚本失败')) }
   document.head.append(script)
 })
 
@@ -45,10 +46,14 @@ const loadScript = (url: string): Promise<void> => new Promise((resolve, reject)
 export class WebUnityTransport implements UnityTransport {
   private readonly canvas: UnityCanvas
   private player: UnityPlayer | null = null
+  // 关闭加载中的弹窗时也等待播放器退出，保证下一次预览不会与迟到实例同时占用显存。
+  private loadingPlayer: Promise<UnityPlayer> | null = null
   private frameworkObjectUrl: string | null = null
   private target = ''
   private closed = false
   private connectPromise: Promise<void> | null = null
+  private disconnectPromise: Promise<void> | null = null
+  private readonly startupCleanups = new Set<() => void>()
   private artDeployment: Bootstrap['art'] | null = null
   private modelCatalog: Promise<VegetationModelChoice[]> | null = null
   private readonly pending = new Map<string, { resolve: (value: UnityResponseEnvelope<unknown>) => void; reject: (error: Error) => void; timer: number }>()
@@ -69,6 +74,7 @@ export class WebUnityTransport implements UnityTransport {
   connect(): Promise<void> {
     if (this.connectPromise) return this.connectPromise
     this.closed = false
+    this.disconnectPromise = null
     this.connectPromise = this.start().catch((error) => { this.connectPromise = null; throw error })
     return this.connectPromise
   }
@@ -99,6 +105,7 @@ export class WebUnityTransport implements UnityTransport {
     })
     if (!response.ok) throw new Error(`Unity Web 部署配置读取失败：${response.status}`)
     const bootstrap = await response.json() as Bootstrap
+    if (this.closed) throw new Error('Unity Web 页面已关闭')
     if (!bootstrap?.build?.loaderUrl || !bootstrap.build.dataUrl || !bootstrap.build.frameworkUrl || !bootstrap.build.codeUrl ||
         !bootstrap.art?.descriptorBase64 || !bootstrap.art.descriptorSha256 || !bootstrap.art.releaseBaseUrl || !bootstrap.art.projectId ||
         !bootstrap.business?.projectName || !bootstrap.business.apiBaseUrl || !bootstrap.business.userId) {
@@ -137,11 +144,12 @@ export class WebUnityTransport implements UnityTransport {
     const loadingPlayer = window.createUnityInstance(this.canvas, {
       dataUrl: bootstrap.build.dataUrl,
       frameworkUrl,
+      // 线程入口与框架保持同一个地址，跨源框架转为页面对象地址后也沿用该入口。
       ...(bootstrap.build.threadsRequired ? { mainScriptUrlOrBlob: frameworkUrl } : {}),
       codeUrl: bootstrap.build.codeUrl,
       streamingAssetsUrl: bootstrap.build.streamingAssetsUrl,
     }, (progress) => this.onStatus?.(`加载 Unity Web 构建 ${Math.round(progress * 100)}%`))
-    void loadingPlayer.then((player) => { if (this.closed) void player.Quit() }).catch(() => {})
+    this.loadingPlayer = loadingPlayer
     const player = await withTimeout(loadingPlayer, 'Unity Web 构建加载', 180000)
     if (this.closed) throw new Error('Unity Web 页面已关闭')
     this.player = player
@@ -149,15 +157,22 @@ export class WebUnityTransport implements UnityTransport {
   }
 
   private async startBusiness(bootstrap: Bootstrap): Promise<void> {
-    const api = await withTimeout(new Promise<StartupApi>((resolve) => {
+    const api = await withTimeout(new Promise<StartupApi>((resolve, reject) => {
       if (this.canvas.jtyfArtStartup) { resolve(this.canvas.jtyfArtStartup); return }
+      const cleanup = () => {
+        this.canvas.removeEventListener('jtyf-art-startup-status', onReady)
+        this.startupCleanups.delete(cancel)
+      }
       const onReady = () => {
         if (!this.canvas.jtyfArtStartup) return
-        this.canvas.removeEventListener('jtyf-art-startup-status', onReady)
+        cleanup()
         resolve(this.canvas.jtyfArtStartup)
       }
+      const cancel = () => { cleanup(); reject(new Error('Unity Web 页面已关闭')) }
+      this.startupCleanups.add(cancel)
       this.canvas.addEventListener('jtyf-art-startup-status', onReady)
     }), 'Unity Web 资源启动桥', 30000)
+    if (this.closed) throw new Error('Unity Web 页面已关闭')
     const sessionId = api.getStatus().sessionId
     this.onStatus?.('准备 Unity Web 资源与业务')
     api.submit({ schemaVersion: 1, sessionId, descriptorBase64: bootstrap.art.descriptorBase64,
@@ -177,7 +192,10 @@ export class WebUnityTransport implements UnityTransport {
       const cleanup = () => {
         this.canvas.removeEventListener('jtyf-art-startup-status', inspect)
         this.canvas.removeEventListener('jtyf-business-ready', inspect)
+        this.startupCleanups.delete(cancel)
       }
+      const cancel = () => { cleanup(); reject(new Error('Unity Web 页面已关闭')) }
+      this.startupCleanups.add(cancel)
       this.canvas.addEventListener('jtyf-art-startup-status', inspect)
       this.canvas.addEventListener('jtyf-business-ready', inspect)
       inspect()
@@ -186,19 +204,29 @@ export class WebUnityTransport implements UnityTransport {
     if (!this.target) throw new Error('Unity Web 业务通道未就绪')
   }
 
-  async disconnect(): Promise<void> {
+  disconnect(): Promise<void> {
+    // 初始化异常和弹窗关闭可能同时触发断开，统一使用同一个退出任务。
+    if (!this.disconnectPromise) this.disconnectPromise = this.disconnectPlayer()
+    return this.disconnectPromise
+  }
+
+  private async disconnectPlayer(): Promise<void> {
     this.closed = true
     this.connectPromise = null
     this.target = ''
     this.artDeployment = null
     this.modelCatalog = null
+    for (const cleanup of this.startupCleanups) cleanup()
+    this.startupCleanups.clear()
     window.removeEventListener('jtyf-message', this.onMessage as EventListener)
     for (const pending of this.pending.values()) { window.clearTimeout(pending.timer); pending.reject(new Error('Unity Web 会话已结束')) }
     this.pending.clear()
     this.subscribers.clear()
     this.canvas.jtyfArtStartup?.cancel()
-    const player = this.player
+    // 创建中的实例尚未写入 player，仍由本次断开统一回收，避免关闭后继续在后台渲染。
+    const player = this.player ?? await this.loadingPlayer?.catch(() => null)
     this.player = null
+    this.loadingPlayer = null
     const frameworkObjectUrl = this.frameworkObjectUrl
     this.frameworkObjectUrl = null
     try { if (player) await player.Quit() }
@@ -237,7 +265,8 @@ export class WebUnityTransport implements UnityTransport {
     if (!this.player || !this.target || this.closed) return Promise.reject(new Error('Unity Web 业务通道未就绪'))
     const body = JSON.stringify({ jsonrpc: '2.0', method, params: { envelope }, id: envelope.requestId })
     return new Promise((resolve, reject) => {
-      const timeoutMs = method === 'editor.v1.scene.loadDraft' ? 120000 : 30000
+      // 模型预览同样包含下载、解码和纹理上传，使用与草稿加载一致的超时时间。
+      const timeoutMs = method === 'editor.v1.scene.loadDraft' || method === 'editor.v1.model.preview' ? 120000 : 30000
       const timer = window.setTimeout(() => { this.pending.delete(envelope.requestId); reject(new Error(`Unity Web RPC 超时：${method}`)) }, timeoutMs)
       this.pending.set(envelope.requestId, { resolve: resolve as (value: UnityResponseEnvelope<unknown>) => void, reject, timer })
       try { this.player!.SendMessage(this.target, 'ReceiveMessage', body) }

@@ -45,3 +45,27 @@ export function buildDim3dResourceUrl(resourceRelativePath: string) {
 }
 
 export { DIM3D_AMM_PREFIX, DIM3D_RESOURCE_INFO_URL }
+
+/** 查询文件是否已有受管模型发布；只有明确不存在时才允许沿用历史对象存储路径。 */
+export async function getDim3dManagedModelId(modelFileId: string): Promise<string | undefined> {
+  let response: { code: number; data?: { resourceId: string; contentFormat: string } }
+  try {
+    response = await request<typeof response>(
+      `${DIM3D_API_PREFIX}/dim3d/resources/${encodeURIComponent(modelFileId)}/current`, {
+        method: 'GET', headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true,
+        suppressNotFoundNotification: true,
+      },
+    )
+  } catch (error) {
+    // 请求层会将传输和业务404都转换成异常；只有这类明确不存在才代表历史资源。
+    const status = error as { code?: number; status?: number }
+    if (status.code === 404 || status.status === 404) return undefined
+    throw error
+  }
+  if (response.code === 404) return undefined
+  if (response.code !== 200 || response.data?.resourceId !== modelFileId ||
+    !['model.glb.v1', 'model.gltf.v1'].includes(response.data.contentFormat)) {
+    throw new Error('模型当前发布信息无效，请重新加载')
+  }
+  return modelFileId
+}

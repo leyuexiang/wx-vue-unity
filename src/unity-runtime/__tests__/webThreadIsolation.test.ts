@@ -9,9 +9,10 @@ const bootstrap = {
 
 describe('Unity native thread prerequisites', () => {
   const appendPlayer = vi.fn()
-  const appendLoader = vi.fn((_script: HTMLScriptElement) => { throw new Error('loader reached') })
+  const appendLoader = vi.fn((_script: HTMLScriptElement): void => { throw new Error('loader reached') })
   beforeEach(() => {
     vi.clearAllMocks()
+    appendLoader.mockImplementation(() => { throw new Error('loader reached') })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => bootstrap }))
     // 画布已注册右键菜单拦截；模拟元素需具备浏览器事件接口，才能继续验证线程隔离前置条件。
     vi.stubGlobal('document', { baseURI: 'http://app.test/', createElement: () => ({ style: {}, remove: vi.fn(), addEventListener: vi.fn(), focus: vi.fn() }), head: { append: appendLoader } })
@@ -78,5 +79,31 @@ describe('Unity native thread prerequisites', () => {
       await transport.disconnect()
       expect(revoke).toHaveBeenCalledWith('blob:http://app.test/framework')
     } finally { create.mockRestore(); revoke.mockRestore() }
+  })
+
+  it('预览在播放器创建期间关闭时等待唯一实例退出，并合并重复断开', async () => {
+    vi.stubGlobal('crossOriginIsolated', true)
+    let finishCreating!: (player: { SendMessage: () => void; Quit: () => Promise<void> }) => void
+    let finishQuitting!: () => void
+    const quit = vi.fn(() => new Promise<void>((resolve) => { finishQuitting = resolve }))
+    const create = vi.fn(() => new Promise<{ SendMessage: () => void; Quit: () => Promise<void> }>((resolve) => {
+      finishCreating = resolve
+    }))
+    vi.stubGlobal('window', { ...window, setTimeout, clearTimeout, createUnityInstance: create })
+    appendLoader.mockImplementation((script) => { script.onload?.(new Event('load')) })
+    const transport = new WebUnityTransport({ append: appendPlayer } as unknown as HTMLElement, '/bootstrap')
+    const connection = expect(transport.connect()).rejects.toThrow('Unity Web 页面已关闭')
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+
+    // 原生创建尚未完成，关闭任务应保持等待；重复清理必须共享同一个退出任务。
+    const first = transport.disconnect()
+    const second = transport.disconnect()
+    expect(second).toBe(first)
+    expect(quit).not.toHaveBeenCalled()
+    finishCreating({ SendMessage: vi.fn(), Quit: quit })
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
+    finishQuitting()
+    await Promise.all([first, connection])
+    expect(quit).toHaveBeenCalledOnce()
   })
 })

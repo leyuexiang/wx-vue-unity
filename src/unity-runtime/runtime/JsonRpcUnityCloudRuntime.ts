@@ -15,6 +15,7 @@ import {
   type UnitySessionInitializePayload,
   type UnitySessionInitializeResponse,
   type UnitySceneSnapshotDto,
+  type UnityModelPreviewAction,
 } from '@/unity-runtime/protocol/types'
 import type { UnityCloudRuntime, UnityRuntimeEventMap } from './UnityCloudRuntime'
 import { authContext } from '@/auth/authContext'
@@ -30,6 +31,13 @@ export type UnityCameraAction =
   | { action: 'visit'; waypoint: GeoCameraPathWaypoint }
 
 export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
+  /** 预览加载允许被后续清空或新模型取消，沿用当前场景的会话及代次校验。 */
+  async controlModelPreview(action: UnityModelPreviewAction): Promise<void> {
+    if (!this.capabilities?.features['model.preview']) throw new Error('当前网页播放器需要更新后才能预览模型')
+    const response = await this.send<UnityModelPreviewAction, unknown>('editor.v1.model.preview', action)
+    this.assertSuccess(response)
+  }
+
   async controlVegetation(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this.schedule(async () => {
       if (!this.capabilities?.features['vegetation.instanced']) throw new Error('当前播放器需要更新后才能使用原生植被')

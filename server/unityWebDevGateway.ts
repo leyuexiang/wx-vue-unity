@@ -116,6 +116,8 @@ function serveFile(root: string, relative: string, res: ServerResponse): void {
   catch { reply(res, 404, { error: 'Not found' }); return }
   res.writeHead(200, {
     'Content-Type': contentType(file), 'Content-Length': size,
+    // 同源代理不会继承主页面的隔离响应头；原生线程入口也必须声明相同策略才能启动。
+    'Cross-Origin-Embedder-Policy': 'credentialless',
     ...(file.endsWith('.br') ? { 'Content-Encoding': 'br' } : {}),
     'Cache-Control': 'no-store',
   })
@@ -229,6 +231,32 @@ function proxyBusiness(req: IncomingMessage, res: ServerResponse, pathname: stri
   req.pipe(upstream)
 }
 
+/** 模型预览复用本机可信加密入口读取资源元数据，实际文件继续由后端签发私有桶下载地址。 */
+function proxyModelResource(req: IncomingMessage, res: ServerResponse, pathname: string, search: string): void {
+  const authorization = req.headers.authorization
+  const tenant = req.headers['tenant-id']
+  if (typeof authorization !== 'string' || !/^Bearer\s+\S+$/i.test(authorization) ||
+    typeof tenant !== 'string' || !/^[1-9]\d{0,18}$/.test(tenant)) {
+    reply(res, 401, { error: '资源读取需要登录身份' }); return
+  }
+  // 来源固定为已配置业务后端，资源编号和只读路由由调用入口匹配，调用方无法指定代理主机。
+  const target = new URL(pathname, backend)
+  target.search = search
+  const upstream = httpRequest(target, { method: 'GET', headers: {
+    Authorization: authorization, 'tenant-id': tenant, Accept: 'application/json',
+  }, timeout: 30000 }, response => {
+    res.writeHead(response.statusCode || 502, response.headers)
+    response.pipe(res)
+  })
+  upstream.once('timeout', () => upstream.destroy(new Error('资源接口超时')))
+  upstream.once('error', () => {
+    if (!res.headersSent) reply(res, 502, { error: '资源接口暂时不可用' })
+    else res.end()
+  })
+  res.once('close', () => upstream.destroy())
+  upstream.end()
+}
+
 const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
   if (!cors(req, res)) return
   const url = new URL(req.url || '/', origin)
@@ -236,6 +264,9 @@ const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
   try { pathname = decodeURIComponent(url.pathname) }
   catch { reply(res, 400, { error: 'Bad path' }); return }
   if (req.method === 'GET' && pathname === '/health') { reply(res, 200, { status: 'ready' }); return }
+  if (req.method === 'GET' && /^\/admin-api\/dim3d\/resources\/[1-9]\d{0,18}\/(?:current|file)$/.test(pathname)) {
+    proxyModelResource(req, res, pathname, url.search); return
+  }
   if (pathname === '/config/webgpu' || pathname === '/config/webgpu/check' || pathname === '/config/webgpu/directories') {
     void configurePackages(req, res, pathname).catch(() => { if (!res.headersSent) reply(res, 500, { error: '配置服务暂时不可用' }) })
     return

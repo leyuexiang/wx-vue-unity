@@ -119,6 +119,7 @@ export interface UnityEventEnvelope<T = unknown> {
 }
 
 export type UnityEditorMethod =
+  | 'editor.v1.model.preview'
   | 'editor.v1.vegetation.control'
   | 'editor.v1.camera.control'
   | 'editor.v1.weather.describe'
@@ -136,6 +137,14 @@ export type UnityEditorMethod =
   | 'editor.v1.gizmo.mode.set'
   | 'editor.v1.runtime.mode.set'
   | 'editor.v1.interaction.action'
+
+/** 模型管理仅通过业务通道发送离散操作，旋转、缩放和平移由播放器原生输入处理。 */
+export type UnityModelPreviewAction =
+  | { action: 'load'; url: string; background: string }
+  | { action: 'load'; resourceId: string; background: string }
+  | { action: 'background'; background: string }
+  | { action: 'reset' }
+  | { action: 'clear' }
 
 /** 只传递可序列化动作参数；Unity 运行时根据稳定实例编号解析草稿对象。 */
 export type UnityInteractionActionDto =

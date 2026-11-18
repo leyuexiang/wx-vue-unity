@@ -42,8 +42,14 @@ for (const layout of ['public/unity-web', 'unity-web']) {
     await copyFile(new URL('../unityWebPackages.ts', import.meta.url), path.join(root, 'server/unityWebPackages.ts'))
 
     // 模拟本机身份后端，验证启动接口仍沿用正常登录校验流程。
-    backend = createServer((_request, response) => {
+    backend = createServer((request, response) => {
       response.setHeader('Content-Type', 'application/json')
+      // 回传只读资源请求，检查本机加密入口保留资源编号、签名参数与租户身份。
+      if (request.url?.startsWith('/admin-api/dim3d/resources/')) {
+        response.end(JSON.stringify({ url: request.url, authorization: request.headers.authorization,
+          tenant: request.headers['tenant-id'], method: request.method }))
+        return
+      }
       response.end(JSON.stringify({ code: 200, data: { user: { id: '1' } } }))
     })
     backend.listen(0, '127.0.0.1')
@@ -74,12 +80,26 @@ for (const layout of ['public/unity-web', 'unity-web']) {
     const headers = {
       Authorization: 'Bearer fixture', ClientId: 'fixture', 'X-Unity-Platform': 'operation', 'tenant-id': '1',
     }
+    // 资源代理必须限定已登录身份和只读路由，不能把网关变成任意后端转发入口。
+    const resourcePath = '/admin-api/dim3d/resources/2122892047650189313/current'
+    assert.equal((await fetch(`${address}${resourcePath}`)).status, 401)
+    assert.equal((await fetch(`${address}${resourcePath}`, { headers: { Authorization: 'Bearer fixture' } })).status, 401)
+    const current = await (await fetch(`${address}${resourcePath}`, { headers })).json()
+    assert.deepEqual(current, { url: resourcePath, authorization: 'Bearer fixture', tenant: '1', method: 'GET' })
+    const filePath = resourcePath.replace('/current', '/file?revision=1&contentHash=abc&path=textures%2Ftest.png')
+    const file = await (await fetch(`${address}${filePath}`, { headers })).json()
+    assert.equal(file.url, filePath)
+    assert.equal((await fetch(`${address}${resourcePath}`, { method: 'POST', headers })).status, 404)
+    assert.equal((await fetch(`${address}${resourcePath.replace('/current', '/delete')}`, { headers })).status, 404)
     const response = await fetch(`${address}/bootstrap`, { headers })
     assert.equal(response.status, 200)
     const bootstrap = await response.json() as { build: Record<string, unknown> }
     // 相对地址包含版本快照；前端代理去掉应用根下的 unity-runtime 前缀后交给网关。
     assert.match(String(bootstrap.build.loaderUrl), /^\.\/unity-runtime\/packages\/[0-9a-f]{24}\/player\/Build\/player.loader.js$/)
     const playerUrl = String(bootstrap.build.loaderUrl).replace('./unity-runtime', '')
+    // 主页面经同源代理读取线程脚本时，脚本自身必须携带隔离策略，防止卡在引擎初始化。
+    const frameworkResponse = await fetch(`${address}${playerUrl.replace('player.loader.js', 'player.framework.js')}`)
+    assert.equal(frameworkResponse.headers.get('cross-origin-embedder-policy'), 'credentialless')
     assert.equal(bootstrap.build.codeUrl, String(bootstrap.build.loaderUrl).replace('player.loader.js', 'player.wasm'))
     assert.equal(bootstrap.build.streamingAssetsUrl, String(bootstrap.build.loaderUrl).replace('Build/player.loader.js', 'StreamingAssets'))
     assert.equal((await fetch(`${address}${playerUrl}`)).status, 200)

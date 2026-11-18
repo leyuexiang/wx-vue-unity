@@ -12,3 +12,7 @@ coverage/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# WebGPU 渲染包由本地或部署流程提供，避免将大型交付资源提交到 Git。
+/public/unity-web/
+/public/unity-web-development/
