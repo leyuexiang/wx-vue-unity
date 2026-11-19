@@ -111,6 +111,31 @@ it('租户离开编辑器时按当前端释放场景锁', async () => {
     }))
 })
 
+/** 模板管理和编辑器应用使用同一登录端，仍将两种详情投递到各自业务路径。 */
+it.each(['operation', 'tenant'] as const)('%s 文件型和快照模板详情按端分流', async (platformType) => {
+  fixture.platformType = platformType
+  vi.stubEnv('VITE_DIM3D_API_MODE', 'admin')
+  vi.stubEnv('VITE_DIM3D_SERVER_URL', '/dts-api')
+  const { getDim3dSceneTemplateInfo, getDim3dTemplateInfo } = await import('@/servers/manual/dim3d/api/template')
+  const forwarded: string[] = []
+  for (const load of [getDim3dTemplateInfo, getDim3dSceneTemplateInfo]) {
+    fixture.replay.mockImplementationOnce((address, options) => {
+      const result = fixture.requestHook!(address, options)
+      expect(result.options.headers).toMatchObject({
+        Authorization: 'Bearer test-access', 'tenant-id': platformType === 'tenant' ? '2' : '1',
+      })
+      forwarded.push(result.url)
+      return { code: 200, data: {} }
+    })
+    await load('9007199254740993')
+  }
+  const root = `/dts-api/api/${platformSegment(platformType)}/dim3d`
+  expect(forwarded).toEqual([
+    `${root}/template/info/9007199254740993`,
+    `${root}/scene/template/info/9007199254740993`,
+  ])
+})
+
 it('切换登录平台后，旧请求的 401 不清除新身份', async () => {
   const options = fixture.requestHook!(url, { passAuth: true }).options
   fixture.sessionVersion++

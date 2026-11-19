@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_OPERATION_API_PREFIX, DIM3D_PLATFORM_API_PREFIX } from './constants'
+import { DIM3D_PLATFORM_API_PREFIX } from './constants'
 
 /** 模板所属业务类型。两个值由产品固定，不再依赖系统字典接口动态下发。 */
 export const DIM3D_TEMPLATE_TYPE = Object.freeze({
@@ -139,8 +139,8 @@ export interface Dim3dSceneTemplateSnapshotRequest {
   dependenciesJson: string
 }
 
-/** 场景快照模板另存、目录和回读使用的独立入口，避免改变旧文件型模板协议。 */
-// 快照模板属于场景平台入口，文件型模板保留其独立目录协议。
+/** 两类模板共用当前登录端前缀，具体业务路径按目录来源选择。 */
+const DIM3D_TEMPLATE_API_PREFIX = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/template`
 const DIM3D_SCENE_TEMPLATE_API_PREFIX = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/scene/template`
 
 export function saveAsDim3dSceneTemplateSnapshot(
@@ -273,7 +273,7 @@ export async function pageDim3dTemplate(
   options?: Record<string, unknown>,
 ) {
   const response = await request<Dim3dTemplatePageResponse | Dim3dTemplatePageEnvelope>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/template/page`,
+    `${DIM3D_TEMPLATE_API_PREFIX}/page`,
     {
       method: 'GET',
       params,
@@ -324,7 +324,7 @@ export async function getDim3dTemplateInfo(
   options?: Record<string, unknown>,
 ): Promise<Dim3dTemplateDetailResponse> {
   const response = await request<FileTemplateDetailPayload>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/template/info/${encodeURIComponent(id)}`,
+    `${DIM3D_TEMPLATE_API_PREFIX}/info/${encodeURIComponent(id)}`,
     {
       method: 'GET',
       headers: getDim3dHeaders(),
@@ -355,7 +355,7 @@ export function editDim3dTemplate(
   options?: Record<string, unknown>,
 ) {
   return request<Dim3dTemplateVoidResponse>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/template/edit/${encodeURIComponent(id)}`,
+    `${DIM3D_TEMPLATE_API_PREFIX}/edit/${encodeURIComponent(id)}`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
@@ -369,7 +369,7 @@ export function editDim3dTemplate(
 /** 删除模板；调用方必须先完成二次确认，并校验传入的真实业务编号。 */
 export function removeDim3dTemplate(id: string, options?: Record<string, unknown>) {
   return request<Dim3dTemplateVoidResponse>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/template/remove/${encodeURIComponent(id)}`,
+    `${DIM3D_TEMPLATE_API_PREFIX}/remove/${encodeURIComponent(id)}`,
     {
       method: 'DELETE',
       headers: getDim3dHeaders(),
@@ -386,7 +386,7 @@ export function changeDim3dTemplateStatus(
   options?: Record<string, unknown>,
 ) {
   return request<Dim3dTemplateVoidResponse>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/template/${status}/${encodeURIComponent(id)}`,
+    `${DIM3D_TEMPLATE_API_PREFIX}/${status}/${encodeURIComponent(id)}`,
     {
       method: 'PUT',
       headers: getDim3dHeaders(),
