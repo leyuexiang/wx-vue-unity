@@ -15,8 +15,8 @@ export const DIM3D_ADMIN_API = import.meta.env.VITE_DIM3D_API_MODE === 'admin'
 /** 图标、字典、场景及通用资源等接口按服务协议选择根路径。 */
 export const DIM3D_API_PREFIX = `${DIM3D_SERVER_URL}/${DIM3D_ADMIN_API ? 'admin-api' : 'api'}`
 
-/** 模型业务始终走平台网关，由请求层按认证会话插入运营端或租户端路径。 */
-export const DIM3D_MODEL_API_PREFIX = `${DIM3D_SERVER_URL}/api`
+/** 模型、图片及已登录场景业务走平台网关，请求层按认证会话插入端别。 */
+export const DIM3D_PLATFORM_API_PREFIX = `${DIM3D_SERVER_URL}/api`
 
 /**
  * 三维接口的基础前缀。

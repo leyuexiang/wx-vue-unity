@@ -1,6 +1,6 @@
 import request from '@/request'
 import { authContext } from '@/auth/authContext'
-import { DIM3D_SERVER_URL } from '@/servers/manual/dim3d/api/constants'
+import { DIM3D_PLATFORM_API_PREFIX } from '@/servers/manual/dim3d/api/constants'
 import type { Dim3dSceneDetailVo } from '@/servers/manual/dim3d/api/scene'
 
 export interface FixedPublicationCapabilities {
@@ -25,12 +25,12 @@ export interface PublicationReadTicket {
   expiresInSeconds: number
 }
 
-/** 固定发布管理只使用当前登录身份，不采用历史临时令牌或客户端传入的租户。 */
+/** 固定发布管理按当前登录端分派，异步返回时再次确认会话仍有效。 */
 async function call<T>(path: string, method = 'GET', params?: Record<string, unknown>): Promise<T> {
   const identity = authContext.get()
   if (!identity || !authContext.hasValidContext()) throw new Error('请先登录')
-  const response = await request<{ code?: number; msg?: string; data?: T }>(`${DIM3D_SERVER_URL}/admin-api/dim3d/scene/${path}`, {
-    method, params, skipPlatformPath: true,
+  const response = await request<{ code?: number; msg?: string; data?: T }>(`${DIM3D_PLATFORM_API_PREFIX}/dim3d/scene/${path}`, {
+    method, params,
   })
   const current = authContext.get()
   if (!current || !authContext.hasValidContext() || current.accessToken !== identity.accessToken || current.tenantId !== identity.tenantId || current.platformType !== identity.platformType) {

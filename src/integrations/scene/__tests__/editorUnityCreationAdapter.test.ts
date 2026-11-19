@@ -21,6 +21,7 @@ import { copyEditorSceneSubtrees } from '../editorSceneSubtreeCopy'
 import { deleteEditorSceneSubtrees } from '../editorSceneSubtreeDeletion'
 import { dispatchEditorHistory } from '../editorSceneUndoRedoAdapter'
 import { runConfirmedEditorCommand } from '../editorSceneCommandTransaction'
+import { getStagePointerCoordinate } from '@/utils/renderScene/pointerCoordinate'
 
 /** 只替换播放器边界，实际执行对象映射、命令历史、桥接、双端投影和保存序列化。 */
 const hosts: ViewportHost[] = []
@@ -78,11 +79,12 @@ describe('画布模型拖拽入口', () => {
     expect(renameEditorSceneObjectWithCommand({ store, commandBus, objectId: id, name: '卸载后改名' }).status).toBe('applied')
     expect(applySceneObjectVisibilityToStore({ store, commandBus, objectId: id, visible: false }).status).toBe('applied')
     await host.getBridge().flush()
-    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, name: '卸载后改名', visible: false }))
+    // 普通编辑只传对象正文，可选的运行时专用参数保持为空。
+    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, name: '卸载后改名', visible: false }), undefined)
     expect(await history('undo')).toBe(true)
-    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, visible: true }))
+    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, visible: true }), undefined)
     expect(await history('undo')).toBe(true)
-    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, name: '资源模型' }))
+    expect(unity.updateObject).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: id, name: '资源模型' }), undefined)
     expect(await history('redo')).toBe(true)
     expect(await history('redo')).toBe(true)
     expect(unity.loadScene).not.toHaveBeenCalled()
@@ -136,6 +138,60 @@ describe('画布模型拖拽入口', () => {
 })
 
 describe('模型拖拽到双端运行时', () => {
+  /** 用播放器回报的真实相机字段验证整条拖放链路，包含浏览器缩放、运行投影和场景保存。 */
+  it.each(['cloud', 'webgpu'] as const)('普通场景通过%s将两个释放点保存为不同地面坐标', async (mode) => {
+    const { host, runtime, unity, model } = await setup('local3d', mode)
+    const surface = {
+      clientWidth: 800, clientHeight: 400,
+      querySelector: () => null,
+      getBoundingClientRect: () => ({ left: 200, top: 100, width: 400, height: 200 }),
+    } as HTMLElement
+    const controlCamera = vi.fn(async () => ({
+      position: [10, 10, 20], orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
+      fov: 90, near: 0.1, far: 1000,
+    }))
+    Object.assign(runtime, { renderContainer: surface })
+    if (mode === 'cloud') Object.assign(runtime, { video: { videoWidth: 400, videoHeight: 400, remove: vi.fn() } })
+    Object.assign(unity, { controlCamera, capabilities: { features: { 'camera.control': true } } })
+    const drop = (clientX: number, clientY: number) => createEditorUnityObject(model, { clientX, clientY }, {
+      host, isActive: () => true,
+      toRuntimeScreenPoint: point => getStagePointerCoordinate(point.clientX, point.clientY, surface),
+    })
+    // 云视频画面比舞台窄，相同画面比例的屏幕坐标向中心收拢；两侧留白不能放置模型。
+    if (mode === 'cloud') await expect(drop(250, 150)).rejects.toThrow('没有可用的地面落点')
+    const right = (await drop(mode === 'cloud' ? 450 : 500, 150))!
+    const left = (await drop(mode === 'cloud' ? 350 : 300, 250))!
+    const expected = mode === 'cloud' ? [[15, 0, 25], [5, 0, 15]] : [[20, 0, 25], [0, 0, 15]]
+    const projection = unity.loadScene.mock.lastCall![0]
+    const packages = serializeSceneDefinitionToFourPackages(host.getStore().getScene())
+    const reopened = assembleSceneDefinitionFromRuntimeFragments({
+      manifest: { fragmentType: 'manifest', fragmentKey: sceneId, contentJson: JSON.stringify(packages) },
+      options: { sceneId, sceneType: 'local3d' },
+    })
+    for (const [index, id] of [right, left].entries()) {
+      const position = projection.objects.find(object => object.instanceId === id)!.transform.position
+      expect(position).toEqual(expected[index]!.map(value => expect.closeTo(value)))
+      expect(reopened.objects.find(object => object.id === id)?.transform).toMatchObject({ kind: 'local', position })
+    }
+    expect(controlCamera).toHaveBeenCalledTimes(2)
+    expect(controlCamera).toHaveBeenCalledWith({ action: 'get' })
+  })
+
+  /** 地理场景仍读取引擎返回的地表经纬高，无需查询普通相机。 */
+  it('地理场景继续使用引擎拾取的释放点', async () => {
+    const { host, runtime, unity, model } = await setup('gis')
+    const pickWorldPosition = vi.fn(async () => ({ kind: 'geo', position: [110.02, 19.03, 28] }))
+    Object.assign(runtime, { renderContainer: { clientWidth: 800, clientHeight: 400 } })
+    Object.assign(unity, { pickWorldPosition })
+    const id = await createEditorUnityObject(model, { clientX: 500, clientY: 150 }, {
+      host, isActive: () => true, toRuntimeScreenPoint: () => ({ x: 600, y: 100 }),
+    })
+    expect(pickWorldPosition).toHaveBeenCalledWith({ x: 600, y: 100 }, { width: 800, height: 400 })
+    expect(unity.loadScene.mock.lastCall?.[0].objects).toContainEqual(expect.objectContaining({
+      instanceId: id, transform: expect.objectContaining({ space: 'wgs84', position: [110.02, 19.03, 28] }),
+    }))
+  })
+
   it.each([
     ['local3d', 'cloud'], ['local3d', 'webgpu'], ['gis', 'cloud'], ['gis', 'webgpu'],
   ] as const)('在%s场景通过%s创建、保存、撤销和重做同一模型', async (type, mode) => {

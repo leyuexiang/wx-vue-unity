@@ -22,7 +22,7 @@ import { createUuid } from '@/utils/uuid'
 const generateUUID = createUuid
 
 /**
- * 基础几何体缩略图与 Figma「模型板块 icon」（节点 2192:2685）逐一对应。
+ * 当前开放的基础几何体缩略图取自设计稿「模型板块」图标（节点 2192:2685）。
  *
  * 每个缩略图均从对应 Figma 节点直接导出为透明 PNG；静态 `new URL` 会在构建阶段解析，
  * 避免运行时拼接路径或发起网络请求。配置项只引用固定键，因此替换视觉资源不会触及拖拽模型类型、
@@ -31,16 +31,9 @@ const generateUUID = createUuid
 const geometryIcons = {
   box: new URL(`../assets/images/geometry/box.png`, import.meta.url).href,
   capsule: new URL(`../assets/images/geometry/capsule.png`, import.meta.url).href,
-  circle: new URL(`../assets/images/geometry/circle.png`, import.meta.url).href,
-  cone: new URL(`../assets/images/geometry/cone.png`, import.meta.url).href,
   cylinder: new URL(`../assets/images/geometry/cylinder.png`, import.meta.url).href,
-  dodecahedron: new URL(`../assets/images/geometry/dodecahedron.png`, import.meta.url).href,
-  icosahedron: new URL(`../assets/images/geometry/icosahedron.png`, import.meta.url).href,
-  octahedron: new URL(`../assets/images/geometry/octahedron.png`, import.meta.url).href,
   plane: new URL(`../assets/images/geometry/plane.png`, import.meta.url).href,
   sphere: new URL(`../assets/images/geometry/sphere.png`, import.meta.url).href,
-  tetrahedron: new URL(`../assets/images/geometry/tetrahedron.png`, import.meta.url).href,
-  torus: new URL(`../assets/images/geometry/torus.png`, import.meta.url).href,
 } as const
 
 /**
@@ -106,6 +99,10 @@ const applyFigmaComponentPreviewIcon = <T extends { keyName: string; icon: strin
   icon: figmaComponentPreviewIcons[component.keyName] ?? component.icon,
 })
 
+/**
+ * 基础几何体的新增拖拽入口。因部分类型无法加载，面板仅开放下列五种。
+ * 历史场景由自身保存的几何类型恢复，与这份新增入口清单独立。
+ */
 export const geometryDataList = [
   {
     id: generateUUID(),
@@ -133,31 +130,6 @@ export const geometryDataList = [
   },
   {
     id: generateUUID(),
-    name: '圆形',
-    type: 'CircleGeometry',
-    radius: 0.5,
-    segments: 32,
-    thetaStart: 0,
-    thetaLength: 6.44,
-    modelType: DRAG_MODEL_ENUM.Geometry,
-    icon: geometryIcons.circle,
-  },
-  {
-    id: generateUUID(),
-    name: '圆锥',
-    type: 'ConeGeometry',
-    radius: 5,
-    height: 10,
-    radialSegments: 8,
-    heightSegments: 1,
-    openEnded: false,
-    thetaStart: 0,
-    thetaLength: 6.283185307179586,
-    modelType: DRAG_MODEL_ENUM.Geometry,
-    icon: geometryIcons.cone,
-  },
-  {
-    id: generateUUID(),
     name: '圆柱',
     type: 'CylinderGeometry',
     radiusTop: 4,
@@ -170,33 +142,6 @@ export const geometryDataList = [
     thetaLength: 6.283185307179586,
     modelType: DRAG_MODEL_ENUM.Geometry,
     icon: geometryIcons.cylinder,
-  },
-  {
-    id: generateUUID(),
-    name: '十二面体',
-    type: 'DodecahedronGeometry',
-    radius: 0.5,
-    detail: 0,
-    modelType: DRAG_MODEL_ENUM.Geometry,
-    icon: geometryIcons.dodecahedron,
-  },
-  {
-    id: generateUUID(),
-    name: '二十面体',
-    type: 'IcosahedronGeometry',
-    radius: 0.5,
-    detail: 0,
-    modelType: DRAG_MODEL_ENUM.Geometry,
-    icon: geometryIcons.icosahedron,
-  },
-  {
-    id: generateUUID(),
-    name: '八面体',
-    type: 'OctahedronGeometry',
-    radius: 0.5,
-    detail: 0,
-    modelType: DRAG_MODEL_ENUM.Geometry,
-    icon: geometryIcons.octahedron,
   },
   {
     id: generateUUID(),
@@ -222,27 +167,6 @@ export const geometryDataList = [
     thetaLength: 3.141592653589793,
     modelType: DRAG_MODEL_ENUM.Geometry,
     icon: geometryIcons.sphere,
-  },
-  {
-    id: generateUUID(),
-    name: '四面体',
-    type: 'TetrahedronGeometry',
-    radius: 0.5,
-    detail: 0,
-    modelType: DRAG_MODEL_ENUM.Geometry,
-    icon: geometryIcons.tetrahedron,
-  },
-  {
-    id: generateUUID(),
-    name: '圆环',
-    type: 'TorusGeometry',
-    radius: 10,
-    tube: 3,
-    radialSegments: 16,
-    tubularSegments: 100,
-    arc: 6.283185307179586,
-    modelType: DRAG_MODEL_ENUM.Geometry,
-    icon: geometryIcons.torus,
   },
 ]
 

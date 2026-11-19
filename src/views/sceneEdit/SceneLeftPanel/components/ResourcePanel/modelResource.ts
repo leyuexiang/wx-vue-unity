@@ -5,7 +5,7 @@ import {
   type Dim3dResourceBelong,
   type Dim3dModelPageVo,
 } from '@/servers/manual/dim3d/api/model'
-import { getDim3dResourceInfo, buildDim3dResourceUrl } from '@/servers/manual/dim3d/api/resource'
+import { getDim3dModelFileAccess } from '@/servers/manual/dim3d/api/resource'
 import {
   createDim3dModelCategoryLabelMap,
   getDim3dModelCategoryDictionary,
@@ -25,11 +25,11 @@ interface ResourceGroup<T> {
   children: T[]
 }
 
-/** 阶段三模型接口解析出的折叠分组。 */
-export type ModelResourceGroup = ResourceGroup<FileModel>
+/** 分组保留唯一目录编号，同一文件被多条目录引用时仍能独立渲染卡片。 */
+export type ModelResourceGroup = ResourceGroup<ResolvedModelResource>
 
 /** 解析后的阶段三模型，保留后端编号用于稳定 Vue key 和调试追踪。 */
-interface ResolvedModelResource extends FileModel {
+type ResolvedModelResource = FileModel & {
   /** 兼容资源面板现有卡片 key，使用模型记录编号而不是随机值。 */
   id: string
   resourceId: string
@@ -38,8 +38,7 @@ interface ResolvedModelResource extends FileModel {
 /**
  * 模型文件的冻结资源身份。
  *
- * 当前上传和编辑流程替换文件时会生成新的modelFileId，因此该编号既是文件身份，也是本次不可变版本。
- * 后续资源服务提供独立内容哈希时，可只替换version来源，不需要改动植被或场景请求协议。
+ * 历史文件用文件编号标记版本。受管编号交给播放器读取修订，场景持久化不携带临时签名。
  */
 interface ResolvedModelFileAsset {
   id: string
@@ -80,13 +79,12 @@ const loadModelCategoryLabelMap = async () => {
 }
 
 /**
- * 受控目录直接使用关联编号，签发与格式选择交给 Unity。旧目录继续解析文件编号和地址。
- *
- * modelFileId优先读取分页结果，缺失时只补查一次模型详情。页面列表偶尔会直接返回完整地址，但仍
- * 必须先取得modelFileId；否则植被请求只能拿到模型业务编号，无法冻结实际GLB文件身份。
+ * 旧版目录若明确返回受管关联，沿用该身份。正式目录按文件编号读取授权后的访问方式。
+ * 分页缺少文件身份时才补查同一目录详情，相同文件在本次加载过程中共享一个请求。
  */
 const resolveModelFileAsset = async (
   model: Dim3dModelPageVo,
+  cache: Map<string, Promise<ResolvedModelFileAsset | null>>,
 ): Promise<ResolvedModelFileAsset | null> => {
   if (model.resourceId != null) return resolveManagedModelAsset(model.resourceId)
   let modelFileId = normalizeText(model.modelFileId)
@@ -103,27 +101,13 @@ const resolveModelFileAsset = async (
   }
   if (!modelFileId) return null
 
-  const directUrl = [model.modelFileUrl, model.modelFilePath]
-    .map(normalizeText)
-    .find((value) => /^https?:\/\//i.test(value))
-  if (directUrl) {
-    return { id: modelFileId, url: directUrl, version: modelFileId }
+  let asset = cache.get(modelFileId)
+  if (!asset) {
+    asset = getDim3dModelFileAccess(modelFileId).then(file => file.accessMode === 'MANAGED'
+      ? resolveManagedModelAsset(file.id) : { id: file.id, url: file.url, version: file.id })
+    cache.set(modelFileId, asset)
   }
-
-  const response = await getDim3dResourceInfo(modelFileId, { suppressNotFoundNotification: true })
-  const data = response?.data
-  const resourceRelativePath = normalizeText(data?.resourceRelativePath)
-  if (
-    response?.code !== 200 ||
-    normalizeText(data?.id) !== modelFileId ||
-    normalizeText(data?.resourceType).toUpperCase() !== 'MODEL' ||
-    !resourceRelativePath
-  ) {
-    return null
-  }
-
-  const url = buildDim3dResourceUrl(resourceRelativePath)
-  return url ? { id: modelFileId, url, version: modelFileId } : null
+  return asset
 }
 
 /** 按 ossId 查询模型封面，失败时返回空串并由卡片使用默认图。 */
@@ -138,9 +122,10 @@ const resolveCoverUrl = async (coverImageId: unknown) => {
 const toModelItem = async (
   model: Dim3dModelPageVo,
   coverCache: Map<string, Promise<string>>,
+  fileCache: Map<string, Promise<ResolvedModelFileAsset | null>>,
 ): Promise<ResolvedModelResource | null> => {
   const resourceId = normalizeText(model.id)
-  const modelFileAsset = await resolveModelFileAsset(model)
+  const modelFileAsset = await resolveModelFileAsset(model, fileCache)
   // 编号或地址任一缺失都不渲染卡片，防止拖入后生成无法冻结资源身份的场景或植被规则。
   if (!resourceId || !modelFileAsset) return null
 
@@ -154,7 +139,7 @@ const toModelItem = async (
     coverPromise = resolveCoverUrl(coverId)
     coverCache.set(coverId, coverPromise)
   }
-  const coverUrl = await coverPromise
+  const coverUrl = await coverPromise.catch(() => '')
   return {
     id: resourceId,
     name: normalizeText(model.modelName) || '未命名模型',
@@ -173,11 +158,12 @@ const resolveRowsWithConcurrency = async (rows: Dim3dModelPageVo[], limit = 8) =
   const result: Array<ResolvedModelResource | null> = Array(rows.length).fill(null)
   let cursor = 0
   const coverCache = new Map<string, Promise<string>>()
+  const fileCache = new Map<string, Promise<ResolvedModelFileAsset | null>>()
   const worker = async () => {
     while (cursor < rows.length) {
       const index = cursor++
       try {
-        result[index] = await toModelItem(rows[index], coverCache)
+        result[index] = await toModelItem(rows[index], coverCache, fileCache)
       } catch {
         // 单个模型详情、资源或封面失败时跳过该卡片，其他分类仍继续显示。
         result[index] = null
@@ -192,15 +178,37 @@ const resolveRowsWithConcurrency = async (rows: Dim3dModelPageVo[], limit = 8) =
  * 通过新 `/dim3d/model/page` 接口加载模型并按后端分类分组。
  * 请求适配器内部会注入阶段三 Authorization 和 ClientId，不再调用旧项目资源服务接口。
  */
+const MODEL_PAGE_SIZE = 200
+
+/** 按稳定编号顺序逐页读取。初页总数限定请求次数，目录变动产生的重复记录按编号合并。 */
+async function loadModelRows(resourceBelong: Dim3dResourceBelong) {
+  const params = { resourceBelong, status: 'ONLINE' as const, pageSize: MODEL_PAGE_SIZE, orderByColumn: 'id', isAsc: 'asc' }
+  const first = await pageDim3dModel({ ...params, pageNum: 1 })
+  const rows = new Map<string, Dim3dModelPageVo>()
+  const collect = (page: Dim3dModelPageVo[]) => {
+    for (const row of page) {
+      const id = normalizeText(row.id)
+      if (id && !rows.has(id)) rows.set(id, row)
+    }
+  }
+  collect(first.rows ?? [])
+  const pages = Math.ceil((first.total ?? first.rows?.length ?? 0) / MODEL_PAGE_SIZE)
+  for (let pageNum = 2; pageNum <= pages; pageNum++) {
+    const page = await pageDim3dModel({ ...params, pageNum })
+    if (!page.rows?.length) break
+    collect(page.rows)
+  }
+  return [...rows.values()]
+}
+
 export async function loadDim3dModelGroups(
   resourceBelong: Dim3dResourceBelong,
 ): Promise<ModelResourceGroup[]> {
-  const [response, categoryLabels] = await Promise.all([
-    pageDim3dModel({ resourceBelong, status: 'ONLINE', pageNum: 1, pageSize: 9999 }),
+  const [rows, categoryLabels] = await Promise.all([
+    loadModelRows(resourceBelong),
     // 字典失败不阻断模型资源加载；没有中文映射时按已有 categoryName 或“未分类”降级。
     loadModelCategoryLabelMap().catch(() => new Map<string, string>()),
   ])
-  const rows = Array.isArray(response?.rows) ? response.rows : []
   const rowById = new Map(rows.map((row) => [normalizeText(row.id), row]))
   const resolved = (await resolveRowsWithConcurrency(rows)).filter(
     (item): item is ResolvedModelResource => Boolean(item),

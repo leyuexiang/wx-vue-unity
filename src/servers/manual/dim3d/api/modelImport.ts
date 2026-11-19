@@ -1,10 +1,11 @@
 import request from '@/request'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_ADMIN_API, DIM3D_API_PREFIX, DIM3D_MODEL_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_API_PREFIX, DIM3D_PLATFORM_API_PREFIX } from './constants'
+import { addDim3dModel, editDim3dModel, type Dim3dModelForm } from './model'
 
-/** 导入及目录使用同一平台前缀，固定修订仍走通用资源入口。 */
-export const MODEL_IMPORT_URL = `${DIM3D_MODEL_API_PREFIX}/dim3d/model-imports`
-export const MODEL_UPLOAD_URL = `${DIM3D_MODEL_API_PREFIX}/dim3d/resource/uploadConvert`
+/** 导入生命周期与目录属于同一平台，签名上传仍直接请求对象存储。 */
+export const MODEL_IMPORT_URL = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/model-imports`
+export const MODEL_UPLOAD_URL = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/resource/uploadConvert`
 export const MODEL_IMPORT_MAX_BYTES = 500 * 1024 * 1024
 interface ModelImportBase {
   operationId: string
@@ -25,14 +26,27 @@ export interface ModelImportStatus {
   errorMessage: string | null
   retryable: boolean
 }
+/** 只有转换就绪后才交给表单。仅原位替换需要在保存时传回导入操作编号。 */
+export type ReadyModelUpload = {
+  modelFileId: string
+  replacementOperationId?: string
+}
+
+interface LegacyModelUpload {
+  id?: string
+  resourceType?: string
+}
+
 interface SourceTarget { uploadUrl: string; method: 'PUT'; expiresInSeconds: number; sourceSize: string; sourceSha256: string }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+/** 服务端资源编号遵循有符号 64 位正整数范围，禁止用数值形式接收长编号。 */
+const isModelFileId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= 9223372036854775807n
 const states = new Set(['RECEIVING', 'QUEUED', 'VERIFYING_SOURCE', 'CONVERTING', 'VALIDATING', 'PUBLISHING', 'FAILED', 'COMMITTED', 'CANCELLED', 'CONFLICT', 'EXPIRED'])
-/** 编号不转Number，避免雪花编号精度丢失；仅COMMITTED原操作可以向表单释放可用编号。 */
+/** 编号始终保留字符串。已提交状态还必须携带有效修订，转换就绪可先交给目录表单。 */
 export function validateImportStatus(value: ModelImportStatus, operationId: string): ModelImportStatus {
-  if (!value || value.operationId !== operationId || typeof value.resourceId !== 'string' ||
-      !/^[1-9]\d{0,18}$/.test(value.resourceId) || BigInt(value.resourceId) > 9223372036854775807n ||
+  if (!value || value.operationId !== operationId || !isModelFileId(value.resourceId) ||
       !states.has(value.importStatus) || !['UPLOADING', 'VERIFYING', 'COMMITTED', 'FAILED', 'CANCELLED', 'CONFLICT', 'EXPIRED'].includes(value.operationStatus) ||
       !['gltf', 'glb'].includes(value.targetFormat)) throw new Error('模型导入响应格式错误')
   if (value.importStatus === 'COMMITTED' || value.operationStatus === 'COMMITTED') {
@@ -128,15 +142,14 @@ export async function receiveModelImport(body: ModelImportRequest, file: File, s
 }
 
 
-/** 自动等待封装在接口层，弹窗只消费转换完成或目录提交完成的结果。 */
-async function waitForModel(
+/** 上传轮询只等待转换完成，目录提交的最终结果由新增或编辑回执确认。 */
+async function waitForConvertedModel(
   initial: ModelImportStatus,
-  target: 'PUBLISHING' | 'COMMITTED',
   signal: AbortSignal,
 ): Promise<ModelImportStatus> {
   const deadline = Date.now() + 10 * 60 * 1000
   let state = validateImportStatus(initial, initial.operationId)
-  while (state.importStatus !== target && state.importStatus !== 'COMMITTED') {
+  while (state.importStatus !== 'PUBLISHING' && state.importStatus !== 'COMMITTED') {
     signal.throwIfAborted()
     if (['FAILED', 'CANCELLED', 'EXPIRED', 'CONFLICT'].includes(state.importStatus)) {
       throw new Error(state.errorMessage || '模型处理失败，请重新上传')
@@ -156,14 +169,14 @@ async function waitForModel(
   return state
 }
 
-/** 新增走单次业务上传，摘要、原包存储及转换入队由后端处理。 */
+/** 新增由后端处理原包和入队，继续传旧归属参数以进入受管上传分支。 */
 export async function uploadModel(
   file: File,
   resourceBelong: 'SYSTEM' | 'MINE',
   signal: AbortSignal,
   onStage: (text: string) => void,
   replaceResourceId?: string,
-): Promise<ModelImportStatus> {
+): Promise<ReadyModelUpload> {
   if (!/\.zip$/i.test(file.name) || file.size <= 0 || file.size > MODEL_IMPORT_MAX_BYTES) {
     throw new Error('请选择1字节至500MB的ZIP模型压缩包')
   }
@@ -181,40 +194,57 @@ export async function uploadModel(
     const data = new FormData()
     data.append('file', file)
     data.append('resourceBelong', resourceBelong)
-    const response = await request<{ code: number; msg?: string; data: ModelImportStatus }>(
+    const response = await request<{ code: number; msg?: string; data?: ModelImportStatus | LegacyModelUpload }>(
       MODEL_UPLOAD_URL, {
         method: 'POST', data, requestType: 'form', headers: getDim3dHeaders(), passAuth: true,
         skipPlatformPath: !DIM3D_ADMIN_API,
         signal, timeout: 10 * 60 * 1000,
       })
-    if (response.code !== 200 || !response.data || !uuid.test(response.data.operationId)) {
-      throw new Error(response.msg || '模型上传失败')
+    if (response?.code !== 200 || !response.data) {
+      throw new Error(response?.msg || '模型上传失败，未取得有效导入回执')
     }
-    state = response.data
+    signal.throwIfAborted()
+    const receipt = response.data
+    if (!('operationId' in receipt)) {
+      // 同步转换直接给出文件元信息。只有明确为模型且编号有效，才可跳过状态轮询。
+      if (receipt.resourceType !== 'MODEL' || !isModelFileId(receipt.id)) {
+        throw new Error('模型上传回执缺少有效文件编号')
+      }
+      return { modelFileId: receipt.id }
+    }
+    checkedId(receipt.operationId)
+    state = receipt
   }
   onStage('处理中')
-  return waitForModel(state, 'PUBLISHING', signal)
+  const converted = await waitForConvertedModel(state, signal)
+  return {
+    modelFileId: converted.resourceId,
+    ...(replaceResourceId ? { replacementOperationId: converted.operationId } : {}),
+  }
 }
 
-/** 保存复用模型新增入口，原操作编号保证响应丢失后再次保存仍只有一条目录。 */
+/** 上传只提供可信文件编号。正式提交统一走目录表单，空回执表示事务已经完成。 */
 export async function saveUploadedModel(
-  uploaded: ModelImportStatus,
-  directory: ModelImportDirectory,
+  uploaded: ReadyModelUpload,
+  directory: Omit<Dim3dModelForm, 'modelFileId'>,
   signal: AbortSignal,
-  replacing = false,
-): Promise<ModelImportStatus> {
-  checkedId(uploaded.operationId)
-  let state: ModelImportStatus
-  if (replacing) state = await publishModelImport(uploaded.operationId, uploaded.resourceId, directory, signal)
-  else {
-    const response = await request<{ code: number; msg?: string; data: ModelImportStatus }>(
-      `${DIM3D_MODEL_API_PREFIX}/dim3d/model/add`, {
-        method: 'POST', data: { ...directory, operationId: uploaded.operationId, resourceId: uploaded.resourceId },
-        headers: getDim3dHeaders(), passAuth: true, signal,
-      })
-    if (response.code !== 200 || !response.data) throw new Error(response.msg || '模型保存失败')
-    state = validateImportStatus(response.data, uploaded.operationId)
-    if (state.resourceId !== uploaded.resourceId) throw new Error('模型保存结果与上传资源不一致')
+  directoryId?: string,
+): Promise<void> {
+  if (!isModelFileId(uploaded.modelFileId)) throw new Error('模型文件编号无效')
+  const operationId = uploaded.replacementOperationId
+  if (operationId) {
+    checkedId(operationId)
+    if (!directoryId) throw new Error('缺少原模型目录编号')
   }
-  return waitForModel(state, 'COMMITTED', signal)
+  const body: Dim3dModelForm = { ...directory, modelFileId: uploaded.modelFileId }
+  const options = { signal, skipPlatformPath: !DIM3D_ADMIN_API, timeout: 10 * 60 * 1000 }
+  if (directoryId) {
+    await editDim3dModel(directoryId, body, {
+      ...options,
+      // 受管替换继续使用原操作和原资源编号；历史目录绑定新文件时无需传操作编号。
+      ...(operationId ? { params: { operationId } } : {}),
+    })
+  } else {
+    await addDim3dModel(body, options)
+  }
 }

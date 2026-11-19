@@ -19,8 +19,8 @@ it('鉴权创建、独立PUT和入队严格按顺序执行，PUT不携带业务�
   const result = await receiveModelImport(body, new File(['abc'], 'model.zip'), new AbortController().signal, vi.fn())
   expect(result.importStatus).toBe('QUEUED'); expect(result.resourceId).toBe('9007199254740993')
   expect(mocks.request.mock.calls.map(call => call[0])).toEqual([expect.stringMatching(/model-imports$/), expect.stringMatching(/source-target$/), expect.stringMatching(/submit$/)])
-  expect(mocks.request.mock.calls[0]?.[1]).toMatchObject({ data: body, passAuth: true, headers: { 'tenant-id': '2' } })
   expect(mocks.request.mock.calls[0]?.[0]).toMatch(/\/api\/dim3d\/model-imports$/)
+  expect(mocks.request.mock.calls[0]?.[1]).toMatchObject({ data: body, passAuth: true, headers: { 'tenant-id': '2' } })
   expect(mocks.request.mock.calls[0]?.[1].skipPlatformPath).toBeFalsy()
   expect(put.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit', method: 'PUT', redirect: 'error' })
   expect(put.mock.calls[0]?.[1].headers).toBeUndefined()
@@ -91,38 +91,43 @@ it('发布完整目录时保留封面字符串编号和整数分价格', async (
 })
 
 
-it('新增仅向业务后端上传文件并自动等待转换，保存自动等待提交', async () => {
+/** 上传时的兼容参数和点击保存时的最终归属应分别传给对应接口。 */
+it('上传等待转换，保存提交最终归属并校验空回执', async () => {
   const { uploadModel, saveUploadedModel } = await import('../modelImport')
   mocks.request.mockResolvedValueOnce(ok(state('PUBLISHING')))
   const signal = new AbortController().signal
   const file = new File(['abc'], '模型.zip')
   const uploaded = await uploadModel(file, 'MINE', signal, vi.fn())
-  expect(uploaded.importStatus).toBe('PUBLISHING')
-  expect(mocks.request.mock.calls[0]?.[0]).toMatch(/resource\/uploadConvert$/)
+  expect(uploaded).toEqual({ modelFileId: state('PUBLISHING').resourceId })
+  expect(mocks.request.mock.calls[0]?.[0]).toMatch(/\/api\/dim3d\/resource\/uploadConvert$/)
   const uploadOptions = mocks.request.mock.calls[0]?.[1]
   expect(uploadOptions.data.get('file')).toBe(file)
   expect(uploadOptions.data.get('resourceBelong')).toBe('MINE')
   expect(uploadOptions.headers['Content-Type']).toBeUndefined()
-  mocks.request.mockResolvedValueOnce(ok(state('COMMITTED')))
-  await expect(saveUploadedModel(uploaded, { modelName: '模型', category: 'sample' }, signal)).resolves.toMatchObject({ importStatus: 'COMMITTED' })
-  expect(mocks.request.mock.calls[1]?.[0]).toMatch(/model\/add$/)
-  expect(mocks.request.mock.calls[1]?.[1].data).toMatchObject({ operationId: id, resourceId: uploaded.resourceId })
+  expect(uploadOptions.skipPlatformPath).toBe(false)
+  mocks.request.mockResolvedValueOnce({ code: 200, data: null })
+  const directory = { modelName: '模型', category: 'sample', resourceBelong: 'SYSTEM' as const, isPaid: 'FREE' as const }
+  await expect(saveUploadedModel(uploaded, directory, signal)).resolves.toBeUndefined()
+  expect(mocks.request.mock.calls[1]?.[0]).toMatch(/\/api\/dim3d\/model\/add$/)
+  expect(mocks.request.mock.calls[1]?.[1].skipPlatformPath).toBe(false)
+  expect(mocks.request.mock.calls[1]?.[1].data).toEqual({
+    ...directory, modelFileId: uploaded.modelFileId,
+  })
+  // 旧版本的异步任务回执无法证明目录事务已完成。
+  mocks.request.mockResolvedValueOnce(ok(state('PUBLISHING')))
+  await expect(saveUploadedModel(uploaded, directory, signal)).rejects.toThrow('回执无效')
 })
 
 
-it('转换和保存自动轮询到最终结果，关闭时释放等待', async () => {
-  const { uploadModel, saveUploadedModel } = await import('../modelImport')
+it('转换自动轮询到文件就绪，关闭时释放等待', async () => {
+  const { uploadModel } = await import('../modelImport')
   vi.useFakeTimers()
   mocks.request.mockResolvedValueOnce(ok(state('QUEUED'))).mockResolvedValueOnce(ok(state('PUBLISHING')))
   const controller = new AbortController()
   const pending = uploadModel(new File(['abc'], '模型.zip'), 'SYSTEM', controller.signal, vi.fn())
   await vi.advanceTimersByTimeAsync(1500)
   const uploaded = await pending
-  expect(uploaded.importStatus).toBe('PUBLISHING')
-  mocks.request.mockResolvedValueOnce(ok(state('PUBLISHING'))).mockResolvedValueOnce(ok(state('COMMITTED')))
-  const saving = saveUploadedModel(uploaded, { modelName: '模型', category: 'sample' }, controller.signal)
-  await vi.advanceTimersByTimeAsync(1500)
-  expect((await saving).committedRevision).toBe('1')
+  expect(uploaded).toEqual({ modelFileId: state('PUBLISHING').resourceId })
   mocks.request.mockResolvedValueOnce(ok(state('QUEUED')))
   const cancelled = uploadModel(new File(['abc'], '模型.zip'), 'MINE', controller.signal, vi.fn())
   const rejection = expect(cancelled).rejects.toBeDefined()
@@ -130,6 +135,41 @@ it('转换和保存自动轮询到最终结果，关闭时释放等待', async (
   controller.abort()
   await rejection
   expect(vi.getTimerCount()).toBe(0)
+})
+
+/** 受管替换带原操作确认，历史目录上传后改绑新文件；两者都提交同一目录表单。 */
+it('替换通过目录编辑保存并保留错误原文供原操作重试', async () => {
+  const { saveUploadedModel } = await import('../modelImport')
+  const signal = new AbortController().signal
+  const modelFileId = state('PUBLISHING').resourceId
+  const uploaded = { modelFileId, replacementOperationId: id }
+  const form = { modelName: '模型', category: 'sample', resourceBelong: 'MINE' as const, isPaid: 'PAID' as const, price: 125 }
+  mocks.request.mockResolvedValueOnce({ code: 503, msg: '使用相同参数重试', data: null })
+  await expect(saveUploadedModel(uploaded, form, signal, '91'))
+    .rejects.toThrow('使用相同参数重试')
+  mocks.request.mockResolvedValueOnce({ code: 200, data: null })
+  await saveUploadedModel(uploaded, form, signal, '91')
+  expect(mocks.request.mock.calls[1]?.[0]).toMatch(/model\/edit\/91$/)
+  expect(mocks.request.mock.calls[1]?.[1]).toMatchObject({
+    method: 'PUT', params: { operationId: id }, data: { ...form, modelFileId },
+  })
+  mocks.request.mockResolvedValueOnce({ code: 200, data: null })
+  await saveUploadedModel({ modelFileId }, form, signal, '92')
+  expect(mocks.request.mock.calls[2]?.[1].params).toBeUndefined()
+})
+
+/** 同步回执只能使用模型文件编号，历史相对路径不会进入目录保存表单。 */
+it('兼容同步转换回执并拒绝非模型文件', async () => {
+  const { uploadModel } = await import('../modelImport')
+  const signal = new AbortController().signal
+  const file = new File(['abc'], '模型.zip')
+  const modelFileId = '9007199254740993'
+  mocks.request.mockResolvedValueOnce(ok({ id: modelFileId, resourceType: 'MODEL', resourceRelativePath: 'models/test.glb' }))
+  await expect(uploadModel(file, 'MINE', signal, vi.fn())).resolves.toEqual({ modelFileId })
+  expect(mocks.request).toHaveBeenCalledTimes(1)
+
+  mocks.request.mockResolvedValueOnce(ok({ id: modelFileId, resourceType: 'IMAGE' }))
+  await expect(uploadModel(file, 'MINE', signal, vi.fn())).rejects.toThrow('有效文件编号')
 })
 
 it('处理失败和状态改绑不会显示上传成功', async () => {

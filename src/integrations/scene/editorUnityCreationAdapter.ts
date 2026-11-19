@@ -3,6 +3,7 @@ import {
   createCreateObjectCommand,
   mapEditorCreationToGisSceneObject,
   mapEditorCreationToSceneObject,
+  type PickWorldPoint,
   type ScreenPoint,
   type SceneObject,
   type ViewportHost,
@@ -64,36 +65,40 @@ export async function createEditorUnityObject(
   const { host } = context
   const store = host.getStore()
   const scene = store.getScene()
-  let resolvedPosition: { longitude: number; latitude: number; height: number } | null = null
-  if (scene.type === 'gis') {
-    const screenPoint = context.toRuntimeScreenPoint?.(point)
-    if (screenPoint) {
-      try {
-        const picked = await host.getRuntime().pickWorldPosition(screenPoint)
-        const position = picked?.kind === 'geo' ? picked.position : undefined
-        if (position && position.every(Number.isFinite)) {
-          resolvedPosition = { longitude: position[0], latitude: position[1], height: position[2] }
-        }
-      } catch (error) {
-        // Unity 未实现拾取能力或射线没有落点时，仍按场景默认坐标创建，不阻断整个拖拽入口。
-        appLogger.warn('EditorUnityCreation', 'GIS 拖放落点读取失败，已回退到场景默认坐标', error)
-      }
+  const screenPoint = context.toRuntimeScreenPoint?.(point)
+  let position: PickWorldPoint['position']
+  if (screenPoint) {
+    try {
+      const picked = await host.getRuntime().pickWorldPosition(screenPoint)
+      if (picked?.kind === (scene.type === 'gis' ? 'geo' : 'local') &&
+        picked.position?.length === 3 && picked.position.every(Number.isFinite)) position = picked.position
+    } catch (error) {
+      // 普通场景应将定位错误告知用户。地理场景保留原有的默认落点行为。
+      if (scene.type !== 'gis') throw error
+      appLogger.warn('EditorUnityCreation', 'GIS 拖放落点读取失败，已回退到场景默认坐标', error)
     }
   }
+  if (!context.isActive() || store.getScene().id !== scene.id) return null
+  if (scene.type === 'local3d' && context.toRuntimeScreenPoint && !position) {
+    throw new Error('释放位置没有可用的地面落点，请拖到画面中的地面后重试')
+  }
+  const resolvedPosition = position && { longitude: position[0], latitude: position[1], height: position[2] }
   const object = scene.type === 'gis'
     ? mapEditorCreationToGisSceneObject(model, {
-        point, scene, resolvedPosition, useSceneDefaultPositionWhenUnresolved: true,
+        point, scene, resolvedPosition: resolvedPosition ?? null, useSceneDefaultPositionWhenUnresolved: true,
       })
     : mapEditorCreationToSceneObject(model, { point })
   if (!object) throw new Error('无法创建该三维资源')
 
+  // 创建命令写入真实本地坐标，渲染、保存和重做共享同一落点。
+  if (position && object.transform.kind === 'local') object.transform.position = position
   // 成功拾取时保留地表经纬高；回退场景原点时清除历史视觉偏移，保存值与默认海拔一致。
-  if (!resolvedPosition && object.type === 'model' && object.transform.kind === 'geo' && scene.coordinateSystem.kind === 'wgs84') {
+  if (!position && object.type === 'model' && object.transform.kind === 'geo' && scene.coordinateSystem.kind === 'wgs84') {
     object.transform.height = scene.coordinateSystem.defaultHeight
   }
   object.metadata = {
     ...object.metadata,
-    unityDropMapping: resolvedPosition ? 'runtime-world-position' : 'scene-default',
+    unityDropMapping: position ? 'runtime-world-position' : 'scene-default',
   }
   if ((model.modelType === DRAG_MODEL_ENUM.Model || model.modelType === DRAG_MODEL_ENUM.CustomModel)
     && (!model.resourceAsset?.id?.trim() || !object.asset?.url)) {

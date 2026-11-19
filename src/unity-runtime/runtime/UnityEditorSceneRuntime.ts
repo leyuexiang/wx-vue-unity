@@ -28,6 +28,7 @@ import type { UnityCameraConfig, UnityInteractionActionDto, UnitySessionInitiali
 import { getUnityCameraConfig } from './editorCameraConfig'
 import type { VegetationSystemDefinition } from '@/scene-platform/core/types'
 import { checkVegetationTilesForUnity } from './vegetationTilesPreflight'
+import { pickLocalGroundPosition } from './pickLocalGroundPosition'
 
 type VegetationSurfacePoint = [longitude: number, latitude: number, height: number]
 type ViewportPoint = [x: number, y: number]
@@ -443,12 +444,36 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.unity?.setSelection(selected && this.isDeferredInUnity(selected) ? null : this.selectedObjectId)
   }
 
-  /** GIS 拖放复用 Unity 相机屏幕射线；按舞台容器尺寸归一化，兼容缩放后的浏览器画布。 */
+  /** 地理场景交给引擎拾取地形，普通场景读取当前相机并定位到本地地面。 */
   override async pickWorldPosition(point: ScreenPoint): Promise<PickWorldPoint | null> {
     const container = this.renderContainer
     const unity = this.unity
-    if (this.type !== 'gis' || !container || !unity || this.isDisposed) return null
-    return unity.pickWorldPosition(point, { width: container.clientWidth, height: container.clientHeight })
+    if (!container || !unity || this.isDisposed) return null
+    const width = container.clientWidth
+    const height = container.clientHeight
+    if (this.type === 'gis') return unity.pickWorldPosition(point, { width, height })
+    if (this.type !== 'local3d' || width <= 0 || height <= 0) return null
+
+    let frame = { width, height }
+    let viewport = frame
+    let framePoint = point
+    const video = this.video
+    if (video?.videoWidth && video.videoHeight) {
+      // 云视频等比居中，先剔除画面两侧或上下的留白，以实际显示区域计算视线。
+      frame = { width: video.videoWidth, height: video.videoHeight }
+      const scale = Math.min(width / frame.width, height / frame.height)
+      viewport = { width: frame.width * scale, height: frame.height * scale }
+      framePoint = { x: point.x - (width - viewport.width) / 2, y: point.y - (height - viewport.height) / 2 }
+    } else {
+      // 网页画布拉伸铺满舞台，射线的宽高比取实际渲染缓冲，输入仍按显示区域归一化。
+      const canvas = container.querySelector('canvas')
+      if (canvas?.width && canvas.height) frame = { width: canvas.width, height: canvas.height }
+    }
+    if (!(framePoint.x >= 0 && framePoint.x <= viewport.width &&
+      framePoint.y >= 0 && framePoint.y <= viewport.height)) return null
+    const camera = await unity.controlCamera({ action: 'get' })
+    if (this.isDisposed || this.unity !== unity) return null
+    return pickLocalGroundPosition(framePoint, viewport, frame, camera)
   }
 
   /** 编辑预览切换必须等待 Unity 确认，保证业务点击与编辑拾取不会同时生效。 */

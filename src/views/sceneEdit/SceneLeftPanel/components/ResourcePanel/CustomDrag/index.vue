@@ -20,12 +20,13 @@
             :key="item.key"
           >
             <div class="scene-edit-resource-grid">
+              <!-- 两条目录可以共用同一模型文件，卡片按目录编号独立渲染。 -->
               <div
                 draggable="true"
                 @dragstart="() => onDragStart(base)"
                 @dragend="onDragEnd"
                 v-for="base in item.children"
-                :key="base.filePath"
+                :key="base.resourceId"
                 class="scene-edit-resource-card"
               >
                 <div class="scene-edit-resource-card__body">

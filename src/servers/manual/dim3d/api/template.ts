@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_OPERATION_API_PREFIX } from './constants'
+import { DIM3D_OPERATION_API_PREFIX, DIM3D_PLATFORM_API_PREFIX } from './constants'
 
 /** 模板所属业务类型。两个值由产品固定，不再依赖系统字典接口动态下发。 */
 export const DIM3D_TEMPLATE_TYPE = Object.freeze({
@@ -140,14 +140,15 @@ export interface Dim3dSceneTemplateSnapshotRequest {
 }
 
 /** 场景快照模板另存、目录和回读使用的独立入口，避免改变旧文件型模板协议。 */
-const DIM3D_SCENE_TEMPLATE_API_PREFIX = `${DIM3D_OPERATION_API_PREFIX}/dim3d/scene/template`
+// 快照模板属于场景平台入口，文件型模板保留其独立目录协议。
+const DIM3D_SCENE_TEMPLATE_API_PREFIX = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/scene/template`
 
 export function saveAsDim3dSceneTemplateSnapshot(
   body: Dim3dSceneTemplateSnapshotRequest,
   options?: Record<string, unknown>,
 ) {
   return request<{ data?: Dim3dTemplateDetailVo; code?: number; msg?: string }>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/scene/saveAsTemplateFromSnapshot`,
+    `${DIM3D_PLATFORM_API_PREFIX}/dim3d/scene/saveAsTemplateFromSnapshot`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },

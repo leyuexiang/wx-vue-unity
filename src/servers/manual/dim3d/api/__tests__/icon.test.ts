@@ -11,7 +11,7 @@ vi.mock('../auth', () => ({
 }))
 
 // 请求契约测试固定同源前缀，避免开发者本机环境文件改变测试断言。
-vi.mock('../constants', () => ({ DIM3D_OPERATION_API_PREFIX: '/api' }))
+vi.mock('../constants', () => ({ DIM3D_PLATFORM_API_PREFIX: '/api' }))
 
 import { addDim3dIcon, editDim3dIcon, pageDim3dIcon } from '../icon'
 

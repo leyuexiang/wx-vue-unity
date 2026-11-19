@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_ADMIN_API, DIM3D_MODEL_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_PLATFORM_API_PREFIX } from './constants'
 
 /** 模型压缩包上传成功后，后续模型写入接口只消费这个资源编号。 */
 export interface Dim3dUploadResource {
@@ -18,7 +18,7 @@ export interface Dim3dUploadConvertResponse {
 }
 
 /** 上传转换接口由统一三维服务器根地址派生，服务器迁移时无需修改本文件。 */
-const DIM3D_UPLOAD_URL = `${DIM3D_MODEL_API_PREFIX}/dim3d/resource/uploadConvert`
+const DIM3D_UPLOAD_URL = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/resource/uploadConvert`
 
 const getUploadHeaders = () => {
   return getDim3dHeaders()

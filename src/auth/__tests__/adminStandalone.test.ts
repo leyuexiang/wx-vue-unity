@@ -59,9 +59,9 @@ describe('本项目148认证', () => {
 
   /** 当前管理模式的模型入口也按认证端生成路径，并保留分页参数。 */
   it('按运营端和租户端分派模型分页', async () => {
-    const { DIM3D_MODEL_API_PREFIX } = await import('@/servers/manual/dim3d/api/constants')
+    const { DIM3D_PLATFORM_API_PREFIX } = await import('@/servers/manual/dim3d/api/constants')
     const { resolvePlatformApiUrl } = await import('../platformApiPathResolver')
-    const request = `${DIM3D_MODEL_API_PREFIX}/dim3d/model/page?pageNum=2`
+    const request = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/model/page?pageNum=2`
     expect(resolvePlatformApiUrl(request, 'operation'))
       .toBe('https://service.invalid/api/operation/dim3d/model/page?pageNum=2')
     expect(resolvePlatformApiUrl(request, 'tenant'))

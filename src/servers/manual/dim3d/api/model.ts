@@ -1,6 +1,9 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_MODEL_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_PLATFORM_API_PREFIX } from './constants'
+
+/** 模型目录使用平台网关地址，请求层按当前登录端补全平台段。 */
+const MODEL_URL = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/model`
 
 /** 模型管理接口的资源归属枚举，值必须与 OpenAPI 契约一致。 */
 export type Dim3dResourceBelong = 'SYSTEM' | 'MINE'
@@ -33,11 +36,12 @@ export interface Dim3dModelPageVo {
   resourceBelongName?: string
   isPaid?: Dim3dModelPaidState
   isPaidName?: string
-  priceYuan?: number
+  /** 正式接口返回两位小数的元价格字符串，旧服务仍可能返回数字。 */
+  priceYuan?: string | number | null
   coverImageId?: string
   /** 受控发布事务维护的稳定编号，列表和详情均可返回；旧目录没有关联。 */
   resourceId?: string | number | null
-  /** 模型文件资源编号；编辑器拖拽时用它查询资源服务的真实文件路径。 */
+  /** 目录统一用字符串返回文件编号，访问方式由独立授权接口确认。 */
   modelFileId?: string
   /** 部分网关会在详情或资源扩展字段中直接返回可预览路径，作为兼容字段接收。 */
   modelFilePath?: string
@@ -45,7 +49,11 @@ export interface Dim3dModelPageVo {
   resourceRelativePath?: string
   status?: Dim3dModelStatus
   statusName?: string
+  createBy?: string | null
+  createByName?: string | null
   createTime?: string
+  updateBy?: string | null
+  updateByName?: string | null
   updateTime?: string
 }
 
@@ -126,7 +134,7 @@ export interface Dim3dModelForm {
   resourceBelong: Dim3dResourceBelong
   isPaid: Dim3dModelPaidState
   price?: number
-  coverImageId?: string
+  coverImageId?: string | null
   modelFileId: string
 }
 
@@ -136,13 +144,21 @@ export interface Dim3dVoidResponse {
   data?: null
 }
 
+/** 管理端四类目录写入都等事务完成才给空回执，避免把旧异步回执当作已保存。 */
+function confirmModelWrite(response: Dim3dVoidResponse): Dim3dVoidResponse {
+  if (response?.code !== 200 || (DIM3D_ADMIN_API && response.data != null)) {
+    throw new Error(response?.msg || '模型操作回执无效')
+  }
+  return response
+}
+
 /** 分页查询模型列表，并兼容旧网关可能附加的 data 包装层。 */
 export async function pageDim3dModel(
   params: Dim3dModelPageParams,
   options?: Record<string, unknown>,
 ) {
   const response = await request<Dim3dModelPageResponse | Dim3dModelPageEnvelope>(
-    `${DIM3D_MODEL_API_PREFIX}/dim3d/model/page`,
+    `${MODEL_URL}/page`,
     {
       method: 'GET',
       params,
@@ -161,13 +177,13 @@ export async function pageDim3dModel(
     code?: number
     msg?: string
   }
-  // 请求拦截器通常会提前拒绝业务 401；保留这一层防线，兼容直接调用适配器、
-  // 代理绕过拦截器或后端返回 HTTP 200 + 业务 403 的场景。
-  if (payload.code === 401 || payload.code === 403) {
+  // 根级分页同时带业务状态，失败时即使附有空 rows 也不算成功查询。
+  if (typeof payload.code === 'number' && payload.code !== 200) {
     throw createDim3dModelPageError(
       payload.code,
       payload.msg ||
-        (payload.code === 401 ? '模型列表接口未授权，请配置有效令牌' : '模型列表接口禁止访问'),
+        (payload.code === 401 ? '模型列表接口未授权，请配置有效令牌' :
+          payload.code === 403 ? '模型列表接口禁止访问' : '模型列表查询失败'),
     )
   }
   // 兼容当前网关的根级分页、标准 data 分页，以及代理额外包裹的 data.data 分页。
@@ -191,7 +207,7 @@ export async function pageDim3dModel(
 
 /** 查询模型详情，供后续编辑表单接入复用。 */
 export function getDim3dModelInfo(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dModelDetailResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/info/${id}`, {
+  return request<Dim3dModelDetailResponse>(`${MODEL_URL}/info/${encodeURIComponent(id)}`, {
     method: 'GET',
     headers: getDim3dHeaders(),
     passAuth: true,
@@ -199,40 +215,40 @@ export function getDim3dModelInfo(id: string, options?: Record<string, unknown>)
   })
 }
 
-/** 新增模型，文件上传和 modelFileId 生成由 MUI-405 的上传适配层负责。 */
+/** 新增提交完整目录表单，文件编号取自已就绪的上传回执。 */
 export function addDim3dModel(body: Dim3dModelForm, options?: Record<string, unknown>) {
-  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/add`, {
+  return request<Dim3dVoidResponse>(`${MODEL_URL}/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     data: body,
     passAuth: true,
     ...(options || {}),
-  })
+  }).then(confirmModelWrite)
 }
 
-/** 编辑模型。模型文件替换前必须先取得新的 modelFileId。 */
+/** 编辑保留目录编号。原位替换沿用文件编号并在查询参数中提交替换操作编号。 */
 export function editDim3dModel(
   id: string,
   body: Dim3dModelForm,
   options?: Record<string, unknown>,
 ) {
-  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/edit/${id}`, {
+  return request<Dim3dVoidResponse>(`${MODEL_URL}/edit/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     data: body,
     passAuth: true,
     ...(options || {}),
-  })
+  }).then(confirmModelWrite)
 }
 
 /** 删除模型。 */
 export function removeDim3dModel(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/remove/${id}`, {
+  return request<Dim3dVoidResponse>(`${MODEL_URL}/remove/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: getDim3dHeaders(),
     passAuth: true,
     ...(options || {}),
-  })
+  }).then(confirmModelWrite)
 }
 
 /** 切换模型上线或下线状态。 */
@@ -241,10 +257,10 @@ export function changeDim3dModelStatus(
   id: string,
   options?: Record<string, unknown>,
 ) {
-  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/${status}/${id}`, {
+  return request<Dim3dVoidResponse>(`${MODEL_URL}/${status}/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: getDim3dHeaders(),
     passAuth: true,
     ...(options || {}),
-  })
+  }).then(confirmModelWrite)
 }

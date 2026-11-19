@@ -152,6 +152,16 @@
                 <span>{{ coverUploading ? '上传中' : '上传图片' }}</span>
               </div>
             </el-upload>
+            <!-- 共用封面不能随目录变更归属，可先解除关联，再和目录表单一起保存。 -->
+            <el-button
+              v-if="ruleForm.coverImageId"
+              link
+              type="primary"
+              :disabled="coverUploading || submitting"
+              @click="clearModelCover"
+            >
+              移除封面
+            </el-button>
             <p class="model-dialog__hint">注意:点击上传封面图片，支持jpg/png/webp,不超过5MB</p>
           </div>
         </el-form-item>
@@ -233,14 +243,14 @@ import {
 } from 'element-plus'
 import { to } from '@/utils/asyncHandler'
 import {
-  addDim3dModel,
   editDim3dModel,
   getDim3dModelInfo,
   type Dim3dModelForm,
   type Dim3dModelDetailVo,
 } from '@/servers/manual/dim3d/api/model'
 import { getDim3dOssFileById, uploadDim3dOssFile } from '@/servers/manual/dim3d/api/oss'
-import { MODEL_UPLOAD_URL, MODEL_IMPORT_MAX_BYTES, uploadModel, saveUploadedModel, type ModelImportStatus } from '@/servers/manual/dim3d/api/modelImport'
+import { MODEL_UPLOAD_URL, MODEL_IMPORT_MAX_BYTES, uploadModel, saveUploadedModel, type ReadyModelUpload } from '@/servers/manual/dim3d/api/modelImport'
+import { getDim3dModelFileAccess } from '@/servers/manual/dim3d/api/resource'
 import { modelPriceInCents } from '@/utils/modelImport/price'
 import { getStandaloneSessionVersion } from '@/auth/standalone'
 import type { TransferListItem } from './index.vue'
@@ -294,13 +304,9 @@ const modelFileUploadRef = ref<UploadInstance>()
 const modelFileUploading = ref(false)
 // 上传结果只属于当前弹窗，内部阶段和轮询交给接口适配处理。
 const importMessage = ref('')
-const importState = shallowRef<ModelImportStatus>()
-const linkedResourceId = ref<string>()
-const readyToPublish = computed(() => importState.value?.importStatus === 'PUBLISHING')
+const uploadedModel = shallowRef<ReadyModelUpload>()
 let importController: AbortController | undefined
 let importGeneration = 0
-let importSessionVersion = 0
-let importScope: RuleForm['resourceBelong'] | undefined
 const stopImportWait = () => { importGeneration++; importController?.abort() }
 onUnmounted(stopImportWait)
 const submitting = ref(false)
@@ -342,9 +348,9 @@ const rules = reactive<FormRules<RuleForm>>({
     },
   ],
   fileList: [{
-    validator: (_rule, value, callback) => {
-      // 产物校验完成即可提交目录字段，只有原操作提交后才显示发布成功。
-      if (readyToPublish.value || value?.length) return callback()
+    validator: (_rule, _value, callback) => {
+      // 只有已就绪的上传回执或原文件编号才算有效，上传控件中的临时条目不能提交。
+      if (uploadedModel.value || ruleForm.modelFileId) return callback()
       callback(new Error('请上传模型文件'))
     },
     trigger: 'change',
@@ -367,7 +373,7 @@ const currentCover = computed<CoverFile | undefined>(() => {
  * 模型上传控件关闭了 Element Plus 默认文件列表，必须把已上传文件名直接渲染到拖拽区。
  * 这样上传成功、编辑回显和重新选择三种状态都能在同一个区域给出明确反馈。
  */
-const modelFileUploaded = computed(() => Boolean((ruleForm.modelFileId || readyToPublish.value) && ruleForm.fileList.length))
+const modelFileUploaded = computed(() => Boolean((ruleForm.modelFileId || uploadedModel.value) && ruleForm.fileList.length))
 const modelFileUploadTitle = computed(() => {
   if (modelFileUploading.value) return importMessage.value || '模型导入处理中'
   const fileName = ruleForm.fileList[0]?.name?.trim()
@@ -445,7 +451,6 @@ watch(
   async ([record, visible]) => {
     // 关闭弹窗时不重置业务表单；下次打开同一条记录仍需重新回填。
     if (!visible) { stopImportWait(); modelFileUploading.value = false; return }
-    linkedResourceId.value = undefined
     if (!record) {
       resetRuleForm()
       return
@@ -461,17 +466,15 @@ watch(
     const resourceId = String(record.id ?? '').trim()
     if (resourceId && !resourceId.startsWith('resource-')) {
       const [error, response] = await to(getDim3dModelInfo(resourceId))
-      if (!error && requestId === editInitRequestId && props.visible) {
+      if (!error && response.code === 200 && response.data?.id === resourceId &&
+          requestId === editInitRequestId && props.visible) {
         detail = response?.data
       }
     }
     if (requestId !== editInitRequestId || !props.visible) return
 
-    const { resourceId: linked, ...detailFields } = detail ?? { resourceId: undefined }
+    const { resourceId: managedFileId, ...detailFields } = detail ?? { resourceId: undefined }
     const source = { ...legacyRecord, ...detailFields }
-    // 旧目录详情可能将安全整数编码为数字。统一成字符串后再进入受控导入契约。
-    const linkedId = typeof linked === 'string' || (typeof linked === 'number' && Number.isSafeInteger(linked)) ? String(linked) : ''
-    if (/^[1-9]\d{0,18}$/.test(linkedId) && BigInt(linkedId) <= 9223372036854775807n) linkedResourceId.value = linkedId
     const coverImageId = String(source.coverImageId || source.bannerAddress || '').trim()
     // coverImageId 是编号而不是 MinIO 路径；必须经 OSS 查询解析为真实 URL 后才可回显。
     const coverUrl = await resolveExistingCoverUrl(coverImageId, source.imgPath)
@@ -487,14 +490,15 @@ watch(
           ]
         : []
     const paid = source.isPaid === 'PAID' || source.paymentLabel?.startsWith('¥')
-    const modelFileId = String(source.modelFileId || '').trim()
+    const modelFileId = String(managedFileId ?? source.modelFileId ?? '').trim()
     Object.assign(ruleForm, {
       modelName: source.modelName || source.name || '',
       modelDesc: source.modelDesc || (source.description === '--' ? '' : source.description) || '',
       category: getCategoryValue(source),
       resourceBelong: normalizeResourceBelong(source.resourceBelong),
       isPaid: paid ? 'PAID' : 'FREE',
-      price: source.priceYuan,
+      // 编辑回显保留元价格字符串，提交时再精确换算整数分。
+      price: source.priceYuan ?? undefined,
       coverImageId: coverImageId || void 0,
       modelFileId: modelFileId || void 0,
       coverList,
@@ -529,6 +533,13 @@ const beforeAvatarUpload: UploadProps['beforeUpload'] = (rawFile) => {
 const handlePictureCardPreview: UploadProps['onPreview'] = (uploadFile) => {
   dialogImageUrl.value = uploadFile.url || ''
   dialogVisible.value = true
+}
+
+/** 清除表单关联，保存时以空值通知后端解除绑定，已有文件由服务端统一管理。 */
+const clearModelCover = () => {
+  ruleForm.coverImageId = undefined
+  ruleForm.coverList = []
+  coverUploadRef.value?.clearFiles()
 }
 
 const handleCoverUpload = async (options: UploadRequestOptions) => {
@@ -614,34 +625,37 @@ const handleModelFileUpload = async (options: UploadRequestOptions) => {
   if (modelFileUploading.value || submitting.value) return
   const checked = checkFile(options.file as UploadRawFile)
   if (!checked.success) { options.onError?.(createUploadError(new Error(checked.msg), options)); return }
-  if (props.editRecord && !linkedResourceId.value) {
-    options.onError?.(createUploadError(new Error('当前历史模型暂不支持文件替换'), options))
+  if (props.editRecord && !ruleForm.modelFileId) {
+    options.onError?.(createUploadError(new Error('缺少原模型文件编号，请重新打开编辑'), options))
     return
   }
   stopImportWait()
   const generation = importGeneration
-  importSessionVersion = getStandaloneSessionVersion()
-  const sessionVersion = importSessionVersion
+  const sessionVersion = getStandaloneSessionVersion()
   importController = new AbortController()
   const active = () => generation === importGeneration && sessionVersion === getStandaloneSessionVersion()
-  const previous = importState.value
+  const previous = uploadedModel.value
   const previousFiles = [...ruleForm.fileList].filter(file => file.status === 'success')
   modelFileUploading.value = true
   try {
     const scope = normalizeResourceBelong(ruleForm.resourceBelong)
-    const state = await uploadModel(options.file as File, scope, importController.signal,
-      text => { if (active()) importMessage.value = text }, props.editRecord ? linkedResourceId.value : undefined)
+    const signal = importController.signal
+    const original = props.editRecord && ruleForm.modelFileId
+      ? await getDim3dModelFileAccess(ruleForm.modelFileId, signal) : undefined
     if (!active()) return
-    importScope = scope
-    importState.value = state
-    ruleForm.fileList = [{ name: options.file.name, status: 'success', response: { data: state.resourceId } }]
+    // 原受管资源使用修订替换，历史文件上传新资源后按同一目录编辑契约改绑。
+    const uploaded = await uploadModel(options.file as File, scope, signal,
+      text => { if (active()) importMessage.value = text }, original?.accessMode === 'MANAGED' ? original.id : undefined)
+    if (!active()) return
+    uploadedModel.value = uploaded
+    ruleForm.fileList = [{ name: options.file.name, status: 'success', response: { data: uploaded.modelFileId } }]
     ruleFormRef.value?.clearValidate('fileList')
     importMessage.value = '上传成功'
-    options.onSuccess?.({ code: 200, data: state })
+    options.onSuccess?.({ code: 200, data: uploaded.modelFileId })
   } catch (error) {
     if (!active()) return
     // 新文件失败时保留上一份已就绪的结果和业务表单，允许再次选择文件。
-    importState.value = previous
+    uploadedModel.value = previous
     ruleForm.fileList = previousFiles
     importMessage.value = error instanceof Error ? error.message : '模型上传失败，请重新选择文件'
     options.onError?.(createUploadError(error, options))
@@ -656,6 +670,8 @@ const getCategoryCode = (categoryId?: number) =>
 const handleConfirm = async (formEl?: FormInstance) => {
   if (!formEl || submitting.value || coverUploading.value || modelFileUploading.value) return
   await formEl.validate(async (valid) => {
+    // 两次点击可能同时进入异步校验，只有第一个通过校验的请求能提交。
+    if (submitting.value || !props.visible) return
     if (!valid) {
       ElMessage.error('请填写完整信息')
       return
@@ -683,70 +699,61 @@ const handleConfirm = async (formEl?: FormInstance) => {
       ElMessage.error('分类接口未返回有效分类编码')
       return
     }
-    if (importState.value) {
-      const state = importState.value
-      if (!readyToPublish.value || !state || normalizeResourceBelong(resourceBelong) !== importScope) {
-        ElMessage.warning('请等待产物校验，并保持资源归属与上传时一致')
-        return
-      }
-      if (modelName.trim().length < 2) {
-        ElMessage.warning('模型名称至少需要两个字符')
-        return
-      }
-      submitting.value = true
-      importController = new AbortController()
-      const generation = importGeneration
-      try {
-        const result = await saveUploadedModel(state, {
-          // 明确提交完整表单，空描述和空封面可清空旧值，金额按整数分传输。
-          modelName: modelName.trim(), category: categoryCode, modelDesc: modelDesc.trim(),
-          coverImageId: coverImageId || null, isPaid: normalizedIsPaid,
-          price: normalizedIsPaid === 'PAID' ? modelPriceInCents(price) : 0,
-        }, importController.signal, Boolean(props.editRecord))
-        if (generation !== importGeneration || getStandaloneSessionVersion() !== importSessionVersion) return
-        importState.value = result
-        ElMessage.success(props.editRecord ? '模型修改成功' : '模型新增成功')
-        emit('updateList')
-        handelCancel(formEl)
-      } catch (error) {
-        if (generation === importGeneration) ElMessage.error(error instanceof Error ? error.message : '发布确认失败')
-      } finally { if (generation === importGeneration) submitting.value = false }
-      return
-    }
-    if (!modelFileId) {
+    const uploaded = uploadedModel.value
+    if (!uploaded && !modelFileId) {
       ElMessage.error('请先上传模型文件')
       return
     }
-
-    const form: Dim3dModelForm = {
-      modelName: modelName.trim(),
-      modelDesc: modelDesc.trim() || void 0,
-      category: categoryCode,
-      resourceBelong: normalizeResourceBelong(resourceBelong),
-      isPaid: normalizedIsPaid,
-      price: normalizedIsPaid === 'PAID' ? modelPriceInCents(price) : 0,
-      coverImageId: coverImageId || void 0,
-      modelFileId,
+    const name = modelName.trim()
+    if (name.length < 2) {
+      ElMessage.warning('模型名称至少需要两个字符')
+      return
     }
-
-    const resourceId = props.editRecord?.id
-    if (props.editRecord && (resourceId === undefined || resourceId === null)) {
+    const directoryId = String(props.editRecord?.id ?? '')
+    if (props.editRecord && !/^[1-9]\d{0,18}$/.test(directoryId)) {
       ElMessage.error('缺少模型编号，无法修改')
       return
     }
 
-    submitting.value = true
-    const [err] = await to(
-      props.editRecord ? editDim3dModel(String(resourceId), form) : addDim3dModel(form),
-    )
-    submitting.value = false
-    if (err) return
+    // 上传回执提供文件编号，最终归属以点击保存时的表单为准。目录编辑与上传保存使用同一套字段。
+    const directory: Omit<Dim3dModelForm, 'modelFileId'> = {
+      modelName: name,
+      modelDesc: modelDesc.trim(),
+      category: categoryCode,
+      resourceBelong: normalizeResourceBelong(resourceBelong),
+      isPaid: normalizedIsPaid,
+      price: normalizedIsPaid === 'PAID' ? modelPriceInCents(price) : 0,
+      coverImageId: coverImageId || null,
+    }
 
-    ElMessage.success(props.editRecord ? '模型修改成功' : '模型新增成功')
-    emit('updateList')
-    importState.value = undefined
-    importMessage.value = ''
-    handelCancel(formEl)
+    // 关闭弹窗或切换会话后忽略迟到回执，避免影响随后打开的表单。
+    submitting.value = true
+    importController = new AbortController()
+    const { signal } = importController
+    const generation = importGeneration
+    const sessionVersion = getStandaloneSessionVersion()
+    const active = () => generation === importGeneration && sessionVersion === getStandaloneSessionVersion()
+    try {
+      if (uploaded) {
+        await saveUploadedModel(uploaded, directory, signal, directoryId || undefined)
+      } else if (modelFileId && props.editRecord) {
+        // 仅编辑目录字段时直接沿用原文件编号，后端在同一事务内处理归属变化。
+        await editDim3dModel(directoryId, { ...directory, modelFileId }, { signal, timeout: 10 * 60 * 1000 })
+      } else {
+        throw new Error('请先上传模型文件')
+      }
+      if (!active()) return
+      ElMessage.success(props.editRecord ? '模型修改成功' : '模型新增成功')
+      emit('updateList')
+      handelCancel(formEl)
+    } catch (error) {
+      if (active()) {
+        const { message, msg } = (error ?? {}) as { message?: string; msg?: string }
+        ElMessage.error(message || msg || '模型保存失败')
+      }
+    } finally {
+      if (generation === importGeneration) submitting.value = false
+    }
   })
 }
 
@@ -761,9 +768,8 @@ const handelRest = (formEl?: FormInstance) => {
   coverController?.abort()
   submitting.value = false
   // 关闭后释放页面状态，后台已受理任务仍按既有到期及回收规则处理。
-  importState.value = undefined
+  uploadedModel.value = undefined
   importMessage.value = ''
-  importScope = undefined
   coverUploading.value = false
   modelFileUploading.value = false
   coverUploadRef.value?.clearFiles()

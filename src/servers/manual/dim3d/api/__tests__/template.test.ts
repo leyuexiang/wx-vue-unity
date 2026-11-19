@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest'
 const { requestMock } = vi.hoisted(() => ({ requestMock: vi.fn() }))
 vi.mock('@/request.ts', () => ({ default: requestMock }))
 vi.mock('../auth', () => ({ getDim3dHeaders: () => ({}) }))
-vi.mock('../constants', () => ({ DIM3D_OPERATION_API_PREFIX: '/api' }))
+vi.mock('../constants', () => ({ DIM3D_OPERATION_API_PREFIX: '/api', DIM3D_PLATFORM_API_PREFIX: '/api' }))
 
 import { DIM3D_TEMPLATE_TYPE, getDim3dTemplateInfo, pageDim3dTemplate } from '../template'
 

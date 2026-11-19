@@ -6,7 +6,7 @@ import type {
   SceneStreamingRuntimeOverrides,
 } from '@/scene-platform/core/types'
 import { getDim3dRequestOptions } from './auth'
-import { DIM3D_API_PREFIX } from './constants'
+import { DIM3D_API_PREFIX, DIM3D_PLATFORM_API_PREFIX } from './constants'
 import { createSceneFourPackageDocuments } from '@/integrations/scene/sceneFourPackage'
 
 /**
@@ -842,7 +842,7 @@ const sceneRuntimeRequest = <T>(
 ) => {
   const { headers: additionalHeaders, ...requestOptions } = options
   const defaultOptions = getDim3dRequestOptions('application/json')
-  return request<T>(`${DIM3D_API_PREFIX}${path}`, {
+  return request<T>(`${DIM3D_PLATFORM_API_PREFIX}${path}`, {
     ...requestOptions,
     method,
     ...defaultOptions,

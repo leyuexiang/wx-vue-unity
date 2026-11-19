@@ -20,7 +20,9 @@ vi.mock('element-plus', () => ({ ElNotification: vi.fn() }))
 vi.mock('@/auth/standalone', () => ({ hasStandaloneSession: () => fixture.standalone, getStandaloneSessionVersion: () => fixture.sessionVersion, refreshStandalone: fixture.refresh }))
 vi.mock('@/utils/auth', () => ({ getAccessToken: () => 'test-access', toLogin: fixture.login }))
 vi.mock('@/auth/authContext', () => ({ authContext: {
-  get: () => ({ accessToken: 'test-access', clientId: 'test-client', platformType: fixture.platformType }),
+  get: () => ({ accessToken: 'test-access', clientId: 'test-client', platformType: fixture.platformType,
+    tenantId: fixture.platformType === 'tenant' ? '2' : '1' }),
+  getPlatformType: () => fixture.platformType,
   hasValidContext: () => true,
 } }))
 vi.mock('@/auth/runtime', () => ({ isEmbeddedMode: () => fixture.embedded, getAuthProvider: () => ({ notifyAuthExpired: fixture.notify }) }))
@@ -42,6 +44,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 const unauthorized = () => new Response(JSON.stringify({ code: 401, msg: '认证过期' }))
 const url = 'https://reference.invalid/api/operation/dim3d/scene/page'
+const platformSegment = (platform: 'operation' | 'tenant') => platform === 'tenant' ? 'tenant/web' : 'operation'
 
 it('租户登录上下文令业务请求使用租户路径和当前身份', () => {
   fixture.platformType = 'tenant'
@@ -69,13 +72,43 @@ it.each(['operation', 'tenant'] as const)('%s 新增场景不使用本地残留�
   const result = await addDim3dScene({ name: '鉴权回归场景', sceneType: 'local3d' }) as unknown as {
     url: string; options: Record<string, unknown>
   }
-  expect(result.url).toBe('https://reference.invalid/admin-api/dim3d/scene/add')
+  expect(result.url).toBe(`https://reference.invalid/api/${platformSegment(platformType)}/dim3d/scene/add`)
   expect(result.options.headers).toMatchObject({ Authorization: 'Bearer test-access', ClientId: 'test-client' })
   expect(result.options.__standaloneAuth).toBe(true)
   // 当前身份真正失效时仍应进入统一登录处理，避免新增表单反复提交同一失效凭据。
   await expect(fixture.responseHook!(unauthorized(), { ...result.options, url: result.url }))
     .rejects.toMatchObject({ code: 401 })
   expect(fixture.login).toHaveBeenCalledOnce()
+})
+
+/** 普通图片查询在同源代理下也使用当前平台和登录凭据。 */
+it.each(['operation', 'tenant'] as const)('%s 图片文件查询按端分流', async (platformType) => {
+  fixture.platformType = platformType
+  vi.stubEnv('VITE_DIM3D_API_MODE', 'admin')
+  vi.stubEnv('VITE_DIM3D_SERVER_URL', '/dts-api')
+  const { getDim3dOssFileById } = await import('@/servers/manual/dim3d/api/oss')
+  fixture.replay.mockImplementationOnce((address, options) => fixture.requestHook!(address, options))
+  const result = await getDim3dOssFileById('9007199254740993') as unknown as {
+    url: string; options: Record<string, unknown>
+  }
+  expect(result.url).toBe(`/dts-api/api/${platformSegment(platformType)}/resource/oss/listByIds/9007199254740993`)
+  expect(result.options.headers).toMatchObject({ Authorization: 'Bearer test-access', ClientId: 'test-client' })
+})
+
+/** 卸载时绕过请求拦截器，仍须携带租户身份并投递到本端的解锁入口。 */
+it('租户离开编辑器时按当前端释放场景锁', async () => {
+  fixture.platformType = 'tenant'
+  vi.stubEnv('VITE_DIM3D_API_MODE', 'admin')
+  vi.stubEnv('VITE_DIM3D_SERVER_URL', '/dts-api')
+  const send = vi.fn().mockResolvedValue(new Response())
+  vi.stubGlobal('fetch', send)
+  const { unlockDim3dSceneOnUnload } = await import('@/servers/manual/dim3d/api/scene')
+  unlockDim3dSceneOnUnload('17', 'tab-key')
+  expect(send).toHaveBeenCalledWith('/dts-api/api/tenant/web/dim3d/scene/unlock/17?clientKey=tab-key',
+    expect.objectContaining({
+      method: 'DELETE', keepalive: true,
+      headers: expect.objectContaining({ Authorization: 'Bearer test-access', 'tenant-id': '2' }),
+    }))
 })
 
 it('切换登录平台后，旧请求的 401 不清除新身份', async () => {

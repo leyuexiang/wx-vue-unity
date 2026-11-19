@@ -16,7 +16,8 @@ it('发布确认保持字符串编号、保存修订和稳定请求号，拒绝�
   const sceneId = '2122269441737682946'
   transport.mockResolvedValueOnce({ code: 200, data: { sceneId, publicationId: 'PUB-10', revisionNo: 5, status: 'PUBLISHED', alreadyPublished: true } })
   expect((await api.publishCurrentScene(sceneId, 5, 'request-stable')).alreadyPublished).toBe(true)
-  expect(transport).toHaveBeenCalledWith('/dts-api/admin-api/dim3d/scene/publication/publish-current', expect.objectContaining({ method: 'POST', params: { sceneId, revisionNo: 5, requestId: 'request-stable' } }))
+  expect(transport).toHaveBeenCalledWith('/dts-api/api/dim3d/scene/publication/publish-current', expect.objectContaining({ method: 'POST', params: { sceneId, revisionNo: 5, requestId: 'request-stable' } }))
+  expect(transport.mock.calls[0]?.[1].skipPlatformPath).toBeFalsy()
   transport.mockResolvedValueOnce({ code: 200, data: { sceneId: '999', publicationId: 'PUB-10', revisionNo: 5, status: 'PUBLISHED' } })
   await expect(api.publishCurrentScene(sceneId, 5, 'request-stable')).rejects.toThrow('发布回执')
 })

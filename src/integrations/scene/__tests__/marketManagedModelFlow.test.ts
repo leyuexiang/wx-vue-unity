@@ -10,8 +10,7 @@ import { resolveSceneAssetUrls } from '../sceneAssetUrlResolver'
 const api = vi.hoisted(() => ({ page: vi.fn(), detail: vi.fn(), file: vi.fn() }))
 vi.mock('@/servers/manual/dim3d/api/model', () => ({ pageDim3dModel: api.page, getDim3dModelInfo: api.detail }))
 vi.mock('@/servers/manual/dim3d/api/resource', () => ({
-  getDim3dResourceInfo: api.file,
-  buildDim3dResourceUrl: (path: string) => `https://legacy.invalid/${path}`,
+  getDim3dModelFileAccess: api.file,
 }))
 vi.mock('@/servers/manual/dim3d/api/dictionary', () => ({
   getDim3dModelCategoryDictionary: async () => ({ data: [] }),
@@ -26,7 +25,7 @@ const signedUrl = 'https://private.invalid/model.glb?signature=temporary'
 describe('受控发布模型从资源市场进入场景', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    api.file.mockResolvedValue({ code: 200, data: { id: legacyFileId, resourceType: 'MODEL', resourceRelativePath: 'car.glb' } })
+    api.file.mockResolvedValue({ id: legacyFileId, accessMode: 'LEGACY', url: 'https://legacy.invalid/car.glb' })
   })
 
   it('使用目录关联加载草地，四包保存并重开后恢复位置、缩放及稳定资源身份', async () => {
@@ -65,6 +64,27 @@ describe('受控发布模型从资源市场进入场景', () => {
       ['详情关联', `unity-resource://${resourceId}`], ['历史模型', 'https://legacy.invalid/car.glb'],
     ])
     expect(api.file).toHaveBeenCalledTimes(1)
-    expect(api.file).toHaveBeenCalledWith(legacyFileId, expect.anything())
+    expect(api.file).toHaveBeenCalledWith(legacyFileId)
+  })
+
+  /** 正式目录仅返回文件编号，后续页继续加载，同时去重目录及文件访问查询。 */
+  it('跨页读取全部目录并按已授权方式生成受管拖入身份', async () => {
+    const first = { id: '11', modelName: '第一页', modelFileId: resourceId, category: '模型' }
+    const last = { ...first, id: '219', modelName: '第二页' }
+    api.page.mockResolvedValueOnce({ total: 201, rows: [first] })
+    api.page.mockResolvedValueOnce({ total: 201, rows: [first, last] })
+    api.file.mockResolvedValue({ id: resourceId, accessMode: 'MANAGED' })
+    const groups = await loadDim3dModelGroups('MINE')
+    expect(api.page).toHaveBeenNthCalledWith(2, expect.objectContaining({ pageNum: 2, pageSize: 200, orderByColumn: 'id', isAsc: 'asc' }))
+    expect(api.file).toHaveBeenCalledTimes(1)
+    expect(groups[0]?.children.map(item => [item.name, item.resourceAsset?.url])).toEqual([
+      ['第一页', `unity-resource://${resourceId}`], ['第二页', `unity-resource://${resourceId}`],
+    ])
+  })
+
+  it('访问授权失败时不使用目录里过时的签名地址', async () => {
+    api.page.mockResolvedValue({ rows: [{ id: '11', modelFileId: resourceId, modelFileUrl: signedUrl }] })
+    api.file.mockRejectedValue(new Error('权限不足'))
+    await expect(loadDim3dModelGroups('MINE')).resolves.toEqual([])
   })
 })

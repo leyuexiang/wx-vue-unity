@@ -3,7 +3,7 @@ import { authContext } from '@/auth/authContext'
 import { resolvePlatformApiUrl } from '@/auth/platformApiPathResolver'
 import { isEmbeddedMode } from '@/auth/runtime'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_ADMIN_API, DIM3D_OPERATION_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_PLATFORM_API_PREFIX } from './constants'
 import type { Dim3dTemplateType } from './template'
 
 /** 新场景分页查询参数，字段与 /dim3d/scene/page 契约保持一致。 */
@@ -312,12 +312,12 @@ export const createDim3dSceneClientKey = () => {
 }
 
 const sceneRequest = (path: string, method: string, options: Record<string, unknown> = {}) =>
-  request(`${DIM3D_OPERATION_API_PREFIX}${path}`, {
+  request(`${DIM3D_PLATFORM_API_PREFIX}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     passAuth: true,
-    // 三维服务常量已经包含完整管理 API 根路径，不能在 Unity Web 会话建立后再次插入平台段。
-    skipPlatformPath: true,
+    // 当前服务按会话补齐端别，参考服务的历史写入路径仍由原模式处理。
+    skipPlatformPath: !DIM3D_ADMIN_API,
     // 场景写入使用当前登录身份，与列表读取保持一致。这里的请求头来自兼容存储，
     // 并非用户配置的数据源凭据，必须允许拦截器覆盖旧临时令牌和客户端编号，
     // 并保留当前会话的统一失效处理；没有登录上下文时仍沿用 passAuth 的兼容逻辑。
@@ -341,7 +341,7 @@ export async function pageDim3dScene(
   options?: Record<string, unknown>,
 ) {
   const response = await request<Dim3dScenePageResponse>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/scene/page`,
+    `${DIM3D_PLATFORM_API_PREFIX}/dim3d/scene/page`,
     {
       method: 'GET',
       params,
@@ -462,10 +462,10 @@ export const unlockDim3dScene = (id: string, clientKey: string) =>
  */
 export const unlockDim3dSceneOnUnload = (id: string, clientKey: string) => {
   const params = new URLSearchParams({ clientKey })
-  const baseUrl = `${DIM3D_OPERATION_API_PREFIX}/dim3d/scene/unlock/${encodeURIComponent(id)}?${params.toString()}`
+  const baseUrl = `${DIM3D_PLATFORM_API_PREFIX}/dim3d/scene/unlock/${encodeURIComponent(id)}?${params.toString()}`
   // unload 阶段必须绕过 umi-request，但仍复用同一个平台路径解析器，避免运营端固定路径
   // 在租户端卸载时把解锁请求发错服务。
-  // 内嵌页使用父页面的平台类型；独立部署没有父页面上下文，按运营端接口契约补齐 operation。
+  // 独立登录与内嵌页统一使用当前认证端；无会话的历史独立模式仍按运营端路径处理。
   const platformType = authContext.getPlatformType() ?? (!isEmbeddedMode() ? 'operation' : null)
   const url = platformType ? resolvePlatformApiUrl(baseUrl, platformType) : baseUrl
   /**

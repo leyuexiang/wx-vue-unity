@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_OPERATION_API_PREFIX } from './constants'
+import { DIM3D_PLATFORM_API_PREFIX } from './constants'
 import type { Dim3dModelStatus, Dim3dResourceBelong } from './model'
 
 /** 阶段三图标分页查询参数，字段与 operation OpenAPI 保持一致。 */
@@ -111,7 +111,7 @@ export async function pageDim3dIcon(
   options?: Record<string, unknown>,
 ) {
   const response = await request<Dim3dIconPageResponse | Dim3dIconPageEnvelope>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/page`,
+    `${DIM3D_PLATFORM_API_PREFIX}/dim3d/icon/page`,
     {
       method: 'GET',
       params,
@@ -145,7 +145,7 @@ export async function pageDim3dIcon(
 
 /** 查询图标详情，编辑时用于回显真实文件编号和分类字段。 */
 export function getDim3dIconInfo(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dIconDetailResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/info/${id}`, {
+  return request<Dim3dIconDetailResponse>(`${DIM3D_PLATFORM_API_PREFIX}/dim3d/icon/info/${id}`, {
     method: 'GET',
     headers: getDim3dHeaders(),
     passAuth: true,
@@ -155,7 +155,7 @@ export function getDim3dIconInfo(id: string, options?: Record<string, unknown>) 
 
 /** 新增图标；文件上传完成后才允许提交 iconFileId。 */
 export function addDim3dIcon(body: Dim3dIconForm, options?: Record<string, unknown>) {
-  return request<Dim3dIconCreateResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/add`, {
+  return request<Dim3dIconCreateResponse>(`${DIM3D_PLATFORM_API_PREFIX}/dim3d/icon/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     data: body,
@@ -166,7 +166,7 @@ export function addDim3dIcon(body: Dim3dIconForm, options?: Record<string, unkno
 
 /** 编辑图标；未替换文件时继续提交详情中的原 iconFileId。 */
 export function editDim3dIcon(id: string, body: Dim3dIconForm, options?: Record<string, unknown>) {
-  return request<Dim3dIconVoidResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/edit/${id}`, {
+  return request<Dim3dIconVoidResponse>(`${DIM3D_PLATFORM_API_PREFIX}/dim3d/icon/edit/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     data: body,
@@ -177,7 +177,7 @@ export function editDim3dIcon(id: string, body: Dim3dIconForm, options?: Record<
 
 /** 删除图标。 */
 export function removeDim3dIcon(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dIconVoidResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/remove/${id}`, {
+  return request<Dim3dIconVoidResponse>(`${DIM3D_PLATFORM_API_PREFIX}/dim3d/icon/remove/${id}`, {
     method: 'DELETE',
     headers: getDim3dHeaders(),
     passAuth: true,
@@ -192,7 +192,7 @@ export function changeDim3dIconStatus(
   options?: Record<string, unknown>,
 ) {
   return request<Dim3dIconVoidResponse>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/icon/${status}/${id}`,
+    `${DIM3D_PLATFORM_API_PREFIX}/dim3d/icon/${status}/${id}`,
     {
       method: 'PUT',
       headers: getDim3dHeaders(),

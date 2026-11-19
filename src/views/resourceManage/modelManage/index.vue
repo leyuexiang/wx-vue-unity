@@ -241,9 +241,7 @@ import {
 } from '@/servers/manual/dim3d/api/model'
 import { getDim3dOssFileById } from '@/servers/manual/dim3d/api/oss'
 import {
-  buildDim3dResourceUrl,
-  getDim3dManagedModelId,
-  getDim3dResourceInfo,
+  getDim3dModelFileAccess,
 } from '@/servers/manual/dim3d/api/resource'
 import {
   createDim3dModelCategoryLabelMap,
@@ -774,8 +772,7 @@ const getResourceStringId = (record: TransferListItem) => {
 }
 
 /**
- * 先读取模型详情和当前发布：受管模型交给引擎按稳定资源编号加载；明确没有发布的历史模型
- * 才调用 resource/info 查询文件地址。编号和私有发布相对路径均不能直接拼到公开存储地址。
+ * 读取目录详情及服务端的文件访问方式。受管编号交给播放器加载，历史文件使用授权返回的原路径。
  */
 const openModelPreview = async (record: TransferListItem) => {
   const requestId = ++previewRequestId.value
@@ -783,64 +780,42 @@ const openModelPreview = async (record: TransferListItem) => {
   previewDialogVisible.value = true
   previewError.value = ''
   previewManagedResourceId.value = undefined
-  // 等发布归属确认后只加载最终资源，避免先请求旧地址、再切受管编号而重复下载或产生加载竞争。
-  const fallbackPath = record.artResRelativePath ? concatMinioUrl(record.artResRelativePath) : ''
+  // 等文件访问方式确认后再加载，避免重复下载或加载竞争。
   previewPath.value = ''
 
   const resourceId = getResourceStringId(record)
   if (!resourceId) {
-    previewPath.value = fallbackPath
-    previewError.value = previewPath.value ? '' : '当前模型缺少有效编号，暂不可预览'
+    previewError.value = '当前模型缺少有效编号，暂不可预览'
     return
   }
 
   const [error, response] = await to(getDim3dModelInfo(resourceId))
   if (requestId !== previewRequestId.value || !previewDialogVisible.value) return
-  if (error) {
-    previewPath.value = fallbackPath
-    previewError.value = previewPath.value ? '' : '模型详情获取失败，请重新加载'
+  if (error || response?.code !== 200) {
+    previewError.value = response?.msg || '模型详情获取失败，请重新加载'
     return
   }
 
-  const detail = response?.data
+  const detail = response.data
+  if (detail?.id !== resourceId) {
+    previewError.value = '模型详情与当前记录不一致，请重新加载'
+    return
+  }
   const modelFileId = String(detail?.resourceId ?? detail?.modelFileId ?? '').trim()
   if (!modelFileId) {
-    previewPath.value = fallbackPath
-    previewError.value = previewPath.value ? '' : '模型详情未返回可预览资源'
+    previewError.value = '模型详情未返回可预览资源'
     return
   }
 
-  // 新导入的资源位于私有发布桶，按稳定资源编号交给引擎签名下载；历史目录才解析旧文件地址。
-  const [currentError, managedId] = await to(getDim3dManagedModelId(String(detail?.resourceId ?? modelFileId)))
+  // 访问方式只取服务端的授权结果。引擎按稳定编号读取受管修订及文件。
+  const [currentError, file] = await to(getDim3dModelFileAccess(modelFileId))
   if (requestId !== previewRequestId.value || !previewDialogVisible.value) return
-  if (currentError) {
-    previewError.value = '模型发布信息读取失败，请重新加载'
+  if (currentError || !file) {
+    previewError.value = currentError?.message || '模型文件访问方式读取失败，请重新加载'
     return
   }
-  if (managedId) {
-    previewPath.value = ''
-    previewManagedResourceId.value = managedId
-    return
-  }
-
-  // 模型文件必须通过 resource/info 查询相对路径，不能混用普通图片 OSS 查询接口。
-  const [resourceError, resourceResponse] = await to(
-    getDim3dResourceInfo(modelFileId, { suppressNotFoundNotification: true }),
-  )
-  if (requestId !== previewRequestId.value || !previewDialogVisible.value) return
-  const resource = resourceResponse?.data
-  if (
-    resourceError ||
-    resourceResponse?.code !== 200 ||
-    String(resource?.id ?? '') !== modelFileId ||
-    resource?.resourceType !== 'MODEL' ||
-    !resource.resourceRelativePath
-  ) {
-    previewPath.value = fallbackPath
-    previewError.value = previewPath.value ? '' : '模型资源未返回有效预览地址'
-    return
-  }
-  previewPath.value = buildDim3dResourceUrl(resource.resourceRelativePath)
+  if (file.accessMode === 'MANAGED') previewManagedResourceId.value = file.id
+  else previewPath.value = file.url
 }
 
 /** 来源失败时沿用同一资源查询入口，递增请求编号会自动忽略上次迟到响应。 */
@@ -881,7 +856,7 @@ const toggleModelStatus = async (record: TransferListItem) => {
 
   const [error] = await to(changeDim3dModelStatus(targetStatus, resourceId))
   if (error) {
-    ElMessage.error(`${targetStatus === 'ONLINE' ? '上线' : '下线'}模型失败，请稍后重试`)
+    ElMessage.error(error.message || `${targetStatus === 'ONLINE' ? '上线' : '下线'}模型失败，请稍后重试`)
     return
   }
   await getList()
@@ -913,7 +888,8 @@ const OperateActionMap = {
       return
     }
     openManageDeleteConfirm('模型', record.name).then(async () => {
-      const [err] = await toData(removeDim3dModel(resourceId))
+      // 删除同样等待目录事务的空成功回执，再刷新列表。
+      const [err] = await to(removeDim3dModel(resourceId))
       if (err) {
         ElMessage.error('模型删除失败，请稍后重试')
         return

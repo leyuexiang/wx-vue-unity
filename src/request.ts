@@ -35,6 +35,8 @@ interface ResponseData {
  */
 interface RequestErrorOptions extends RequestOptionsInit {
   suppressNotFoundNotification?: boolean
+  /** 模型文件访问接口探测收到 405 时由调用方尝试已部署的受管发布接口。 */
+  suppressMethodNotAllowedNotification?: boolean
   /** 预览票据重试期间静默凭证类 403，最终重试失败时由请求方恢复通知。 */
   suppressPreviewCredentialNotification?: boolean
   /** 发布预览使用独立 ticket；匿名预览的 401/403 不应影响宿主登录态。 */
@@ -71,13 +73,13 @@ function isEmbeddedFirstPartyUrl(url: string): boolean {
     const parsed = new URL(url, origin)
     const dim3dBase = getConfiguredDim3dBase(origin)
     const dim3dPath = dim3dBase?.pathname.replace(/\/+$/, '')
-    // 同源模型代理子路径也要接收当前会话和租户身份。
+    // 同源代理下的模型接口同样使用当前会话令牌和租户头，不能回退到历史临时凭证。
     if (dim3dPath && parsed.origin === dim3dBase?.origin && parsed.pathname.startsWith(`${dim3dPath}/api/`)) {
       return true
     }
     const dataPrefix = String(import.meta.env.VITE_DATA_MIDDLEWARE_PREFIX || '').replace(/\/+$/, '')
     if (
-      parsed.origin === window.location.origin &&
+      parsed.origin === origin &&
       (parsed.pathname.startsWith('/admin-api/') ||
         parsed.pathname.startsWith('/api/') ||
         (dataPrefix && parsed.pathname.startsWith(`${dataPrefix}/`)))
@@ -135,8 +137,10 @@ function shouldSuppressPreviewCredentialNotification(
   )
 }
 
-const shouldSuppressNotFoundNotification = (options: RequestOptionsInit, status: number) =>
-  status === 404 && Boolean((options as RequestErrorOptions).suppressNotFoundNotification)
+/** 静默的状态仍向调用方抛出，调用方负责后续处理。 */
+const shouldSuppressStatusNotification = (options: RequestErrorOptions, status: number) =>
+  (status === 404 && options.suppressNotFoundNotification) ||
+  (status === 405 && options.suppressMethodNotAllowedNotification)
 
 /**
  * 根据请求响应，进行 blob 流文件下载。
@@ -378,7 +382,7 @@ request.interceptors.response.use(async (response, options) => {
     if (status === 401) return await handle401(response, options)
 
     const msg = ERR_CODE_MSG[status as keyof typeof ERR_CODE_MSG]
-    if (shouldSuppressNotFoundNotification(options, status)) {
+    if (shouldSuppressStatusNotification(options, status)) {
       // 仍然拒绝请求，让调用方把列表置空；这里只跳过全局通知。
       return Promise.reject(createRequestStatusError(status, msg))
     }
@@ -398,8 +402,8 @@ request.interceptors.response.use(async (response, options) => {
     if (data.code === 401) return await handle401(response, options, data.msg || ERR_CODE_MSG[401])
 
     const msg = ERR_CODE_MSG[data.code as keyof typeof ERR_CODE_MSG]
-    if (shouldSuppressNotFoundNotification(options, data.code)) {
-      // 网关可能以 HTTP 200 携带业务 404；统一转换成带状态码的 Error，便于调用方识别。
+    if (shouldSuppressStatusNotification(options, data.code)) {
+      // 网关可能在成功的传输响应中携带业务错误码，统一为带状态码的错误。
       return Promise.reject(createRequestStatusError(data.code, data.msg || msg))
     }
     const key = `${data.code}_${data.msg}`
