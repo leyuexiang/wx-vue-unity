@@ -213,7 +213,7 @@ const isTenantPlatform = authContext.getPlatformType() === 'tenant'
 const resourceBelongOptions = getResourceBelongOptions(authContext.getPlatformType())
 const defaultResourceBelong: RuleForm['resourceBelong'] = isTenantPlatform ? 'MINE' : 'SYSTEM'
 
-/** 提交边界再次锁定租户资源归属，避免历史状态把系统资源值带入新增请求。 */
+/** 租户只能提交我的资源；运营端按保存时选中的目标归属提交，可继续使用原文件。 */
 const normalizeResourceBelong = (value?: RuleForm['resourceBelong']): RuleForm['resourceBelong'] =>
   isTenantPlatform ? 'MINE' : value || defaultResourceBelong
 
@@ -413,6 +413,7 @@ const handleConfirm = async (formEl?: FormInstance) => {
     iconDesc: ruleForm.description.trim() || undefined,
     category: categoryCode,
     resourceBelong: normalizeResourceBelong(ruleForm.resourceBelong),
+    // 未更换文件时提交详情回填的原编号，后端根据锁定的目录关联判断是否迁移。
     iconFileId: ruleForm.iconFileId.trim(),
   }
   const id = props.editRecord?.id ? String(props.editRecord.id) : ''

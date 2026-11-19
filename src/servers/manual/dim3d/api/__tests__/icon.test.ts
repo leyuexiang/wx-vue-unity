@@ -99,4 +99,13 @@ describe('阶段四图标分页响应适配', () => {
     await expect(addDim3dIcon(body)).rejects.toMatchObject({ code: 1600001, message: '无权维护系统资源' })
     await expect(editDim3dIcon('18', body)).rejects.toMatchObject({ code: 1600001, message: '无权维护系统资源' })
   })
+
+  /** 双向切换只提交目标归属和原字符串文件编号，共用冲突由弹窗显示后端提示。 */
+  it.each(['SYSTEM', 'MINE'] as const)('图片保存到 %s 时保留原文件编号', async (resourceBelong) => {
+    const body = { iconName: '设备', category: 'DEVICE_ICON', resourceBelong, iconFileId: '9007199254740994' }
+    requestMock.mockResolvedValueOnce({ code: 200, data: null })
+    await expect(editDim3dIcon('9007199254740993', body)).resolves.toMatchObject({ code: 200 })
+    expect(requestMock).toHaveBeenLastCalledWith('/api/dim3d/icon/edit/9007199254740993',
+      expect.objectContaining({ method: 'PUT', data: body }))
+  })
 })
