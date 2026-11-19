@@ -93,6 +93,13 @@ export interface Dim3dTemplateDetailResponse {
   msg?: string
 }
 
+/** 文件型模板详情返回契约枚举，也兼容历史响应直接返回字典类型编码。 */
+type FileTemplateDetailPayload = Omit<Dim3dTemplateDetailResponse, 'data'> & {
+  data?: Omit<Dim3dTemplateDetailVo, 'templateType'> & {
+    templateType?: Dim3dTemplateType | keyof typeof DIM3D_TEMPLATE_TYPE
+  }
+}
+
 /**
  * 模板编辑请求体只包含已由 OpenAPI 确认的字段。Figma 中的 2D/3D/2D+3D 单选
  * 当前没有对应后端契约，因此不能擅自添加到这里，以免产生无法持久化的伪字段。
@@ -311,8 +318,11 @@ export async function pageDim3dTemplate(
  * 编辑弹窗打开时查询模板详情。路径编号先编码，既保护特殊编号也避免把大整数转成 number
  * 后丢失精度；鉴权和地址前缀仍统一复用三维操作服务配置。
  */
-export function getDim3dTemplateInfo(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dTemplateDetailResponse>(
+export async function getDim3dTemplateInfo(
+  id: string,
+  options?: Record<string, unknown>,
+): Promise<Dim3dTemplateDetailResponse> {
+  const response = await request<FileTemplateDetailPayload>(
     `${DIM3D_OPERATION_API_PREFIX}/dim3d/template/info/${encodeURIComponent(id)}`,
     {
       method: 'GET',
@@ -321,6 +331,17 @@ export function getDim3dTemplateInfo(id: string, options?: Record<string, unknow
       ...(options || {}),
     },
   )
+
+  const detail = response.data
+  let templateType = detail?.templateType
+  // 编辑弹窗及分类请求共用字典类型编码，后端目录继续使用正式模板枚举。
+  if (templateType === 'INDUSTRY' || templateType === 'EXHIBITION') {
+    templateType = DIM3D_TEMPLATE_TYPE[templateType]
+  }
+  return {
+    ...response,
+    data: detail && { ...detail, templateType },
+  }
 }
 
 /**

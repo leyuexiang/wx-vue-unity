@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_OPERATION_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_OPERATION_API_PREFIX } from './constants'
 
 /**
  * 租户列表查询参数，与 operation.openapi.json 的 `/tenant/dashboard/list` 契约保持一致。
@@ -52,6 +52,36 @@ export async function pageOperationTenants(
   params: OperationTenantPageParams,
   options?: Record<string, unknown>,
 ) {
+  if (DIM3D_ADMIN_API) {
+    // 管理模式使用系统租户分页及原鉴权，将系统字段投影为场景筛选和授权所需字段。
+    const response = await request<{
+      code: number
+      msg?: string
+      data?: { list: Array<{ id: string | number; name: string }>; total: number }
+    }>(`${DIM3D_OPERATION_API_PREFIX}/system/tenant/page`, {
+      method: 'GET',
+      params: {
+        pageNo: params.pageNum,
+        pageSize: params.pageSize,
+        name: params.companyName || params.searchValue,
+        status: 0,
+      },
+      headers: getDim3dHeaders(),
+      passAuth: true,
+      ...options,
+      skipPlatformPath: true,
+    })
+    if (response.code !== 200 || !Array.isArray(response.data?.list)) {
+      throw new Error(response.msg || '租户列表接口返回格式异常')
+    }
+    return {
+      total: response.data.total,
+      rows: response.data.list.map((row) => ({
+        tenantId: String(row.id),
+        companyName: row.name,
+      })),
+    }
+  }
   const response = await request<OperationTenantPageResponse>(
     `${DIM3D_OPERATION_API_PREFIX}/tenant/dashboard/list`,
     {
