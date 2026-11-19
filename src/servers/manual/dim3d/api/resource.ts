@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_AMM_PREFIX, DIM3D_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_AMM_PREFIX, DIM3D_API_PREFIX, DIM3D_MODEL_API_PREFIX } from './constants'
 
 /** 模型资源元信息，resourceRelativePath 是 amm 桶内相对路径，不是完整 URL。 */
 export interface Dim3dResourceInfo {
@@ -18,7 +18,7 @@ export interface Dim3dResourceInfoResponse {
 }
 
 /** 资源详情接口由统一三维服务器根地址派生，禁止在业务适配器中维护 IP 和端口。 */
-const DIM3D_RESOURCE_INFO_URL = `${DIM3D_API_PREFIX}/dim3d/resource/info`
+const DIM3D_RESOURCE_INFO_URL = `${DIM3D_MODEL_API_PREFIX}/dim3d/resource/info`
 
 /** 按 modelFileId 查询模型资源元信息；编号始终按字符串传递，避免大整数精度损失。 */
 export function getDim3dResourceInfo(
@@ -31,9 +31,9 @@ export function getDim3dResourceInfo(
       method: 'GET',
       headers: getDim3dHeaders(),
       passAuth: true,
-      // 资源详情是模型文件解析的公共接口；平台差异只作用于模型列表，详情沿用原始路径。
-      skipPlatformPath: true,
       ...(options || {}),
+      // 管理服务按平台校验目录；参考服务使用原公共文件路径。
+      skipPlatformPath: !DIM3D_ADMIN_API,
     },
   )
 }

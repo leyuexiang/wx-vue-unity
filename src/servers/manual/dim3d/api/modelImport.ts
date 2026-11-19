@@ -1,9 +1,10 @@
 import request from '@/request'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_ADMIN_API, DIM3D_API_PREFIX } from './constants'
+import { DIM3D_ADMIN_API, DIM3D_API_PREFIX, DIM3D_MODEL_API_PREFIX } from './constants'
 
-export const MODEL_IMPORT_URL = `${DIM3D_API_PREFIX}/dim3d/model-imports`
-export const MODEL_UPLOAD_URL = `${DIM3D_API_PREFIX}/dim3d/resource/uploadConvert`
+/** 导入及目录使用同一平台前缀，固定修订仍走通用资源入口。 */
+export const MODEL_IMPORT_URL = `${DIM3D_MODEL_API_PREFIX}/dim3d/model-imports`
+export const MODEL_UPLOAD_URL = `${DIM3D_MODEL_API_PREFIX}/dim3d/resource/uploadConvert`
 export const MODEL_IMPORT_MAX_BYTES = 500 * 1024 * 1024
 interface ModelImportBase {
   operationId: string
@@ -46,7 +47,7 @@ async function api<T>(path: string, signal: AbortSignal, body?: unknown): Promis
   if (!DIM3D_ADMIN_API) throw new Error('当前服务暂不支持新的模型导入，请联系管理员')
   const result = await request<{ code: number; msg?: string; data: T }>(`${MODEL_IMPORT_URL}${path}`, {
     method: body === undefined ? 'GET' : 'POST', ...(body === undefined ? {} : { data: body }),
-    headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true, signal,
+    headers: getDim3dHeaders(), passAuth: true, signal,
     suppressNotFoundNotification: true,
   }).catch((error: unknown) => {
     const status = (error as { response?: { status?: number }; status?: number })
@@ -182,7 +183,8 @@ export async function uploadModel(
     data.append('resourceBelong', resourceBelong)
     const response = await request<{ code: number; msg?: string; data: ModelImportStatus }>(
       MODEL_UPLOAD_URL, {
-        method: 'POST', data, requestType: 'form', headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true,
+        method: 'POST', data, requestType: 'form', headers: getDim3dHeaders(), passAuth: true,
+        skipPlatformPath: !DIM3D_ADMIN_API,
         signal, timeout: 10 * 60 * 1000,
       })
     if (response.code !== 200 || !response.data || !uuid.test(response.data.operationId)) {
@@ -206,9 +208,9 @@ export async function saveUploadedModel(
   if (replacing) state = await publishModelImport(uploaded.operationId, uploaded.resourceId, directory, signal)
   else {
     const response = await request<{ code: number; msg?: string; data: ModelImportStatus }>(
-      `${DIM3D_API_PREFIX}/dim3d/model/add`, {
+      `${DIM3D_MODEL_API_PREFIX}/dim3d/model/add`, {
         method: 'POST', data: { ...directory, operationId: uploaded.operationId, resourceId: uploaded.resourceId },
-        headers: getDim3dHeaders(), passAuth: true, skipPlatformPath: true, signal,
+        headers: getDim3dHeaders(), passAuth: true, signal,
       })
     if (response.code !== 200 || !response.data) throw new Error(response.msg || '模型保存失败')
     state = validateImportStatus(response.data, uploaded.operationId)

@@ -6,7 +6,7 @@ import { getStandaloneSessionVersion, hasStandaloneSession, refreshStandalone } 
 import { authContext } from './auth/authContext'
 import { getAuthProvider, isEmbeddedMode } from './auth/runtime'
 import { normalizeAccessToken } from './auth/accessToken'
-import { resolvePlatformApiUrl } from './auth/platformApiPathResolver'
+import { getConfiguredDim3dBase, resolvePlatformApiUrl } from './auth/platformApiPathResolver'
 
 const ERR_CODE_MSG = {
   400: '请求错误',
@@ -67,7 +67,14 @@ function getPassAuth(url: string, options: RequestOptionsInit) {
 /** 仅第一方项目接口的 401 才能代表外层登录态失效，第三方 401 不得触发父页面跳转。 */
 function isEmbeddedFirstPartyUrl(url: string): boolean {
   try {
-    const parsed = new URL(url, window.location.origin)
+    const origin = window.location.origin
+    const parsed = new URL(url, origin)
+    const dim3dBase = getConfiguredDim3dBase(origin)
+    const dim3dPath = dim3dBase?.pathname.replace(/\/+$/, '')
+    // 同源模型代理子路径也要接收当前会话和租户身份。
+    if (dim3dPath && parsed.origin === dim3dBase?.origin && parsed.pathname.startsWith(`${dim3dPath}/api/`)) {
+      return true
+    }
     const dataPrefix = String(import.meta.env.VITE_DATA_MIDDLEWARE_PREFIX || '').replace(/\/+$/, '')
     if (
       parsed.origin === window.location.origin &&

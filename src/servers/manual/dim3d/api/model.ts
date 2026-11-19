@@ -1,6 +1,6 @@
 import request from '@/request.ts'
 import { getDim3dHeaders } from './auth'
-import { DIM3D_OPERATION_API_PREFIX } from './constants'
+import { DIM3D_MODEL_API_PREFIX } from './constants'
 
 /** 模型管理接口的资源归属枚举，值必须与 OpenAPI 契约一致。 */
 export type Dim3dResourceBelong = 'SYSTEM' | 'MINE'
@@ -142,7 +142,7 @@ export async function pageDim3dModel(
   options?: Record<string, unknown>,
 ) {
   const response = await request<Dim3dModelPageResponse | Dim3dModelPageEnvelope>(
-    `${DIM3D_OPERATION_API_PREFIX}/dim3d/model/page`,
+    `${DIM3D_MODEL_API_PREFIX}/dim3d/model/page`,
     {
       method: 'GET',
       params,
@@ -191,7 +191,7 @@ export async function pageDim3dModel(
 
 /** 查询模型详情，供后续编辑表单接入复用。 */
 export function getDim3dModelInfo(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dModelDetailResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/model/info/${id}`, {
+  return request<Dim3dModelDetailResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/info/${id}`, {
     method: 'GET',
     headers: getDim3dHeaders(),
     passAuth: true,
@@ -201,7 +201,7 @@ export function getDim3dModelInfo(id: string, options?: Record<string, unknown>)
 
 /** 新增模型，文件上传和 modelFileId 生成由 MUI-405 的上传适配层负责。 */
 export function addDim3dModel(body: Dim3dModelForm, options?: Record<string, unknown>) {
-  return request<Dim3dVoidResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/model/add`, {
+  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     data: body,
@@ -216,7 +216,7 @@ export function editDim3dModel(
   body: Dim3dModelForm,
   options?: Record<string, unknown>,
 ) {
-  return request<Dim3dVoidResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/model/edit/${id}`, {
+  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/edit/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...getDim3dHeaders() },
     data: body,
@@ -227,7 +227,7 @@ export function editDim3dModel(
 
 /** 删除模型。 */
 export function removeDim3dModel(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dVoidResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/model/remove/${id}`, {
+  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/remove/${id}`, {
     method: 'DELETE',
     headers: getDim3dHeaders(),
     passAuth: true,
@@ -241,7 +241,7 @@ export function changeDim3dModelStatus(
   id: string,
   options?: Record<string, unknown>,
 ) {
-  return request<Dim3dVoidResponse>(`${DIM3D_OPERATION_API_PREFIX}/dim3d/model/${status}/${id}`, {
+  return request<Dim3dVoidResponse>(`${DIM3D_MODEL_API_PREFIX}/dim3d/model/${status}/${id}`, {
     method: 'PUT',
     headers: getDim3dHeaders(),
     passAuth: true,
