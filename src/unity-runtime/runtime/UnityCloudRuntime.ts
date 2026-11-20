@@ -6,7 +6,8 @@ export interface UnityRuntimeEventMap {
   selectionChanged: { instanceId: string | null }
   objectInteraction: { instanceId: string; eventType: 'click' | 'dblclick' | 'mouseenter' | 'mouseleave' }
   transformPreview: { instanceId: string; transform: SceneTransform }
-  transformCommitted: { instanceId: string; transform: SceneTransform }
+  /** 手柄产生的提交，即使同一对象另有程序写入在途，也要写入前端历史。 */
+  transformCommitted: { instanceId: string; transform: SceneTransform; source?: 'gizmo' }
   sceneProgress: { progress: number; stage?: string }
   sceneLoaded: { sceneId: string }
   sceneFailed: { code: string; message: string }

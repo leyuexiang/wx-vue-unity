@@ -10,12 +10,14 @@ export interface EditorSceneSaveStateSnapshot {
 
 type SaveStateStore = Pick<SceneStore, 'subscribe'>
 type SaveStateBus = Pick<CommandBus,
-  'subscribeHistory' | 'getHistoryState' | 'invalidateHistoryState' | 'getIsExecuting' | 'breakHistoryMerge'>
+  'subscribeHistory' | 'getHistoryState' | 'invalidateHistoryState' | 'getIsExecuting' | 'breakHistoryMerge'
+  | 'getHistorySequence' | 'discardHistoryThrough'>
 
 export interface EditorSceneSaveCheckpoint {
   readonly session: symbol
   readonly revision: number
   readonly historyState: number | undefined
+  readonly historySequence: number | undefined
 }
 
 export interface EditorSceneSaveAttempt {
@@ -27,7 +29,7 @@ export interface EditorSceneSaveStateTracker {
   captureCheckpoint: () => EditorSceneSaveCheckpoint
   beginSave: (checkpoint?: EditorSceneSaveCheckpoint) => EditorSceneSaveAttempt
   isCurrentSave: (attempt: EditorSceneSaveAttempt) => boolean
-  markSaved: (attempt?: EditorSceneSaveAttempt) => EditorSceneSaveStateSnapshot
+  markSaved: (attempt?: EditorSceneSaveAttempt, checkpoint?: EditorSceneSaveCheckpoint) => EditorSceneSaveStateSnapshot
   /** 整场景导入在宿主刷新完成后显式标为未保存，不能把替换事件当成服务器干净基线。 */
   markDirty: () => EditorSceneSaveStateSnapshot
   markFailed: (error: unknown, attempt?: EditorSceneSaveAttempt) => EditorSceneSaveStateSnapshot
@@ -135,7 +137,7 @@ export const createEditorSceneSaveStateTracker = (
     return advanceRevision()
   }
   const captureCheckpoint = (): EditorSceneSaveCheckpoint => ({
-    session, revision, historyState: boundBus?.getHistoryState(),
+    session, revision, historyState: boundBus?.getHistoryState(), historySequence: boundBus?.getHistorySequence(),
   })
 
   const handleStoreEvent = (event: SceneStoreEvent) => {
@@ -191,13 +193,16 @@ export const createEditorSceneSaveStateTracker = (
       return attempt
     },
     isCurrentSave: (attempt) => activeSave === attempt,
-    markSaved: (attempt = activeSave) => {
-      if (!attempt || attempt !== activeSave) return getSnapshot()
-      savedRevision = attempt.checkpoint.revision
-      savedHistoryState = attempt.checkpoint.historyState
+    markSaved: (attempt = activeSave, checkpoint = attempt?.checkpoint) => {
+      // 保存开始与生成四包之间可能收到 Unity 变换。以实际快照对应的历史位置推进基线。
+      if (!attempt || attempt !== activeSave || checkpoint?.session !== session) return getSnapshot()
+      savedRevision = checkpoint.revision
+      savedHistoryState = checkpoint.historyState
       saving = false
       activeSave = undefined
       lastErrorMessage = null
+      // 只在当前批次成功后清理。请求等待期间登记的新命令仍可撤销、重做。
+      if (checkpoint.historySequence !== undefined) boundBus?.discardHistoryThrough(checkpoint.historySequence)
       return emit()
     },
     markDirty,

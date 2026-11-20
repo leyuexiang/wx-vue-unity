@@ -1,6 +1,8 @@
 import type { SceneDefinition, SceneRepository, SceneRuntime } from '@/scene-platform'
 import { getActiveSceneViewportHost } from './editorScenePlatformHost'
 import { isUnityDeferredObject } from '@/unity-runtime/runtime/projectSceneForUnity'
+import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
+import { captureUnityCameraSettings } from '@/unity-runtime/runtime/editorCameraConfig'
 import type { LegacyScenePanelStateProvider } from './editorSceneSettingsAdapter'
 import type { SceneAsyncConfig } from '@/types/threeScene'
 import type { WidgetSceneFragment } from './widgetRuntime/widgetSceneFragment'
@@ -40,6 +42,8 @@ export interface SaveEditorSceneDefinitionOptions {
   saveContext?: EditorDim3dSceneSaveContext | null
   /** 仅供定向测试注入接口替身或固定幂等键。 */
   dim3dSaveOptions?: EditorDim3dSceneSaveServiceOptions
+  /** 在前端场景与编辑范围定稿时记录历史位置，包含保存前刚同步的对象变换。 */
+  onSnapshot?: () => void
   /** 保存批次生成后通知调用方释放短期编辑门禁；过期快照在发送前由调用方拒绝。 */
   onPrepared?: (body: Readonly<Dim3dSceneSaveAllBody>) => void
 }
@@ -68,7 +72,7 @@ export const getActiveEditorSceneDefinition = (): SceneDefinition | null => {
  * 仅当活动宿主与待保存场景属于同一场景时读取 Runtime。
  *
  * 模板另存和单元测试都可能显式传入 SceneDefinition；如果场景编号或类型不同，不能把当前
- * 页面另一场景的相机误写入目标快照。真实编辑器保存则自动拿到当前 Cesium/Three Runtime。
+ * 页面另一场景的相机误写入目标快照。真实编辑器保存则自动拿到当前运行时。
  */
 const getActiveRuntimeForScene = (
   host: ReturnType<typeof getActiveSceneViewportHost>,
@@ -144,7 +148,7 @@ export const captureEditorSceneDefinitionSnapshot = async (
  *
  * G002 纯 SceneDefinition 保存仍是新格式主路径。
  * F013 将新格式保存源收敛到 editorSceneSaveSourceAdapter：
- * 新格式只从 SceneDefinition、场景面板纯快照和二维片段构建，不遍历 Three Scene。
+ * 新格式从 SceneDefinition、场景面板纯快照和二维片段构建，活动 Unity 额外读取一次当前相机。
  *
  * 当前正式持久化目标是后端四包整体保存接口：
  * - 生产路径必须由编辑器根组件注入锁令牌和基准修订号；
@@ -156,30 +160,46 @@ export const saveEditorSceneDefinition = async (
   options: SaveEditorSceneDefinitionOptions = {},
 ): Promise<EditorSceneDefinitionSaveResult> => {
   const activeHost = getActiveSceneViewportHost()
-  const sceneWasReadFromHost = options.scene === undefined
-  const scene = options.scene ?? activeHost?.getStore().getScene() ?? null
-  if (!scene) {
+  const activeStore = options.scene === undefined ? activeHost?.getStore() : undefined
+  const initialScene = options.scene ?? (activeStore ?? activeHost?.getStore())?.getScene() ?? null
+  if (!initialScene) {
     throw new Error('当前编辑器没有可保存的场景定义')
   }
-
-  const baseSceneSaveSource = buildEditorSceneDefinitionBaseSaveSource(
-    scene,
-    options.sceneApi,
-    options.runtime ?? getActiveRuntimeForScene(activeHost, scene, sceneWasReadFromHost),
-  )
-
   // 旧场景未转换为正式四包时禁止覆盖；第一阶段不从旧引擎实例重建三维数据。
   if (options.legacySaveOptions || 'legacySceneConfig' in options) throw new Error('旧格式场景需先转换为完整四包')
-
-  // 与场景快照同时固定编辑范围，等待采集时的新命令属于下一次保存。
-  const usesUnityRuntime = sceneWasReadFromHost && activeHost?.getRuntime().id.startsWith('unity-')
-  const editableHierarchyIds = usesUnityRuntime && activeHost
-    ? new Set(activeHost.getStore().getHierarchyEditedIds()) : undefined
-  const deletedObjectIds = sceneWasReadFromHost && activeHost
-    ? new Set(activeHost.getStore().getDeletedObjectIds()) : undefined
-  const saveEdits = sceneWasReadFromHost ? activeHost?.getStore().captureSaveEdits() : undefined
   const saveContext = options.saveContext ? { ...options.saveContext } : null
-  const originalPackages = captureOriginalScenePackages(saveContext?.sceneId ?? scene.id)
+  if (!options.repository && !saveContext) throw new Error('当前场景缺少后端保存上下文，无法保存。')
+
+  const activeRuntime = activeStore ? activeHost?.getRuntime() : undefined
+  const originalPackages = captureOriginalScenePackages(saveContext?.sceneId ?? initialScene.id)
+  let camera: Awaited<ReturnType<UnityEditorSceneRuntime['controlCamera']>> | undefined
+  if (activeHost && activeStore && activeRuntime instanceof UnityEditorSceneRuntime) {
+    const isCurrentScene = () =>
+      getActiveSceneViewportHost() === activeHost && activeStore.getScene().id === initialScene.id
+    // 已提交的面板配置先送达播放器。收到松手回传并写入前端后，再读取完整场景快照。
+    await activeHost.getBridge().flush()
+    if (!isCurrentScene()) throw new Error('对象变换所在场景已切换')
+    await activeRuntime.flushTransformCommitsForSave()
+    if (activeRuntime.cameraAvailable) camera = await activeRuntime.controlCamera({ action: 'get' })
+    if (!isCurrentScene()) throw new Error('保存快照所属场景已切换')
+  }
+
+  const scene = activeStore?.getScene() ?? initialScene
+  const baseScene = buildEditorSceneDefinitionBaseSaveSource(
+    scene,
+    options.sceneApi,
+    options.runtime ?? getActiveRuntimeForScene(activeHost, scene, !!activeStore),
+  )
+  const baseSceneSaveSource = camera
+    ? { ...baseScene, settings: captureUnityCameraSettings(baseScene.settings, scene.type, camera) }
+    : baseScene
+  // 固定前端场景、局部编辑范围和历史位置。后续 Unity 事件属于下一批保存。
+  const usesUnityRuntime = activeRuntime?.id.startsWith('unity-')
+  const editableHierarchyIds = usesUnityRuntime && activeStore ? new Set(activeStore.getHierarchyEditedIds()) : undefined
+  const deletedObjectIds = activeStore ? new Set(activeStore.getDeletedObjectIds()) : undefined
+  const edits = activeStore?.captureSaveEdits()
+  const saveEdits = camera && edits ? { ...edits, domains: new Set([...(edits.domains ?? []), 'camera'] as const) } : edits
+  options.onSnapshot?.()
   const sceneToSave = await captureEditorSceneDefinitionFromBase(baseSceneSaveSource, options)
 
   if (options.repository) {

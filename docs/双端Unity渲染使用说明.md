@@ -123,6 +123,20 @@ GIS 由 Unity 工程中的 Cesium for Unity 渲染，网页不安装 CesiumJS。
 
 线程版播放器需要主网页提供 `Cross-Origin-Opener-Policy: same-origin` 和 `Cross-Origin-Embedder-Policy: credentialless`（或 `require-corp`），并使用 HTTPS 或受信任的 localhost。Vite 开发与预览服务已提供这些头；生产环境须在网页服务器上配置，不能只加在播放器资源服务器。部署配置的 `build.threadsRequired` 应设为 `true`。修改响应头后完整刷新页面，浏览器中 `crossOriginIsolated` 应为 `true`。
 
+#### 在局域网访问网页渲染
+
+在运行前端和存放播放器的 Windows 电脑上，用 PowerShell 7 在项目根目录执行以下命令。将示例地址换成实际网卡地址，启动后保留窗口。
+
+```powershell
+.\scripts\startUnityWebLan.ps1 -Address 192.168.10.247
+```
+
+脚本读取 `.env.development.local` 中的业务地址和应用根路径，构建独立的局域网页面，并通过同一加密地址转发业务和渲染请求。控制台会显示场景列表地址和公开证书位置。网页构建产物位于 `dist/web-unity-lan/`，原有开发命令可同时使用。
+
+如需让旧的局域网页面链接自动跳转，在 `.env.development.local` 设置 `UNITY_WEB_LAN_REDIRECT_ORIGIN=https://192.168.10.247:8443`，填写控制台显示的加密站点根地址。普通网页入口保留原来的页面路径和查询参数，并将同一主机的浏览器导航重定向到加密站点。
+
+将 `.tmp/unity-web-lan/` 下本次地址对应的「网页渲染」证书通过可信渠道发给访问者。Windows 客户端可把它导入「当前用户 → 受信任的根证书颁发机构」，然后用支持网页图形接口的浏览器打开控制台显示的场景列表地址。若签名模型下载服务也使用内网证书，客户端需一并信任下载服务提供的证书。网卡地址变化或证书到期时，按启动输出分发新证书。
+
 ### 0.5 启动云渲染并进入场景
 
 云渲染不用先双击 `CloudRender.exe`。要先开 Launcher，再在网页里点「Unity 云渲染」，Launcher 才会把播放器拉起来。

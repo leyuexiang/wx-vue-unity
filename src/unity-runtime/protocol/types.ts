@@ -132,6 +132,7 @@ export type UnityEditorMethod =
   | 'editor.v1.object.create'
   | 'editor.v1.object.update'
   | 'editor.v1.object.transform.set'
+  | 'editor.v1.transform.flush'
   | 'editor.v1.object.delete'
   | 'editor.v1.selection.set'
   | 'editor.v1.gizmo.mode.set'

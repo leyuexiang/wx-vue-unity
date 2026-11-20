@@ -184,9 +184,28 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   async controlCamera(action: UnityCameraAction) {
     const unity = this.unity
     if (!unity || !this.scene) throw new Error('Unity 场景尚未就绪')
+    const epoch = this.sceneEpoch
+    const isCurrentScene = () => unity === this.unity && epoch === this.sceneEpoch && !this.disposed
     await this.operations
-    if (unity !== this.unity || this.disposed) throw new Error('Unity 会话已切换')
-    return unity.controlCamera(action)
+    if (!isCurrentScene()) throw new Error('Unity 相机所在场景已切换')
+    const camera = await unity.controlCamera(action)
+    // 同一个播放器也能切换草稿，旧场景的迟到读数不能参与新场景保存。
+    if (!isCurrentScene()) throw new Error('Unity 相机所在场景已切换')
+    return camera
+  }
+
+  /** 保存依赖本会话的变换提交。清场、替换和重连时丢弃迟到的同步回执。 */
+  async flushTransformCommitsForSave(): Promise<void> {
+    const unity = this.unity
+    // 旧播放器仍可保存，能确认输入结算的播放器通过能力协商启用这一等待。
+    if (!unity || unity.capabilities?.features['transform.flush'] !== true) return
+    const epoch = this.sceneEpoch
+    await this.operations
+    if (unity !== this.unity || epoch !== this.sceneEpoch || this.disposed)
+      throw new Error('对象变换所在场景已切换')
+    await unity.flushTransformCommits()
+    if (unity !== this.unity || epoch !== this.sceneEpoch || this.disposed)
+      throw new Error('对象变换所在场景已切换')
   }
 
   async updateSceneSettings(settings: SceneSettings): Promise<void> {
@@ -309,8 +328,9 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
       // 引擎只在预览模式发出此通知；再校验对象仍在当前 Runtime，拒绝过期或已删除目标。
       this.objectInteractionListeners.forEach((listener) => listener({ objectId: instanceId, eventType }))
     }))
-    this.unsubscribe.push(unity.on('transformCommitted', ({ instanceId, transform }) => {
-      if (this.programmaticUpdates.has(instanceId)) return
+    this.unsubscribe.push(unity.on('transformCommitted', ({ instanceId, transform, source }) => {
+      // 程序写入的回声仍去重。新版播放器标出手柄提交，避免同一对象的并发回声掩盖刚完成的拖拽。
+      if (source !== 'gizmo' && this.programmaticUpdates.has(instanceId)) return
       const host = this.options.getHost()
       const current = host?.getStore().getObject(instanceId)
       if (!host || !current || (current.transform.kind === 'geo') !== (transform.space === 'wgs84')) return

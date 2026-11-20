@@ -25,6 +25,10 @@ export interface ConfirmedCommandTransaction {
 export interface CommandBus {
   /** 当前持久化编辑状态的会话内身份，撤销/重做可回到相同身份。 */
   getHistoryState: () => number
+  /** 保存快照取得的单调序号，包含当时位于撤销栈和重做栈中的记录。 */
+  getHistorySequence: () => number
+  /** 丢弃已确认保存批次的历史；在途确认结束后清理，避免破坏命令补偿。 */
+  discardHistoryThrough: (sequence: number) => void
   /** 独立持久化写入使旧命令端点无法证明当前数据等价。 */
   invalidateHistoryState: () => void
   beginConfirmed: (action: 'execute' | 'undo' | 'redo', command?: SceneCommand) => ConfirmedCommandTransaction | null
@@ -71,7 +75,7 @@ export interface CommandBus {
  */
 export function createCommandBus(store: SceneStore): CommandBus {
   const MAX_HISTORY_SIZE = 220
-  type HistoryEntry = { command: SceneCommand; before: number; after: number }
+  type HistoryEntry = { command: SceneCommand; before: number; after: number; recordedAt: number }
   const undoStack: HistoryEntry[] = []
   const redoStack: HistoryEntry[] = []
   let identitySequence = 0
@@ -103,8 +107,17 @@ export function createCommandBus(store: SceneStore): CommandBus {
   const historyListeners = new Set<(event: CommandHistoryEvent) => void>()
   let executingDepth = 0
   let pendingToken: symbol | null = null
+  let pendingHistoryCutoff: number | undefined
   const transactionListeners = new Set<(event: CommandTransactionEvent) => void>()
-  const transactionEvent = (event: CommandTransactionEvent) => transactionListeners.forEach((listener) => listener(event))
+  const transactionEvent = (event: CommandTransactionEvent) => {
+    // 回放中的记录仍用于提交或补偿。等记录落入最终栈后再按保存序号修剪。
+    if (event !== 'begin' && pendingHistoryCutoff !== undefined) {
+      const cutoff = pendingHistoryCutoff
+      pendingHistoryCutoff = undefined
+      discardHistoryThrough(cutoff)
+    }
+    transactionListeners.forEach((listener) => listener(event))
+  }
   const requireIdle = () => {
     if (pendingToken) throw new Error('命令正在等待运行端确认')
   }
@@ -150,6 +163,29 @@ export function createCommandBus(store: SceneStore): CommandBus {
     discardStack(redoStack)
   }
 
+  const discardHistoryThrough = (sequence: number): void => {
+    if (pendingToken) {
+      pendingHistoryCutoff = Math.max(pendingHistoryCutoff ?? sequence, sequence)
+      return
+    }
+    let changed = false
+    for (const stack of [undoStack, redoStack]) {
+      let retained = 0
+      for (const entry of stack) {
+        // 撤销或重做会移动记录并可能重分配状态身份，登记序号始终反映记录的保存批次。
+        if (entry.recordedAt <= sequence) {
+          if (mergeCandidate === entry.command) breakHistoryMerge()
+          discardCommand(entry.command)
+          changed = true
+        } else {
+          stack[retained++] = entry
+        }
+      }
+      stack.length = retained
+    }
+    if (changed) notifyHistoryChanged({ type: 'clear' })
+  }
+
   /**
    * 集中维护线性历史规则，确保直接执行命令和登记已执行命令拥有完全一致的合并、清空重做语义。
    */
@@ -163,6 +199,7 @@ export function createCommandBus(store: SceneStore): CommandBus {
         (previousCommand.confirmationScope ?? 'runtime') === (command.confirmationScope ?? 'runtime') &&
         previousCommand.mergeWith?.(command)) {
       previous.after = historyState = ++identitySequence
+      previous.recordedAt = historyState
       /** 合并后的新命令不会进入任何历史栈，必须立即释放其独占资源，避免资源泄漏。 */
       discardCommand(command)
       discardRedoStack()
@@ -172,7 +209,7 @@ export function createCommandBus(store: SceneStore): CommandBus {
 
     const before = historyState
     historyState = ++identitySequence
-    undoStack.push({ command, before, after: historyState })
+    undoStack.push({ command, before, after: historyState, recordedAt: historyState })
     mergeCandidate = command.mergeSession === undefined ? undefined : command
     if (undoStack.length > MAX_HISTORY_SIZE) {
       discardCommand(undoStack.shift()?.command)
@@ -183,6 +220,8 @@ export function createCommandBus(store: SceneStore): CommandBus {
 
   return {
     getHistoryState: () => historyState,
+    getHistorySequence: () => identitySequence,
+    discardHistoryThrough,
     invalidateHistoryState,
     getReplayCommand,
     breakHistoryMerge,
@@ -358,6 +397,7 @@ export function createCommandBus(store: SceneStore): CommandBus {
     clear: () => {
       // 宿主销毁可废弃等待中的事务，迟到确认会因令牌失效而被拒绝。
       pendingToken = null
+      pendingHistoryCutoff = undefined
       breakHistoryMerge()
       // 清场或重置释放历史资源，当前数据与其身份不随清栈改变。
       const hadHistory = undoStack.length > 0 || redoStack.length > 0

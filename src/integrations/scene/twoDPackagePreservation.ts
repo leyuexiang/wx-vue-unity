@@ -348,6 +348,13 @@ export function preserveUneditedThreeDDomain(
   if (domains?.has('settings')) threeD.baseConfig = mergeRecords(originalThreeD.baseConfig, generatedThreeD.baseConfig)
   const originalBase = isRecord(originalThreeD.baseConfig) ? originalThreeD.baseConfig : {}
   const generatedBase = isRecord(generatedThreeD.baseConfig) ? generatedThreeD.baseConfig : {}
+  if (domains?.has('camera')) {
+    const baseConfig = isRecord(threeD.baseConfig) ? threeD.baseConfig : {}
+    // 旧目标点会覆盖 Unity 的实时姿态，旧裁剪面会把自动裁剪锁成手动。先去掉这些可缺省字段。
+    const { position: _position, destination: _destination, target: _target, near: _near, far: _far,
+      ...previousCamera } = isRecord(baseConfig.camera) ? baseConfig.camera : {}
+    threeD.baseConfig = { ...baseConfig, camera: mergeRecords(previousCamera, generatedBase.camera) }
+  }
   const gisChanged = domains?.has('gis') === true
   const originalGisLayerIds = new Set<string>()
   const currentGisLayerIds = new Set<string>()

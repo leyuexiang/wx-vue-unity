@@ -145,7 +145,8 @@ function applyPosition() {
     void control({ action: 'get' }, camera => {
       if (commitCamera({ destination: [x, y, z], orientation: { ...camera.orientation } })) positionDraft.value = {}
     })
-  } else if (commitCamera({ position: [x, y, z], target: undefined })) {
+  // 普通场景仅修改位置时保留播放器内的实时朝向，清除可能来自旧快照的姿态和目标点。
+  } else if (commitCamera({ position: [x, y, z], orientation: undefined, target: undefined })) {
     positionDraft.value = {}
   }
 }

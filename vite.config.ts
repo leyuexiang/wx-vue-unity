@@ -26,7 +26,14 @@ const boundedImportMetaFilter = (): Plugin => ({
 
 /** 只接入页面、二维组件和媒体构建能力；云渲染使用独立传输层，不安装浏览器三维插件。 */
 export default defineConfig(({ mode, command }) => {
-  const env = loadEnv(mode, process.cwd(), 'VITE_')
+  const env = loadEnv(mode, process.cwd(), ['VITE_', 'UNITY_WEB_LAN_REDIRECT_ORIGIN'])
+  const base = env.VITE_BASE_URL || '/dts/'
+  const lanRedirect = command === 'serve' && env.UNITY_WEB_LAN_REDIRECT_ORIGIN
+    ? new URL(env.UNITY_WEB_LAN_REDIRECT_ORIGIN) : undefined
+  if (lanRedirect && (lanRedirect.protocol !== 'https:' || lanRedirect.pathname !== '/' ||
+    lanRedirect.username || lanRedirect.password || lanRedirect.search || lanRedirect.hash)) {
+    throw new Error('局域网跳转地址必须是加密站点根来源')
+  }
   // 启动接口与页面使用同源相对路径，部署子目录变化时统一跟随基础路径。
   const unityRuntimePrefix = new URL('unity-runtime', new URL(env.VITE_BASE_URL || '/', 'http://localhost')).pathname
   const unityRuntimeProxy = {
@@ -44,10 +51,31 @@ export default defineConfig(({ mode, command }) => {
     .map(entry => `element-plus/es/components/${entry.name}/style/css`)
   return {
   // 未提供部署配置时也使用 /dts/，确保默认构建与开发入口、静态资源路径一致。
-  base: env.VITE_BASE_URL || '/dts/',
+  base,
   plugins: [vue(), vueJsx(), tailwindcss(), boundedImportMetaFilter(),
+    ...(lanRedirect ? [{ name: 'redirect-lan-page-to-https', configureServer(server) {
+      // 已收藏的局域网网页入口直接跳到同一主机的加密站点。接口请求和本机地址继续由开发服务处理。
+      const basePath = new URL(base, 'http://localhost').pathname
+      const baseRoot = basePath.replace(/\/$/, '')
+      server.middlewares.use((req, res, next) => {
+        const requestUrl = req.url || '/'
+        const pathname = requestUrl.split('?', 1)[0]
+        const isPage = pathname === '/' || pathname === baseRoot || pathname.startsWith(basePath)
+        if ((req.method === 'GET' || req.method === 'HEAD') && isPage &&
+          req.headers.host?.split(':', 1)[0].toLowerCase() === lanRedirect.hostname &&
+          req.headers.accept?.includes('text/html')) {
+          const destination = pathname === '/' ? basePath + requestUrl.slice(1) : requestUrl
+          res.writeHead(302, { Location: lanRedirect.origin + destination, 'Cache-Control': 'no-store' })
+          res.end()
+          return
+        }
+        next()
+      })
+    } } satisfies Plugin] : []),
     {
-      name: 'package-unity-web-gateway', apply: 'build',
+      name: 'package-unity-web-gateway',
+      // 局域网入口复用源码目录里的网关和播放器，只构建对外提供的网页文件。
+      apply: (config, { command }) => command === 'build' && config.build?.copyPublicDir !== false,
       writeBundle(output) {
         // 公共目录由构建工具原样复制；额外交付只依赖运行库内置模块的启动网关。
         const serverDirectory = path.resolve(output.dir || 'dist/web-unity', 'server')

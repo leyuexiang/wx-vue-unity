@@ -1,7 +1,7 @@
 {
-  "active": "stable",
+  "active": "development",
   "packages": {
     "stable": "unity-web/player",
-    "development": "unity-web/player"
+    "development": "unity-web-development/player"
   }
 }

@@ -1,5 +1,5 @@
 import { BusinessPacketDecoder } from './BusinessPacketDecoder'
-import { inputDescriptors } from './LegacyInputEncoder'
+import { inputDescriptors, wrapInput } from './LegacyInputEncoder'
 import { CloudInputSender } from './CloudInputSender'
 import { CloudStreamStats, type CloudStreamPerformance } from './cloudStreamStats'
 import type { UnityEditorEventType, UnityEditorMethod, UnityEventEnvelope, UnityRequestEnvelope, UnityResponseEnvelope } from '@/unity-runtime/protocol/types'
@@ -55,6 +55,7 @@ export class LegacyUnityTransport implements UnityTransport {
   private peer: RTCPeerConnection | null = null
   private inputChannel: RTCDataChannel | null = null
   private rpcChannel: RTCDataChannel | null = null
+  private transformInputMarker = 0
   private stream = new MediaStream()
   private readonly decoder = new BusinessPacketDecoder()
   private readonly inputSender = new CloudInputSender(() => this.inputChannel)
@@ -384,6 +385,16 @@ export class LegacyUnityTransport implements UnityTransport {
       this.pending.set(id, { resolve: resolve as (response: UnityResponseEnvelope<unknown>) => void, reject, timer, generation: this.activeGeneration })
       try { channel.send(body) } catch (error) { window.clearTimeout(timer); this.pending.delete(id); reject(error) }
     })
+  }
+  sendTransformInputMarker(): number {
+    const channel = this.inputChannel
+    if (!channel || channel.readyState !== 'open') throw new Error('三维输入通道尚未就绪，无法确认对象变换')
+    // 与鼠标松手包走同一个有序通道。消息类型 11 由播放器扩展，不产生鼠标或键盘操作。
+    const marker = this.transformInputMarker = this.transformInputMarker % 0x7fffffff + 1
+    const packet = wrapInput(11, new Uint8Array(0))
+    new DataView(packet).setInt32(0, marker, true)
+    channel.send(packet)
+    return marker
   }
   notify<TRequest>(method: UnityEditorMethod, envelope: UnityRequestEnvelope<TRequest>): void {
     if (this.rpcChannel?.readyState === 'open') this.rpcChannel.send(JSON.stringify({ jsonrpc: '2.0', method, params: { envelope } }))

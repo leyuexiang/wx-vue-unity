@@ -7,8 +7,7 @@ import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { assertPackageFile, createWebPackageStore, WebPackageError, type WebPackageDeployment } from './unityWebPackages.ts'
 
-// Local integration only. The browser's login token is checked against the existing
-// profile API; the Unity player receives a short-lived opaque proxy URL, not the token.
+// 网关只监听本机环回地址。局域网通过加密入口转发，播放器使用短期会话地址连接业务接口。
 const host = '127.0.0.1'
 const port = Number(process.env.UNITY_WEB_DEV_PORT || 5191)
 const pageOrigin = process.env.UNITY_WEB_DEV_PAGE_ORIGIN || 'http://localhost:5180'
@@ -303,6 +302,13 @@ const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
 const server = publicOrigin ? createHttpServer(handleRequest) : createHttpsServer({
   key: readFileSync(required('UNITY_WEB_DEV_TLS_KEY')), cert: readFileSync(required('UNITY_WEB_DEV_TLS_CERT')),
 }, handleRequest)
-server.listen(port, host, () => console.log(`Unity Web local gateway listening on ${origin}`))
+// 由局域网入口托管时，入口退出后同时释放仅供其使用的环回网关。
+if (process.connected) process.once('disconnect', () => server.close())
+server.listen(port, host, () => {
+  console.log(`Unity Web local gateway listening on ${origin}`)
+  // 局域网入口为内部网关分配空闲端口，绑定成功后才开始对外接收请求。
+  const address = server.address()
+  if (address && typeof address !== 'string') process.send?.(address.port)
+})
 process.on('SIGINT', () => server.close())
 process.on('SIGTERM', () => server.close())

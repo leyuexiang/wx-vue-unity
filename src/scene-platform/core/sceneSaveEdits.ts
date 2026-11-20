@@ -6,7 +6,8 @@ export const sceneObjectSaveMetadataKeys = [
 export const sceneLayerSaveFields = ['name', 'visible', 'locked', 'order'] as const
 export type SceneObjectSaveField = typeof sceneObjectSaveFields[number] | typeof sceneObjectSaveMetadataKeys[number]
 export type SceneLayerSaveField = typeof sceneLayerSaveFields[number] | 'presence'
-export type SceneSaveDomain = 'settings' | 'gis' | 'cameraPaths' | 'vegetation' | 'streamingPolicy'
+/** 相机视角可随一次保存单独采集，合并时仅接管基础配置中的相机字段。 */
+export type SceneSaveDomain = 'settings' | 'gis' | 'camera' | 'cameraPaths' | 'vegetation' | 'streamingPolicy'
 
 export interface SceneSaveEdits {
   readonly objects: ReadonlyMap<string, ReadonlySet<SceneObjectSaveField>>

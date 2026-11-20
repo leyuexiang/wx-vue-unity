@@ -299,6 +299,41 @@ describe('统一历史回放入口', () => {
     } finally { tracker.dispose() }
   })
 
+  it('保存失败保留两套历史，成功后清空保存时的撤销栈和重做栈', async () => {
+    const { host, commandBus } = await setup()
+    const store = host.getStore()
+    const tracker = createEditorSceneSaveStateTracker()
+    tracker.bindStore(store, commandBus)
+    try {
+      commandBus.execute(createUpdateObjectTransformCommand('node', { kind: 'local', position: [1, 0, 0], rotation: [0, 0, 0], scale: 1 }))
+      commandBus.undo()
+      tracker.markFailed(new Error('保存失败'), tracker.beginSave())
+      expect(getEditorUndoRedoState({ commandBus })).toMatchObject({ undoSteps: 1, redoSteps: 1 })
+      expect(tracker.markSaved(tracker.beginSave()).dirty).toBe(false)
+      expect(getEditorUndoRedoState({ commandBus })).toMatchObject({ undoSteps: 0, redoSteps: 0 })
+      expect(store.getObject('node')?.transform).toMatchObject({ position: [0, 0, 0] })
+    } finally { tracker.dispose() }
+  })
+
+  it('保存回执与运行端确认交错时，仅清除已保存批次并保留在途编辑的撤销能力', async () => {
+    const { host, commandBus } = await setup()
+    const tracker = createEditorSceneSaveStateTracker()
+    tracker.bindStore(host.getStore(), commandBus)
+    try {
+      const attempt = tracker.beginSave()
+      const transaction = commandBus.beginConfirmed('execute',
+        createUpdateObjectTransformCommand('node', { kind: 'local', position: [3, 0, 0], rotation: [0, 0, 0], scale: 1 }))!
+      tracker.markSaved(attempt)
+      expect(transaction.isCurrent()).toBe(true)
+      transaction.commit()
+      expect(tracker.getSnapshot().dirty).toBe(true)
+      expect(commandBus.getUndoSize()).toBe(1)
+      expect(commandBus.undo()).toBe(true)
+      expect(tracker.getSnapshot().dirty).toBe(false)
+      expect(commandBus.undo()).toBe(false)
+    } finally { tracker.dispose() }
+  })
+
   it('保存点跨撤销重做稳定，分支与独立写入不会伪装成已保存状态', async () => {
     const { host, commandBus } = await setup()
     const store = host.getStore()
@@ -309,24 +344,25 @@ describe('统一历史回放入口', () => {
     try {
       commandBus.execute(createUpdateObjectLayerCommand(layerId, { name: '保存版本' }))
       const attempt = tracker.beginSave()
+      commandBus.execute(createUpdateObjectLayerCommand(layerId, { name: '保存后编辑' }))
       tracker.markSaved(attempt)
       expect(commandBus.undo()).toBe(true)
-      expect(tracker.getSnapshot().dirty).toBe(true)
-      expect(commandBus.redo()).toBe(true)
       expect(tracker.getSnapshot().dirty).toBe(false)
+      expect(commandBus.redo()).toBe(true)
+      expect(tracker.getSnapshot().dirty).toBe(true)
 
       commandBus.undo()
       commandBus.execute(createUpdateObjectLayerCommand(layerId, { name: '新分支' }))
       expect(commandBus.getRedoSize()).toBe(0)
       expect(tracker.getSnapshot().dirty).toBe(true)
 
-      // 独立写入碰到历史会回放的字段，旧命令重做不能冒充这个保存点。
+      // 独立写入形成新的保存基线，旧命令不能重放并覆盖该值。
       store.upsertLayer({ ...store.getLayers()[0]!, name: '命令之外的保存值' })
       tracker.markSaved(tracker.beginSave())
-      commandBus.undo()
-      commandBus.redo()
-      expect(store.getLayers()[0]!.name).toBe('新分支')
-      expect(tracker.getSnapshot().dirty).toBe(true)
+      expect(commandBus.undo()).toBe(false)
+      expect(commandBus.redo()).toBe(false)
+      expect(store.getLayers()[0]!.name).toBe('命令之外的保存值')
+      expect(tracker.getSnapshot().dirty).toBe(false)
     } finally { tracker.dispose() }
   })
 
@@ -409,8 +445,6 @@ describe('统一历史回放入口', () => {
       expect(updateEditorSceneRequestGlobalConfig(request)).toBe(false)
       expect(tracker.getSnapshot().revision).toBe(3)
       expect(useSceneRequestStore().sceneRequestGlobalConfig).toEqual(request)
-      tracker.beginSave()
-      tracker.markSaved()
       expect(await dispatchEditorHistory('undo', options)).toBe(true)
       expect(useSceneRequestStore().sceneRequestGlobalConfig).toEqual(createEmptyRequestGlobalConfig())
       expect(tracker.getSnapshot()).toMatchObject({ dirty: true, revision: 4 })

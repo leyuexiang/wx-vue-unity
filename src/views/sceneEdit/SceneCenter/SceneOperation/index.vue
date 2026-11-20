@@ -361,7 +361,8 @@ const handleSaveSceneConfig = async () => {
     pendingSaveBatch.body.sceneId !== context.sceneId || pendingSaveBatch.body.lockToken !== context.lockToken ||
     pendingSaveBatch.body.baseRevisionNo !== context.baseRevisionNo)) pendingSaveBatch = undefined
   const retry = pendingSaveBatch
-  const attempt = editorSceneSaveStateTracker.beginSave(retry?.checkpoint ?? checkpoint)
+  let savedCheckpoint = retry?.checkpoint ?? checkpoint
+  const attempt = editorSceneSaveStateTracker.beginSave(savedCheckpoint)
   // 同编号重载、新批次和锁变化都不能让迟到回执推进当前基线。
   const isCurrentSave = () => getActiveSceneViewportHost() === host &&
     editorSceneSaveStateTracker.isCurrentSave(attempt)
@@ -376,9 +377,15 @@ const handleSaveSceneConfig = async () => {
         sceneApi: store.sceneApi,
         saveContext: context,
         widgetSceneFragment: readWidgetSceneFragment(),
+        onSnapshot: () => {
+          if (!isCurrentSave() || !sameLease()) throw new Error('保存快照所属场景或编辑锁已变化')
+          // 把等待期间已回传的变换算进本次保存，网络请求期间发生的编辑则仍为未保存。
+          savedCheckpoint = editorSceneSaveStateTracker.captureCheckpoint()
+          host.getCommandBus().breakHistoryMerge()
+        },
         onPrepared: (body) => {
           if (!isCurrentSave() || !sameLease()) throw new Error('保存快照所属场景或编辑锁已变化')
-          pendingSaveBatch = { body, checkpoint }
+          pendingSaveBatch = { body, checkpoint: savedCheckpoint }
           // 四包固定后等待网络无需占用编辑门禁，新操作保持未保存。
           release()
         },
@@ -388,7 +395,7 @@ const handleSaveSceneConfig = async () => {
     if (!isCurrentSave()) return
     if (!sameLease() || !bookmark) throw new Error('保存回执所属场景或编辑锁已变化')
     pendingSaveBatch = undefined
-    editorSceneSaveStateTracker.markSaved(attempt)
+    editorSceneSaveStateTracker.markSaved(attempt, savedCheckpoint)
     refreshScenePlatformHistoryRevision()
     emit('saveSucceeded', bookmark)
     ElMessage.success(retry && sceneSaveState.value.dirty ? '原保存批次已确认，后续编辑仍待保存' : '场景保存成功')

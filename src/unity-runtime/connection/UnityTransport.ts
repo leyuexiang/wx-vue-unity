@@ -9,6 +9,8 @@ import type {
 export interface UnityTransport {
   connect(): Promise<void>
   disconnect(): Promise<void>
+  /** 云端在独立输入通道上发送有序确认标记，网页播放器直接使用本地输入循环。 */
+  sendTransformInputMarker?(): number
   request<TRequest, TResponse>(
     method: UnityEditorMethod,
     envelope: UnityRequestEnvelope<TRequest>,

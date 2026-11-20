@@ -7,6 +7,9 @@ import { createSceneDefinition, createViewportHost, createUpdateObjectTransformC
 import type { SceneDefinition as UnityScene } from '@/scene-core'
 import type { FileModel } from '@/types/threeScene'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
+import type { UnityCameraState, UnityEventEnvelope, UnityRequestEnvelope } from '@/unity-runtime/protocol/types'
+import type { UnityTransport } from '@/unity-runtime/connection/UnityTransport'
+import type { Dim3dSceneSaveAllBody } from '@/servers/manual/dim3d/api/sceneRuntime'
 import { createMoveSceneNodeCommand } from '@/scene-platform/commands/moveSceneNodeCommand'
 import { assembleSceneDefinitionFromRuntimeFragments } from '../sceneRuntimeFragmentAssembler'
 import { serializeSceneDefinitionToFourPackages } from '../sceneFourPackage'
@@ -14,6 +17,7 @@ import { createEditorUnityGroup, createEditorUnityObject } from '../editorUnityC
 import { preserveUneditedThreeDDomain, releaseOriginalScenePackages, retainOriginalScenePackages } from '../twoDPackagePreservation'
 import { saveEditorSceneToDim3d } from '../editorDim3dSceneSaveService'
 import { saveEditorSceneDefinition } from '../editorSceneSaveAdapter'
+import { createEditorSceneSaveStateTracker } from '../editorSceneSaveState'
 import { setActiveSceneViewportHost, clearActiveSceneViewportHost } from '../editorScenePlatformHost'
 import { renameEditorSceneObjectWithCommand } from '../editorSceneObjectMutationAdapter'
 import { applySceneObjectVisibilityToStore } from '../editorSceneVisibilityAdapter'
@@ -134,6 +138,180 @@ describe('画布模型拖拽入口', () => {
     const canvas = readFileSync(new URL('../../../views/sceneEdit/SceneCenter/SceneCanvas/index.vue', import.meta.url), 'utf8')
     expect(canvas.includes('三维资源将在二维验收后接入 Unity')).toBe(false)
     expect(canvas).toContain('await createEditorUnityObject(')
+  })
+})
+
+describe('等待 Unity 变换后保存', () => {
+  // 只替换播放器通道，实际走提交事件、变换命令、快照和四包保全合并。
+  it.each(['webgpu', 'cloud'] as const)('在 %s 上等待迟到的松手提交，并按实际保存快照更新历史', async mode => {
+    const { host, runtime, create } = await setup('local3d', mode)
+    const id = (await create())!
+    const initial = host.getStore().getObject(id)!.transform
+    const original = serializeSceneDefinitionToFourPackages(host.getStore().getScene())
+    const threeD = JSON.parse(original.threeDJson)
+    const deferred = { instanceId: 'unloaded', targetType: 'vendorModel', extension: { keep: true } }
+    threeD.objects.push(deferred)
+    const twoD = JSON.parse(original.twoDJson)
+    twoD.vendorLayout = { keep: true }
+    retainOriginalScenePackages(sceneId, { ...original, threeDJson: JSON.stringify(threeD), twoDJson: JSON.stringify(twoD) })
+
+    let confirm!: () => void
+    const waiting = new Promise<void>(resolve => { confirm = resolve })
+    const listeners = new Map<string, (event: UnityEventEnvelope<unknown>) => void>()
+    const request = vi.fn(async (method: string, envelope: UnityRequestEnvelope<unknown>) => {
+      if (method === 'editor.v1.transform.flush') await waiting
+      return { success: true, requestId: envelope.requestId, protocolVersion: 1, payload: {
+        protocolVersion: 1,
+        capabilities: { sceneTypes: ['local3d'], objectTypes: ['model'], gizmoModes: [], features: { 'transform.flush': true } },
+      } }
+    })
+    const marker = vi.fn(() => 17)
+    const transport = {
+      connect: async () => {}, disconnect: async () => {}, notify: vi.fn(), request,
+      ...(mode === 'cloud' ? { sendTransformInputMarker: marker } : {}),
+      subscribe: (name: string, listener: (event: UnityEventEnvelope<unknown>) => void) => {
+        listeners.set(name, listener)
+        return () => { listeners.delete(name) }
+      },
+    } as unknown as UnityTransport
+    Object.assign(runtime, { transport })
+    await (runtime as unknown as { connectProtocol(): Promise<void> }).connectProtocol()
+    await host.replaceScene(host.getStore().getScene())
+    setActiveSceneViewportHost(host)
+
+    const tracker = createEditorSceneSaveStateTracker()
+    tracker.bindStore(host.getStore(), host.getCommandBus())
+    const attempt = tracker.beginSave()
+    let checkpoint = attempt.checkpoint
+    const saveAll = vi.fn(async (_body: Dim3dSceneSaveAllBody) => ({ code: 200, data: { sceneId, conflict: false } }))
+    const save = saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null, saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll }, onSnapshot: () => { checkpoint = tracker.captureCheckpoint() },
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('editor.v1.transform.flush', expect.anything()))
+    const envelope = request.mock.calls.find(([method]) => method === 'editor.v1.transform.flush')![1]
+    expect(envelope.payload).toEqual(mode === 'cloud' ? { inputMarker: 17 } : {})
+    expect(marker).toHaveBeenCalledTimes(mode === 'cloud' ? 1 : 0)
+    expect(saveAll).not.toHaveBeenCalled()
+    expect(host.getStore().getObject(id)?.transform).toEqual(initial)
+
+    // 与手柄提交同时在途的程序写入不能让真实松手事件被当成回声。
+    Object.assign(runtime, { programmaticUpdates: new Set([id]) })
+    listeners.get('editor.v1.transform.committed')!({
+      protocolVersion: 1, sessionId: envelope.sessionId, sceneId, sceneGeneration: envelope.sceneGeneration,
+      eventId: '拖拽结束', type: 'editor.v1.transform.committed',
+      payload: { instanceId: id, source: 'gizmo', transform: { space: 'local', position: [2, 3, 4],
+        rotation: { kind: 'quaternion', value: [0, 0, 0, 1] }, scale: [2, 2, 2] } },
+    })
+    confirm()
+    await save
+
+    const body = saveAll.mock.calls[0]![0]
+    const objects = JSON.parse(body.threeDJson).objects
+    expect(objects.find((item: { instanceId: string }) => item.instanceId === id).transform)
+      .toMatchObject({ position: [2, 3, 4] })
+    expect(objects).toContainEqual(deferred)
+    expect(JSON.parse(body.twoDJson).vendorLayout).toEqual(twoD.vendorLayout)
+    expect(body.dependenciesJson).toEqual(original.dependenciesJson)
+    expect(tracker.markSaved(attempt, checkpoint).dirty).toBe(false)
+    tracker.dispose()
+  })
+
+  it('播放器确认失败时保留草稿并阻止提交旧快照', async () => {
+    const { host, runtime } = await setup()
+    setActiveSceneViewportHost(host)
+    vi.spyOn(runtime, 'flushTransformCommitsForSave').mockRejectedValue(new Error('等待三维输入确认超时'))
+    const saveAll = vi.fn()
+    await expect(saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null, saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll },
+    })).rejects.toThrow('等待三维输入确认超时')
+    expect(saveAll).not.toHaveBeenCalled()
+  })
+})
+
+describe('双端相机保存和重开', () => {
+  // 用真实保存入口、原始三维包合并与场景加载，只替换播放器读数和后端接口。
+  it.each([
+    ['local3d', 'webgpu', [-44, 2, 124], false],
+    ['gis', 'cloud', [110, 19, 800], true],
+  ] as const)('保存 %s 场景的实时相机并在 %s 播放器重开时恢复', async (type, mode, position, automaticClipping) => {
+    const { host, unity } = await setup(type, mode)
+    const camera: UnityCameraState = {
+      position: [...position], orientation: { heading: 0.4, pitch: -0.6, roll: 0.1 },
+      fov: 62, near: 0.3, far: 100000, automaticClipping,
+    }
+    const controlCamera = vi.fn(async () => camera)
+    Object.assign(unity, { controlCamera, capabilities: { features: { 'camera.control': true } } })
+    const original = serializeSceneDefinitionToFourPackages(host.getStore().getScene())
+    const threeD = JSON.parse(original.threeDJson)
+    threeD.baseConfig.camera = {
+      kind: type === 'gis' ? 'cesium' : 'three', target: [0, 0, 0], near: 2, far: 900, vendorField: '保留',
+    }
+    retainOriginalScenePackages(sceneId, { ...original, threeDJson: JSON.stringify(threeD) })
+    setActiveSceneViewportHost(host)
+    const saveAll = vi.fn(async (_body: Dim3dSceneSaveAllBody) => ({ code: 200, data: { sceneId, conflict: false } }))
+    await saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null, saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll },
+    })
+
+    expect(controlCamera).toHaveBeenCalledExactlyOnceWith({ action: 'get' })
+    const body = saveAll.mock.calls[0]![0]
+    const savedCamera = JSON.parse(body.threeDJson).baseConfig.camera
+    const clipping = automaticClipping ? {} : { near: camera.near, far: camera.far }
+    expect(savedCamera).toEqual({
+      kind: type === 'gis' ? 'cesium' : 'three', [type === 'gis' ? 'destination' : 'position']: [...position],
+      orientation: camera.orientation, fov: camera.fov, ...clipping, vendorField: '保留',
+    })
+    expect(host.getStore().getScene().settings.camera).toBeUndefined()
+    const reopened = assembleSceneDefinitionFromRuntimeFragments({
+      manifest: { fragmentType: 'manifest', fragmentKey: sceneId, contentJson: JSON.stringify(body) },
+      options: { sceneId, sceneType: type },
+    })
+    await host.replaceScene(reopened)
+    expect(unity.loadScene).toHaveBeenLastCalledWith(expect.objectContaining({
+      camera: expect.objectContaining({ position: camera.position, orientation: camera.orientation, fov: camera.fov, ...clipping }),
+    }))
+    expect(unity.loadScene.mock.lastCall![0].camera?.target).toBeUndefined()
+    if (automaticClipping) expect(unity.loadScene.mock.lastCall![0].camera?.near).toBeUndefined()
+  })
+
+  it('实时相机读取失败时提示失败，避免提交旧相机并显示保存成功', async () => {
+    const { host, unity } = await setup()
+    Object.assign(unity, {
+      controlCamera: vi.fn().mockRejectedValue(new Error('播放器连接超时')),
+      capabilities: { features: { 'camera.control': true } },
+    })
+    setActiveSceneViewportHost(host)
+    const saveAll = vi.fn()
+    await expect(saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null, saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll },
+    })).rejects.toThrow('播放器连接超时')
+    expect(saveAll).not.toHaveBeenCalled()
+  })
+
+  it('同编号场景重载后拒绝上一次相机读取的迟到回执', async () => {
+    const { host, unity } = await setup()
+    let respond!: (camera: UnityCameraState) => void
+    const response = new Promise<UnityCameraState>(resolve => { respond = resolve })
+    const controlCamera = vi.fn(() => response)
+    Object.assign(unity, { controlCamera, capabilities: { features: { 'camera.control': true } } })
+    setActiveSceneViewportHost(host)
+    const saveAll = vi.fn()
+    const save = saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null, saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll },
+    })
+    await vi.waitFor(() => expect(controlCamera).toHaveBeenCalledWith({ action: 'get' }))
+    await host.replaceScene(host.getStore().getScene())
+    respond({
+      position: [1, 2, 3], orientation: { heading: 1, pitch: 0, roll: 0 },
+      fov: 60, near: 0.3, far: 1000, automaticClipping: false,
+    })
+    await expect(save).rejects.toThrow('相机所在场景已切换')
+    expect(saveAll).not.toHaveBeenCalled()
   })
 })
 

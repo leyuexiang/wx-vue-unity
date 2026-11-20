@@ -73,6 +73,17 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
     // Reads wait for queued writes. A stalled camera sample must never delay the next edit or scene load.
     return action.action === 'get' ? this.lifecycle.then(operation) : this.schedule(operation)
   }
+  /** 等待播放器处理已送达的鼠标输入及其提交事件。只确认时序，不读取或替换三维对象。 */
+  flushTransformCommits(): Promise<void> {
+    if (this.capabilities?.features['transform.flush'] !== true) return Promise.resolve()
+    return this.schedule(async () => {
+      const inputMarker = this.transport.sendTransformInputMarker?.()
+      const response = await this.send<{ inputMarker?: number }, unknown>(
+        'editor.v1.transform.flush', inputMarker === undefined ? {} : { inputMarker },
+      )
+      this.assertSuccess(response)
+    })
+  }
   async describeWeather(): Promise<WeatherDescription | null> {
     if (!this.capabilities?.features['weather.enviro3']) return null
     return this.schedule(async () => {
