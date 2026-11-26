@@ -67,14 +67,7 @@
 
         <el-form-item prop="sceneType" class="scene-dialog__field">
           <label class="scene-dialog__label">场景类型：</label>
-          <el-radio-group
-            v-model="ruleForm.sceneType"
-            class="scene-dialog__radio-group"
-            :disabled="Boolean(editRecord)"
-          >
-            <el-radio value="GisScene">GIS场景</el-radio>
-            <el-radio value="CommScene">非GIS场景</el-radio>
-          </el-radio-group>
+          <SceneTypeRadioGroup v-model="ruleForm.sceneType" :disabled="Boolean(editRecord)" />
         </el-form-item>
 
         <el-form-item prop="coverList" class="scene-dialog__field scene-dialog__upload-field">
@@ -154,10 +147,11 @@ import {
   type Dim3dSceneForm,
 } from '@/servers/manual/dim3d/api/scene'
 import { getDim3dOssFileById, uploadDim3dOssFile } from '@/servers/manual/dim3d/api/oss'
+import SceneTypeRadioGroup from './SceneTypeRadioGroup.vue'
 import {
-  DEFAULT_PROJECT_SCENE_TYPE,
+  DEFAULT_SCENE_CREATION_TYPE,
   resolveProjectSceneType,
-  type ProjectSceneType,
+  toDefinitionSceneType,
 } from './sceneType'
 
 interface RuleForm {
@@ -166,7 +160,7 @@ interface RuleForm {
   description: string
   /** 场景分类保存字典 dictValue，展示名称由父页面字典选项提供。 */
   category: string
-  sceneType: ProjectSceneType
+  sceneType: Dim3dSceneForm['sceneType']
   coverList: UploadUserFile[]
 }
 
@@ -193,7 +187,7 @@ const ruleForm = reactive<RuleForm>({
   name: '',
   description: '',
   category: '',
-  sceneType: DEFAULT_PROJECT_SCENE_TYPE,
+  sceneType: DEFAULT_SCENE_CREATION_TYPE,
   coverList: [],
 })
 const rules = reactive<FormRules<RuleForm>>({
@@ -233,7 +227,7 @@ watch(
         name: '',
         description: '',
         category: props.sceneCategoryOptions[0]?.value || '',
-        sceneType: DEFAULT_PROJECT_SCENE_TYPE,
+        sceneType: DEFAULT_SCENE_CREATION_TYPE,
         coverList: [],
       })
       return
@@ -268,7 +262,7 @@ watch(
       description: description || '',
       // 编辑时优先回显后端分类编码，避免保存未修改的场景时覆盖原分类。
       category: recordCategory || props.sceneCategoryOptions[0]?.value || '',
-      sceneType: resolveProjectSceneType(sceneType),
+      sceneType: toDefinitionSceneType(resolveProjectSceneType(sceneType)),
       coverList,
     })
   },
@@ -378,7 +372,7 @@ const handleConfirm = async (formEl?: FormInstance) => {
       name,
       sceneDesc: ruleForm.description.trim() || undefined,
       sceneCategory: ruleForm.category || undefined,
-      sceneType: sceneType === 'GisScene' ? 'gis' : 'local3d',
+      sceneType,
       coverAssetId: photoAddress,
     }
 
@@ -441,7 +435,6 @@ const handelRest = (formEl?: FormInstance) => {
 .scene-dialog__title,
 .scene-dialog__label,
 .scene-dialog__control,
-.scene-dialog__radio-group,
 .scene-dialog__footer,
 .scene-dialog__upload-tip {
   font-family: 'Source Han Sans SC', 'Microsoft YaHei', sans-serif;
@@ -525,36 +518,6 @@ const handelRest = (formEl?: FormInstance) => {
   resize: none;
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px var(--manage-color-line-component, #d9d9d9) !important;
-}
-.scene-dialog__radio-group {
-  display: flex;
-  gap: 24px;
-  align-items: center;
-  height: 22px;
-}
-.scene-dialog__radio-group :deep(.el-radio) {
-  height: 22px;
-  margin-right: 0;
-}
-.scene-dialog__radio-group :deep(.el-radio__label) {
-  padding-left: 8px;
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--manage-text, #333333);
-}
-.scene-dialog__radio-group :deep(.el-radio__inner) {
-  width: 16px;
-  height: 16px;
-  border-color: #b8b9bb;
-}
-.scene-dialog__radio-group :deep(.el-radio__input.is-checked .el-radio__inner) {
-  background: transparent;
-  border-color: var(--manage-accent, #51a195);
-}
-.scene-dialog__radio-group :deep(.el-radio__input.is-checked .el-radio__inner::after) {
-  width: 8px;
-  height: 8px;
-  background: var(--manage-accent, #51a195);
 }
 .scene-cover-upload {
   width: 72px;

@@ -93,6 +93,17 @@ export interface Dim3dTemplateDetailResponse {
   msg?: string
 }
 
+export type Dim3dTemplateMetadata = Pick<Dim3dTemplatePageVo, 'saveScope' | 'sceneType'>
+
+/** 管理页和编辑器共用范围与类型解析，只接受接口枚举及已知字段别名。 */
+export function readDim3dTemplateMetadata(row: Dim3dTemplatePageVo): Dim3dTemplateMetadata {
+  const source = row as Dim3dTemplatePageVo & Record<string, unknown>
+  const scope = String(source.saveScope ?? source.templateSaveScope ?? source.sceneSaveScope ?? '').trim().toLowerCase()
+  const type = String(source.sceneType ?? source.sourceSceneType ?? source.templateSceneType ?? '').trim().toLowerCase()
+  const saveScope = scope === 'twod' ? 'twoD' : scope === 'threed' ? 'threeD' : scope === 'all' ? 'all' : undefined
+  return { saveScope, sceneType: type === 'gis' || type === 'local3d' ? type : undefined }
+}
+
 /** 文件型模板详情返回契约枚举，也兼容历史响应直接返回字典类型编码。 */
 type FileTemplateDetailPayload = Omit<Dim3dTemplateDetailResponse, 'data'> & {
   data?: Omit<Dim3dTemplateDetailVo, 'templateType'> & {

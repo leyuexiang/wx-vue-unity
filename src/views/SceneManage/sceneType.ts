@@ -27,6 +27,18 @@ const PROJECT_SCENE_TYPE_TO_DEFINITION_TYPE: Record<ProjectSceneType, SceneType>
   GisScene: 'gis',
 }
 
+/** 新增和从模板创建弹窗共用同一组文案及接口值。 */
+export const SCENE_CREATION_TYPE_OPTIONS: ReadonlyArray<{ label: string; value: SceneType }> = [
+  { label: 'GIS场景', value: PROJECT_SCENE_TYPE_TO_DEFINITION_TYPE.GisScene },
+  { label: '非GIS场景', value: PROJECT_SCENE_TYPE_TO_DEFINITION_TYPE.CommScene },
+]
+/** 从纯二维模板创建场景时使用与普通新增相同的默认类型。 */
+export const DEFAULT_SCENE_CREATION_TYPE = PROJECT_SCENE_TYPE_TO_DEFINITION_TYPE[DEFAULT_PROJECT_SCENE_TYPE]
+
+/** 把管理页既有的场景类型枚举转换为场景接口值。 */
+export const toDefinitionSceneType = (type: ProjectSceneType): SceneType =>
+  PROJECT_SCENE_TYPE_TO_DEFINITION_TYPE[type]
+
 const SCENE_TYPE_LABEL_MAP = new Map<ProjectSceneType, string>(
   SCENE_TYPE_OPTIONS.map((item) => [item.value, item.label]),
 )
@@ -78,7 +90,7 @@ export const createDefaultProjectSceneConfigInfo = ({
   name,
   sceneId = '',
 }: CreateDefaultProjectSceneConfigInfoOptions): string => {
-  const definitionType = PROJECT_SCENE_TYPE_TO_DEFINITION_TYPE[sceneType]
+  const definitionType = toDefinitionSceneType(sceneType)
 
   if (definitionType === 'gis') {
     return serializeSceneDefinition(

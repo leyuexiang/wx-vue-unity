@@ -250,7 +250,15 @@
       @updateList="getList"
     />
 
-    <el-dialog v-model="enterDialog.visible" title="选择渲染方式" width="420px" align-center>
+    <!-- 接入管理弹窗主题；传送到页面根节点后仍由根主题属性控制面板与控件颜色。 -->
+    <el-dialog
+      v-model="enterDialog.visible"
+      class="manage-dialog"
+      title="选择渲染方式"
+      width="420px"
+      append-to-body
+      align-center
+    >
       <p class="manage-scene-render-choice__scene">{{ enterDialog.record?.name }}</p>
       <div class="manage-scene-render-choice__options">
         <button
@@ -1945,10 +1953,48 @@ const handleMediaPreview = (record: TransferListItem) => {
     max-width: 608px;
   }
 }
-.manage-scene-render-choice__scene { margin: 0 0 16px; color: #606b70; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.manage-scene-render-choice__options { display: grid; gap: 10px; }
-.manage-scene-render-choice__option { display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 14px 16px; text-align: left; color: #263b40; background: #f5faf9; border: 1px solid #d4e7e3; border-radius: 8px; cursor: pointer; }
-.manage-scene-render-choice__option:hover:not(:disabled), .manage-scene-render-choice__option:focus-visible { border-color: #51a195; background: #edf7f5; }
-.manage-scene-render-choice__option span { font-size: 12px; color: #758587; }
-.manage-scene-render-choice__option:disabled { opacity: .55; cursor: not-allowed; }
+/* 渲染选项使用管理主题的次级面板、边框和文字颜色，避免暗色弹窗内出现固定亮色卡片。 */
+.manage-scene-render-choice__scene {
+  margin: 0 0 16px;
+  overflow: hidden;
+  color: var(--manage-text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.manage-scene-render-choice__options {
+  display: grid;
+  gap: 10px;
+}
+.manage-scene-render-choice__option {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 14px 16px;
+  color: var(--manage-text);
+  text-align: left;
+  cursor: pointer;
+  background: var(--manage-bg-panel-2);
+  border: 1px solid var(--manage-color-line-component);
+  border-radius: 8px;
+}
+.manage-scene-render-choice__option:hover:not(:disabled),
+.manage-scene-render-choice__option:focus-visible {
+  background: var(--manage-color-accent-soft);
+  border-color: var(--manage-accent);
+}
+.manage-scene-render-choice__option:focus-visible {
+  outline: 2px solid var(--manage-accent);
+  outline-offset: 2px;
+}
+.manage-scene-render-choice__option span {
+  font-size: 12px;
+  color: var(--manage-text-2);
+}
+/* 禁用选项保留清晰的原因说明，用较弱的底色区分可用状态。 */
+.manage-scene-render-choice__option:disabled {
+  color: var(--manage-text-2);
+  cursor: not-allowed;
+  background: var(--manage-bg-input);
+}
 </style>

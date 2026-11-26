@@ -96,6 +96,12 @@
         @paginationChange="handlePaginationChange"
       >
         <template #media-extra="slotProps">
+          <!-- 沿用场景卡片左下角的类型标签，右上角继续保留模板状态。 -->
+          <span
+            v-if="slotProps.record.templateSnapshotLabel"
+            class="manage-scene-card__type"
+            :title="slotProps.record.templateSnapshotLabel"
+          >{{ slotProps.record.templateSnapshotLabel }}</span>
           <!-- 后端明确返回 ONLINE/OFFLINE 时才绘制状态角标，未知状态保持中性占位而不误导用户。 -->
           <span class="manage-model-card__status" :class="getStatusClass(slotProps.record)">
             {{ slotProps.record.statusLabel }}
@@ -136,7 +142,7 @@
                 class="manage-model-card__edit manage-scene-card__enter"
                 title="从模板创建场景"
                 :loading="isOperationPending(slotProps.record.id)"
-                @click.stop.prevent="createSceneFromTemplate(slotProps.record)"
+                @click.stop.prevent="openCreateSceneDialog(slotProps.record)"
               >
                 创建场景
               </el-button>
@@ -237,6 +243,38 @@
       :categories="activeCategories"
       @update-list="refreshTemplateListAfterEdit"
     />
+
+    <!-- 弹窗挂到页面根节点，由管理弹窗主题统一提供面板、文字、输入框和按钮颜色。 -->
+    <el-dialog
+      v-model="sceneCreationVisible"
+      class="manage-dialog"
+      title="从模板创建场景"
+      width="min(440px, calc(100vw - 32px))"
+      append-to-body
+      align-center
+      :close-on-click-modal="false"
+      :close-on-press-escape="!sceneCreationSubmitting"
+      :show-close="!sceneCreationSubmitting"
+    >
+      <el-form label-position="top" :disabled="sceneCreationSubmitting" @submit.prevent="createSceneFromTemplate">
+        <el-form-item label="场景名称" required>
+          <el-input v-model="sceneCreationName" maxlength="100" placeholder="请输入新场景名称" />
+        </el-form-item>
+        <!-- 三维和混合模板显示锁定的来源类型，纯二维模板可以切换到任一类型。 -->
+        <el-form-item label="场景类型">
+          <SceneTypeRadioGroup v-model="sceneCreationType" :disabled="sceneCreationTemplate?.saveScope !== 'twoD'" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="sceneCreationSubmitting" @click="sceneCreationVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!sceneCreationName.trim()"
+          :loading="sceneCreationSubmitting"
+          @click="createSceneFromTemplate"
+        >创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -250,7 +288,7 @@ import manageCardPublishLightIcon from '@/assets/icons/manage-card-publish-light
 import manageCardSendLightIcon from '@/assets/icons/manage-card-send-light.svg'
 import manageCardWriteLightIcon from '@/assets/icons/manage-card-write-light.svg'
 import { to, toData } from '@/utils/asyncHandler'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import {
   openManageDeleteConfirm,
@@ -266,9 +304,13 @@ import {
   changeDim3dTemplateStatus,
   changeDim3dSceneTemplateStatus,
   pageDim3dTemplate,
+  readDim3dTemplateMetadata,
   removeDim3dTemplate,
   removeDim3dSceneTemplate,
+  type Dim3dTemplateMetadata,
   type Dim3dTemplatePageVo,
+  type Dim3dTemplateSaveScope,
+  type Dim3dTemplateSceneType,
   type Dim3dTemplateStatus,
   type Dim3dTemplateType,
 } from '@/servers/manual/dim3d/api/template'
@@ -278,13 +320,18 @@ import {
 } from '@/servers/manual/dim3d/api/scene'
 import ManageFilterBar from '../../manageShared/ManageFilterBar.vue'
 import ManagePageTopBar from '../../manageShared/ManagePageTopBar.vue'
+import SceneTypeRadioGroup from '../../SceneManage/SceneTypeRadioGroup.vue'
+import { DEFAULT_SCENE_CREATION_TYPE } from '../../SceneManage/sceneType'
 import { useManageTheme } from '../../manageShared/manageTheme'
 import EditDialog from './EditDialog.vue'
 import { DEFAULT_TEMPLATE_TYPE, TEMPLATE_TYPE_OPTIONS } from './config'
 import {
   createTemplateListRequestParams,
   getTemplatePageAfterDeletion,
+  getTemplateSnapshotLabel,
+  hasTemplateCreationMetadata,
   isTemplateBusinessId,
+  resolveTemplateSnapshotMetadata,
   type TemplateListFilterState,
 } from './templateState'
 
@@ -298,6 +345,9 @@ const statusOptions = [
 const MAX_CACHED_COVER_URLS = 200
 /** 分类数量请求分批执行，避免字典项较多时同时发起过量分页请求。 */
 const CATEGORY_TOTAL_CONCURRENCY = 4
+/** 只对缺字段的快照补查详情，分批并限制长期翻页时保留的记录数。 */
+const TEMPLATE_DETAIL_CONCURRENCY = 4
+const MAX_CACHED_TEMPLATE_METADATA = 200
 
 /**
  * 后端偶发缺失主键时生成稳定的仅渲染回退键。回退键永不参与删除、上下线等写操作，
@@ -401,6 +451,34 @@ const coverUrlByOssId = ref(new Map<string, string>())
 /** 同一资源写操作执行期间锁定对应卡片，阻止双击造成重复状态切换或重复删除。 */
 const pendingOperationIds = ref(new Set<string>())
 
+/** 补齐后的范围和类型同时用于卡片和创建弹窗，进行中的同快照请求只保留一份。 */
+const templateMetadataBySceneId = shallowReactive(new Map<string, Dim3dTemplateMetadata>())
+const templateMetadataRequests = new Map<string, Promise<void>>()
+let templatePageActive = true
+
+const getTemplateCardMetadata = (row: Dim3dTemplatePageVo): Dim3dTemplateMetadata => {
+  const { saveScope, sceneType } = readDim3dTemplateMetadata(row)
+  const extra = templateMetadataBySceneId.get(String(row.templateSceneId ?? '').trim())
+  return { saveScope: saveScope ?? extra?.saveScope, sceneType: sceneType ?? extra?.sceneType }
+}
+
+/** 弹窗保存本次创建的快照编号和范围，每次打开都从默认值或模板来源初始化。 */
+const sceneCreationTemplate = shallowRef<{
+  id: string
+  sceneId: string
+  description: string
+  saveScope: Dim3dTemplateSaveScope
+}>()
+const sceneCreationVisible = ref(false)
+const sceneCreationOpening = ref(false)
+const sceneCreationName = ref('')
+const sceneCreationType = ref<Dim3dTemplateSceneType>(DEFAULT_SCENE_CREATION_TYPE)
+const sceneCreationSubmitting = computed(() =>
+  !!sceneCreationTemplate.value && pendingOperationIds.value.has(sceneCreationTemplate.value.id),
+)
+/** 请求结果不明时，重试同一组输入沿用编号，避免服务已经写入后再创建一个实例。 */
+let sceneCreationRequest: { name: string; targetSceneType: Dim3dTemplateSceneType; requestId: string } | undefined
+
 const list = computed(() =>
   originList.value.map((item, index) => {
     const id =
@@ -408,6 +486,9 @@ const list = computed(() =>
         ? String(item.id)
         : createStableTemplateKey(item, index)
     const coverImageId = String(item.coverImageId ?? '').trim()
+    const templateSnapshotLabel = item.templateSceneId
+      ? getTemplateSnapshotLabel(getTemplateCardMetadata(item))
+      : ''
     const category =
       getDim3dTemplateCategoryLabel(activeCategoryLabels.value, item.category, item.categoryName) ||
       '--'
@@ -424,6 +505,7 @@ const list = computed(() =>
       updateTime: item.updateTime || '',
       imgPath: coverImageId ? coverUrlByOssId.value.get(coverImageId) || '' : '',
       statusLabel,
+      templateSnapshotLabel,
     }
   }),
 )
@@ -508,6 +590,43 @@ const getList = async () => {
   }
   originList.value = response?.rows || []
   void resolveCoverUrls(originList.value, requestId)
+  void resolveMissingTemplateMetadata(originList.value, requestId)
+}
+
+/** 打开弹窗和首屏补查共用请求。查询失败只保留已有字段，下次操作仍可重试。 */
+const ensureTemplateCardMetadata = (row: Dim3dTemplatePageVo): Promise<void> => {
+  const sceneId = String(row.templateSceneId ?? '').trim()
+  const metadata = getTemplateCardMetadata(row)
+  if (!sceneId || !isTemplateBusinessId(row.id) || hasTemplateCreationMetadata(metadata)) {
+    return Promise.resolve()
+  }
+  const pending = templateMetadataRequests.get(sceneId)
+  if (pending) return pending
+
+  const request = resolveTemplateSnapshotMetadata(row)
+    .then((resolved) => {
+      if (templatePageActive && (resolved.saveScope || resolved.sceneType)) {
+        templateMetadataBySceneId.set(sceneId, resolved)
+        if (templateMetadataBySceneId.size > MAX_CACHED_TEMPLATE_METADATA) {
+          const oldest = templateMetadataBySceneId.keys().next().value
+          if (oldest !== undefined) templateMetadataBySceneId.delete(oldest)
+        }
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => { templateMetadataRequests.delete(sceneId) })
+  templateMetadataRequests.set(sceneId, request)
+  return request
+}
+
+/** 仅补查当前页缺字段的快照，翻页或离开页面后不再发起剩余详情请求。 */
+const resolveMissingTemplateMetadata = async (rows: Dim3dTemplatePageVo[], requestId: number) => {
+  const missing = rows.filter((row) =>
+    row.templateSceneId && isTemplateBusinessId(row.id) && !hasTemplateCreationMetadata(getTemplateCardMetadata(row)),
+  )
+  for (let start = 0; start < missing.length && requestId === latestListRequestId.value; start += TEMPLATE_DETAIL_CONCURRENCY) {
+    await Promise.all(missing.slice(start, start + TEMPLATE_DETAIL_CONCURRENCY).map(ensureTemplateCardMetadata))
+  }
 }
 
 /**
@@ -652,6 +771,12 @@ onBeforeMount(() => {
   void Promise.all([getCategories(), getList()])
 })
 
+/** 关闭页面时失效当前批次和正在等待模板资料的弹窗。 */
+onBeforeUnmount(() => {
+  templatePageActive = false
+  ++latestListRequestId.value
+})
+
 /** 切换类型后重置分类和页码，且只发起一轮列表及一轮当前类型分类统计。 */
 const selectTemplateType = (value: string) => {
   if (
@@ -723,44 +848,73 @@ const getStatusActionTitle = (record: TemplateCardRecord) => {
 
 const isOperationPending = (id: string) => pendingOperationIds.value.has(id)
 
-/** 从在线快照模板创建独立场景，创建成功后回到场景管理页读取新实例。 */
-const createSceneFromTemplate = async (record: TemplateCardRecord) => {
+/** 使用已核对的模板范围初始化弹窗。分页缺字段时等待当前快照详情，再决定默认或锁定值。 */
+const openCreateSceneDialog = async (record: TemplateCardRecord) => {
+  if (sceneCreationVisible.value || sceneCreationOpening.value) return
   const templateSceneId = String(record.templateSceneId ?? '').trim()
   if (!templateSceneId || isOperationPending(record.id)) {
     ElMessage.warning('当前模板缺少有效场景编号或操作正在进行，请稍后重试')
     return
   }
 
-  let name = ''
-  try {
-    const result = await ElMessageBox.prompt('请输入新场景名称', '从模板创建场景', {
-      inputValue: `${record.name}实例`,
-      inputPlaceholder: '场景名称',
-      inputValidator: (value) => (value.trim() ? true : '场景名称不能为空'),
-      confirmButtonText: '创建',
-      cancelButtonText: '取消',
-    })
-    name = result.value.trim()
-  } catch {
+  if (!hasTemplateCreationMetadata(getTemplateCardMetadata(record))) {
+    const requestId = latestListRequestId.value
+    sceneCreationOpening.value = true
+    setOperationPending(record.id, true)
+    try {
+      await ensureTemplateCardMetadata(record)
+    } finally {
+      setOperationPending(record.id, false)
+      sceneCreationOpening.value = false
+    }
+    if (requestId !== latestListRequestId.value) return
+  }
+  const { saveScope, sceneType } = getTemplateCardMetadata(record)
+  if (!saveScope) {
+    ElMessage.warning('未能读取模板保存范围，请稍后重试')
     return
   }
+  const targetSceneType = saveScope === 'twoD' ? DEFAULT_SCENE_CREATION_TYPE : sceneType
+  if (targetSceneType !== 'local3d' && targetSceneType !== 'gis') {
+    ElMessage.warning('当前模板缺少有效的来源场景类型，无法创建场景')
+    return
+  }
+  sceneCreationTemplate.value = { id: record.id, sceneId: templateSceneId, description: record.description, saveScope }
+  sceneCreationName.value = `${record.name}实例`.slice(0, 100)
+  sceneCreationType.value = targetSceneType
+  sceneCreationRequest = undefined
+  sceneCreationVisible.value = true
+}
 
-  setOperationPending(record.id, true)
+/** 失败时保留表单输入；成功时验证场景回执并回到场景管理页。 */
+const createSceneFromTemplate = async () => {
+  const template = sceneCreationTemplate.value
+  const name = sceneCreationName.value.trim()
+  if (!template || !sceneCreationVisible.value || !name || sceneCreationSubmitting.value) return
+  const targetSceneType = sceneCreationType.value
+  const requestId = sceneCreationRequest?.name === name && sceneCreationRequest.targetSceneType === targetSceneType
+    ? sceneCreationRequest.requestId : `tpl6-${createDim3dSceneClientKey()}`
+  sceneCreationRequest = { name, targetSceneType, requestId }
+  setOperationPending(template.id, true)
   try {
     const response = await createDim3dSceneFromTemplate({
-      templateSceneId,
-      requestId: `tpl6-${createDim3dSceneClientKey()}`,
+      templateSceneId: template.sceneId,
+      requestId,
       name,
-      sceneDesc: record.description === '--' ? undefined : record.description,
+      targetSceneType,
+      sceneDesc: template.description === '--' ? undefined : template.description,
     })
     const sceneId = String(response.data?.sceneId ?? '').trim()
     if (!sceneId) throw new Error(response.msg || '接口未返回新场景编号')
+    // 验证回执，避免服务部署版本遗漏目标类型时把错误场景误报为创建成功。
+    if (response.data?.sceneType !== targetSceneType) throw new Error('新场景类型与所选类型不一致，请检查服务版本')
+    sceneCreationVisible.value = false
     ElMessage.success('场景创建成功')
     await router.push({ name: 'sceneManage' })
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '从模板创建场景失败，请稍后重试')
   } finally {
-    setOperationPending(record.id, false)
+    setOperationPending(template.id, false)
   }
 }
 

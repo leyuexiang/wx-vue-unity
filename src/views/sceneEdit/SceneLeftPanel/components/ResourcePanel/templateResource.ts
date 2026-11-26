@@ -7,6 +7,7 @@ import {
   getDim3dTemplateInfo,
   pageDim3dTemplate,
   pageDim3dSceneTemplate,
+  readDim3dTemplateMetadata,
   DIM3D_TEMPLATE_TYPE,
   type Dim3dTemplateDetailVo,
   type Dim3dTemplatePageParams,
@@ -41,39 +42,14 @@ export interface TemplateResourceGroup {
 
 const normalizeText = (value: unknown) => String(value ?? '').trim()
 
-const TEMPLATE_SAVE_SCOPE_BY_NORMALIZED_VALUE: Readonly<Record<string, Dim3dTemplateSaveScope>> =
-  Object.freeze({
-    twod: 'twoD',
-    threed: 'threeD',
-    all: 'all',
-  })
-
-/**
- * 规范化模板保存范围。
- *
- * 后端契约使用 twoD/threeD 驼峰值；比较前转小写可以兼容历史大小写差异，但必须再映射回
- * 领域枚举，不能把 twod/threed 直接断言成原枚举，否则二维和三维模板都会被误判为缺字段。
- */
-export function normalizeTemplateSaveScope(value: unknown): Dim3dTemplateSaveScope | undefined {
-  const normalizedValue = normalizeText(value).toLowerCase()
-  return TEMPLATE_SAVE_SCOPE_BY_NORMALIZED_VALUE[normalizedValue]
-}
-
-/** 兼容模板分页和模板详情的别名字段，禁止凭模板名称猜测场景类型。 */
+/** 编辑器兼容历史资源编号，范围与场景类型交给共用的接口枚举解析。 */
 const readTemplateMetadata = (row: Dim3dTemplatePageVo | Dim3dTemplateDetailVo) => {
   const source = row as (Dim3dTemplatePageVo | Dim3dTemplateDetailVo) & Record<string, unknown>
-  const saveScope = normalizeTemplateSaveScope(
-    source.saveScope ?? source.templateSaveScope ?? source.sceneSaveScope,
-  )
-  const sceneType = normalizeText(
-    source.sceneType ?? source.sourceSceneType ?? source.templateSceneType,
-  ).toLowerCase() as Dim3dTemplateSceneType
   const templateSceneId = normalizeText(
     source.templateSceneId ?? source.sceneId ?? source.templateId ?? source.templateFileId,
   )
   return {
-    saveScope,
-    sceneType: ['gis', 'local3d'].includes(sceneType) ? sceneType : undefined,
+    ...readDim3dTemplateMetadata(row),
     templateSceneId,
   }
 }

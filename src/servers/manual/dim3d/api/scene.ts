@@ -207,6 +207,8 @@ export interface Dim3dSceneFromTemplateBody {
   templateSceneId: string
   requestId: string
   name: string
+  /** 纯二维由用户选择，含三维内容时必须传入来源类型。 */
+  targetSceneType: Dim3dSceneForm['sceneType']
   sceneDesc?: string
   sceneCategory?: string
 }
