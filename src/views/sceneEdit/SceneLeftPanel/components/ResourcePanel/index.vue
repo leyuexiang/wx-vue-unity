@@ -327,16 +327,6 @@ watch(
   :deep(.scene-edit-resource-search) {
     padding: 12px 12px 0;
   }
-  :deep(.scene-edit-indoor-light-notice) {
-    padding: 8px 10px;
-    margin: 12px 12px 0;
-    font-size: 12px;
-    line-height: 18px;
-    color: #eac692;
-    background: rgb(255 189 92 / 8%);
-    border: 1px solid rgb(255 189 92 / 32%);
-    border-radius: 3px;
-  }
   :deep(.scene-edit-resource-groups) {
     padding: 20px 12px 12px;
   }

@@ -27,6 +27,7 @@ import { BUILTIN_SCENE_ASSET_ID_PREFIX, getBuiltinSceneAsset, getBuiltinSceneRes
 import { readImportedVegetationAddress } from './importVegetationPublication'
 import { restorePersistedWeatherEffects } from './editorSceneWeatherAdapter'
 import { hasWeatherProvider } from '@/scene-platform/effects/weather'
+import { readThreeDTargetOrder } from './threeDPackageEditMerge'
 
 /** 真实运行态接口返回的通用发布分片。字段均来自 OpenAPI 的实际声明。 */
 export interface SceneRuntimePublishedFragment {
@@ -702,7 +703,7 @@ const toSceneObject = (
     ...(layerId ? { layerId } : {}),
     // 恢复业务父级，避免四包往返后节点被静默提升到根级。
     ...(getString(target.parentInstanceId) ? { parentInstanceId: getString(target.parentInstanceId)! } : {}),
-    order: Math.max(0, Math.floor(getNumber(target.sortNo ?? target.order, 0))),
+    order: readThreeDTargetOrder(target),
     transform: toTransform(target.transform, sceneType),
     /**
      * 内置看板的创建资产必须优先于其内容图片资源；否则 resourceRefKeys 中第一张用户图片会被
@@ -733,6 +734,30 @@ const mergeTargets = (records: readonly JsonRecord[]): JsonRecord[] => {
     byId.set(id, { ...(byId.get(id) ?? {}), ...record })
   }
   return Array.from(byId.values())
+}
+
+/**
+ * 旧四包可能给同一图层的根级模型和组件写入相同序号。
+ * 输入已经按序号稳定排序，同值时沿用四包合并顺序，仅对发生冲突的根级组连续编号。
+ * 业务子节点允许同序，合法的稀疏序号也需要保留。
+ */
+const repairRootObjectOrders = (objects: SceneObject[]): SceneObject[] => {
+  const lastOrderByLayer = new Map<SceneObject['layerId'], number>()
+  const conflictingLayers = new Set<SceneObject['layerId']>()
+  for (const object of objects) {
+    if (object.parentInstanceId) continue
+    if (lastOrderByLayer.get(object.layerId) === object.order) conflictingLayers.add(object.layerId)
+    lastOrderByLayer.set(object.layerId, object.order)
+  }
+  if (!conflictingLayers.size) return objects
+
+  lastOrderByLayer.clear()
+  return objects.map((object) => {
+    if (object.parentInstanceId || !conflictingLayers.has(object.layerId)) return object
+    const order = (lastOrderByLayer.get(object.layerId) ?? -1) + 1
+    lastOrderByLayer.set(object.layerId, order)
+    return object.order === order ? object : { ...object, order }
+  }).sort((left, right) => left.order - right.order)
 }
 
 const toSceneLayerType = (value: unknown): SceneLayer['type'] | undefined => {
@@ -1649,7 +1674,7 @@ export const assembleSceneDefinitionFromRuntimeFragments = (
     name: sceneName,
     type: sceneType,
     coordinateSystem: coordinateSystem ?? createDefaultSceneCoordinateSystem(sceneType),
-    objects: restoredObjects,
+    objects: repairRootObjectOrders(restoredObjects),
     ...(streaming ? { streaming } : {}),
     layers,
     effects: restorePersistedWeatherEffects(getArray(threeDSeed.effects).map(value => {

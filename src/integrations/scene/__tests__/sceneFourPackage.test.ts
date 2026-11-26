@@ -14,6 +14,7 @@ import {
   serializeSceneDefinitionToFourPackages,
 } from '../sceneFourPackage'
 import { assembleSceneDefinitionFromRuntimeFragments } from '../sceneRuntimeFragmentAssembler'
+import { preserveUneditedThreeDDomain } from '../twoDPackagePreservation'
 
 /**
  * 模拟真实二维组件导出的 Config 类实例。
@@ -138,6 +139,42 @@ const createLocalScene = (): SceneDefinition =>
   })
 
 describe('场景四包转换', () => {
+  it('重开根级模型和几何体序号重复的旧修订，并保留对象与资源引用', () => {
+    const scene = createLocalScene()
+    const payload = serializeSceneDefinitionToFourPackages(scene)
+    const threeD = JSON.parse(payload.threeDJson)
+    // 模型和几何体分存两个数组，但没有图层或父节点时共用根级排序。
+    const [primitive] = threeD.components
+    delete primitive.layerKey
+    primitive.sortNo = threeD.objects[0].sortNo
+    threeD.components.push({ ...primitive, instanceId: 'other-layer', layerKey: 'layer-object-001', sortNo: 6 })
+    threeD.components.push({ ...primitive, instanceId: 'later-root', sortNo: 1 })
+    const parentInstanceId = threeD.objects[0].instanceId
+    threeD.components.push({ ...primitive, instanceId: 'first-child', parentInstanceId })
+    threeD.components.push({ ...primitive, instanceId: 'second-child', parentInstanceId })
+    const original = { ...payload, threeDJson: JSON.stringify(threeD) }
+    const restored = assembleSceneDefinitionFromRuntimeFragments({
+      manifest: { fragmentType: 'manifest', fragmentKey: scene.id, contentJson: JSON.stringify(original) },
+      options: { sceneId: scene.id, resolvedAssetUrls: { 'asset-model-001': '/models/model.glb' } },
+    })
+
+    expect(restored.objects.filter(object => !object.layerId && !object.parentInstanceId).map(({ id, order }) => [id, order])).toEqual([
+      ['object-model-001', 0], ['object-primitive-001', 1], ['later-root', 2],
+    ])
+    expect(restored.objects.filter(object => object.parentInstanceId === parentInstanceId).map(object => object.order)).toEqual([0, 0])
+    expect(restored.objects.find(({ id }) => id === 'other-layer')?.order).toBe(6)
+    expect(restored.objects.find(({ id }) => id === 'object-model-001')).toMatchObject({
+      asset: { id: 'asset-model-001' }, transform: { position: [1, 2, 3] },
+    })
+
+    // 没有额外编辑直接保存，也要写回已恢复的顺序，避免旧原档覆盖修复结果。
+    const saved = preserveUneditedThreeDDomain(scene.id, serializeSceneDefinitionToFourPackages(restored),
+      undefined, undefined, undefined, undefined, original)
+    expect(JSON.parse(saved.threeDJson).components.map((target: { sortNo: number }) => target.sortNo)).toEqual([1, 6, 2, 0, 0])
+    expect(preserveUneditedThreeDDomain(scene.id, serializeSceneDefinitionToFourPackages(restored),
+      undefined, undefined, undefined, undefined, saved).threeDJson).toBe(saved.threeDJson)
+  })
+
   it('恢复 GIS 灯具配置，并兼容旧四包遗漏 light 的存量场景', () => {
     const scene = createSceneDefinition({
       id: 'gis-light-roundtrip',

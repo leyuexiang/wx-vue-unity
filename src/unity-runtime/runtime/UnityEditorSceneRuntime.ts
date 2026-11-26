@@ -243,6 +243,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     this.capabilities.rendering.imagery = false
     this.capabilities.rendering.terrain = false
     this.capabilities.rendering.tileset = false
+    // 云端与网页端统一关闭前端灯光编辑，系统资源面板据此省略灯具创建入口。
     this.capabilities.rendering.indoorLocalLights = false
     this.capabilities.editing.annotation = false
     this.capabilities.assets.glb = false
@@ -250,7 +251,6 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     for (const key of Object.keys(this.capabilities.effects) as Array<keyof typeof this.capabilities.effects>) {
       this.capabilities.effects[key] = false
     }
-    this.capabilities.rendering.indoorLocalLightsUnavailableReason = '当前 Unity 渲染暂不支持灯光编辑'
   }
 
   override async mount(container: HTMLElement): Promise<void> {

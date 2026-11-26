@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSceneDefinition, createViewportHost, type SceneDefinition, type ViewportHost } from '@/scene-platform'
+import { createDefaultEnviroWeatherConfig, createEnviroWeatherEffect } from '@/scene-platform/effects/weather'
+import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
 import {
   applyEditorDim3dTemplate,
   createEditorSceneFromTemplate,
@@ -9,6 +11,7 @@ import { dispatchEditorHistory } from '../editorSceneUndoRedoAdapter'
 import { clearActiveSceneViewportHost, setActiveSceneViewportHost } from '../editorScenePlatformHost'
 import { serializeSceneDefinitionToFourPackages } from '../sceneFourPackage'
 import { assembleSceneDefinitionFromRuntimeFragments } from '../sceneRuntimeFragmentAssembler'
+import { getPersistableWeatherConfig } from '../editorSceneWeatherAdapter'
 
 const buildLocalScene = (id: string, overrides: Partial<SceneDefinition> = {}) =>
   createSceneDefinition({
@@ -44,7 +47,9 @@ const buildHost = (currentScene: SceneDefinition) =>
 describe('编辑器应用三维模板服务', () => {
   it('通过模板场景编号请求详情，解析后使用当前场景编号整体替换', async () => {
     const currentScene = buildLocalScene('current-scene')
+    const templateWeather = createEnviroWeatherEffect({ ...createDefaultEnviroWeatherConfig(), presetId: 'rain' })
     const templateScene = buildLocalScene('template-scene', {
+      effects: [templateWeather],
       objects: [
         {
           id: 'template-object',
@@ -89,6 +94,7 @@ describe('编辑器应用三维模板服务', () => {
     expect(result.id).toBe('current-scene')
     expect(result.streaming.chunks[0]?.sceneId).toBe('current-scene')
     expect(result.objects.map((item) => item.id)).toEqual(['template-object'])
+    expect(result.effects).toEqual([templateWeather])
     expect(host.replaceScene).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'current-scene',
@@ -224,6 +230,60 @@ describe('编辑器应用三维模板服务', () => {
       layers: [],
       effects: [],
     })
+  })
+
+  it.each(['cloud', 'webgpu'] as const)('二维模板覆盖后向 %s 渲染端发送默认天气，并支持历史回放和回读', async (mode) => {
+    const defaultWeather = createDefaultEnviroWeatherConfig()
+    const previousWeather = { ...defaultWeather, presetId: 'snow' }
+    const currentScene = buildLocalScene('current-weather-scene', {
+      effects: [createEnviroWeatherEffect(previousWeather)],
+    })
+    // 网页端用例模拟含旧天气字段的历史模板，云端用例使用纯净的二维模板。
+    const templateScene = buildGisScene('template-weather-scene', {
+      ...(mode === 'webgpu' ? { effects: [createEnviroWeatherEffect({ ...defaultWeather, presetId: 'rain' })] } : {}),
+      settings: {
+        ...(mode === 'webgpu' ? { weather: { mode: 'fog' } } : {}),
+        editor: { widgetSceneFragment: { widgets: [], widgetLayerTree: [], widgetCanvas: { width: 1280, height: 720 } } },
+      },
+    })
+    // 仅替换远端连接，宿主、运行时及天气投影都走真实的编辑器入口。
+    const runtime = new UnityEditorSceneRuntime(currentScene.type, { mode, getHost: (): ViewportHost => host, onStatus: vi.fn() })
+    const loadScene = vi.fn(async () => undefined)
+    vi.spyOn(runtime, 'mount').mockResolvedValue(undefined)
+    Object.assign(runtime, { unity: { loadScene, setSelection: vi.fn(), disconnect: vi.fn(async () => undefined) } })
+    const host = createViewportHost({ container: {} as HTMLElement, scene: currentScene, runtimeFactory: () => runtime })
+    const applyWidgetFragment = vi.fn()
+    const replayOptions = { commandBus: host.getCommandBus(), onError: (error: unknown) => { throw error } }
+    try {
+      await host.mount()
+      setActiveSceneViewportHost(host)
+      expect(loadScene).toHaveBeenLastCalledWith(expect.objectContaining({ settings: { weather: previousWeather } }))
+      const applied = await applyEditorDim3dTemplate(
+        { templateSceneId: templateScene.id, saveScope: 'twoD' },
+        { host, repository: { load: async () => templateScene }, applyWidgetFragment },
+      )
+      expect(loadScene).toHaveBeenLastCalledWith(expect.objectContaining({ settings: { weather: defaultWeather } }))
+      expect(applied.settings).not.toHaveProperty('weather')
+      expect(applyWidgetFragment).toHaveBeenCalledWith(expect.objectContaining({ widgetCanvas: { width: 1280, height: 720 } }))
+
+      expect(await dispatchEditorHistory('undo', replayOptions)).toBe(true)
+      expect(loadScene).toHaveBeenLastCalledWith(expect.objectContaining({ settings: { weather: previousWeather } }))
+      expect(await dispatchEditorHistory('redo', replayOptions)).toBe(true)
+      expect(loadScene).toHaveBeenLastCalledWith(expect.objectContaining({ settings: { weather: defaultWeather } }))
+
+      const restored = assembleSceneDefinitionFromRuntimeFragments({
+        manifest: {
+          fragmentType: 'manifest', fragmentKey: currentScene.id,
+          contentJson: JSON.stringify(serializeSceneDefinitionToFourPackages(host.getStore().getScene())),
+        },
+        options: { sceneId: currentScene.id, sceneType: currentScene.type },
+      })
+      expect(getPersistableWeatherConfig(restored)).toEqual(defaultWeather)
+    } finally {
+      clearActiveSceneViewportHost(host)
+      releaseOriginalScenePackages(currentScene.id)
+      host.dispose()
+    }
   })
 
   it('三维模板类型不匹配时拒绝覆盖当前场景', async () => {

@@ -9,6 +9,7 @@ import { createDim3dSceneRepository } from './dim3dSceneRepository'
 import { refreshActiveSceneViewportHost } from './editorScenePlatformHost'
 import { createDefaultSceneCoordinateSystem, serializeSceneDefinitionToFourPackages } from './sceneFourPackage'
 import { retainOriginalScenePackages } from './twoDPackagePreservation'
+import { ensureEnabledEditorSceneWeather } from './editorSceneWeatherAdapter'
 
 export interface ApplyEditorDim3dTemplateInput {
   /** 模板快照对应的场景编号；不能使用模板资源业务编号代替。 */
@@ -45,6 +46,8 @@ export const createEditorSceneFromTemplate = (
   }
 
   if (saveScope === 'twoD') {
+    // 历史模板可能仍带有旧天气设置。与天气效果一起剥离，避免它在加载或保存时回流。
+    const { weather: _templateWeather, ...settings } = templateScene.settings
     return {
       ...templateScene,
       id: currentScene.id,
@@ -53,6 +56,7 @@ export const createEditorSceneFromTemplate = (
       objects: [],
       layers: [],
       effects: [],
+      settings,
       streaming: {
         groups: [],
         chunks: [],
@@ -104,11 +108,15 @@ export const applyEditorDim3dTemplate = async (
   if (!templateLoadResult.scene) throw new Error('模板接口未返回可应用的场景内容')
   if (options.isActive && !options.isActive()) throw new Error('模板应用已随页面关闭取消')
 
-  const appliedScene = createEditorSceneFromTemplate(
+  const replacement = createEditorSceneFromTemplate(
     templateLoadResult.scene,
     currentScene,
     input.saveScope,
   )
+  // 与初次进入三维编辑器共用默认天气，在替换宿主前写入目标快照，让渲染、保存和重做共用同一份配置。
+  const appliedScene = input.saveScope === 'twoD' && options.host.getRuntime()?.id.startsWith('unity-')
+    ? ensureEnabledEditorSceneWeather(replacement)
+    : replacement
   const appliedResult = {
     ...templateLoadResult,
     scene: appliedScene,

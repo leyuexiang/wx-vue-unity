@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSceneDefinition, createVegetationSystemDefinition } from '@/scene-platform'
+import { createEnviroWeatherEffect } from '@/scene-platform/effects/weather'
 import { saveActiveEditorSceneAsTemplate } from '../editorDim3dSceneTemplateService'
 import { readSceneGlobalStateFromDefinition } from '../editorSceneGlobalStateAdapter'
 
@@ -141,6 +142,8 @@ const buildMixedScene = () =>
 
 describe('当前编辑场景另存模板服务', () => {
   it('一次提交当前四包快照并省略空的可选字段', async () => {
+    const scene = buildScene()
+    scene.effects = [createEnviroWeatherEffect()]
     const saveTemplate = vi.fn(async (body) => ({
       code: 200,
       data: {
@@ -159,7 +162,7 @@ describe('当前编辑场景另存模板服务', () => {
         sceneDesc: '  ',
       },
       {
-        scene: buildScene(),
+        scene,
         sceneApi: null,
         widgetSceneFragment: null,
         saveTemplate,
@@ -182,7 +185,11 @@ describe('当前编辑场景另存模板服务', () => {
     })
     /** 模板场景编号由请求与后端新建结果承载，四包正文不能固化来源实例编号。 */
     expect(JSON.parse(body?.sceneJson || '{}')).not.toHaveProperty('id')
-    expect(JSON.parse(body?.threeDJson || '{}')).toHaveProperty('objects')
+    // 启用了默认天气的场景另存为纯二维模板时，三维基础配置及效果列表都不能带入天气。
+    const threeD = JSON.parse(body?.threeDJson || '{}')
+    expect(threeD).toMatchObject({ baseConfig: {}, objects: [] })
+    expect(threeD.baseConfig).not.toHaveProperty('weather')
+    expect(threeD).not.toHaveProperty('effects')
     expect(JSON.parse(body?.twoDJson || '{}')).toHaveProperty('components')
     expect(JSON.parse(body?.dependenciesJson || '{}')).toHaveProperty('resources')
     expect(result.sceneId).toBe('2095342911956561921')

@@ -565,18 +565,14 @@ const managementCapabilities = getCurrentManagementCapabilities()
 const sceneCardCapabilities = managementCapabilities.scene
 
 /**
- * 场景菜单的弹出高度必须与实际菜单项数量一致：运维端有四项，租户端只保留复制和删除。
- * 通过弹出层专用类切换尺寸，避免给所有下拉菜单增加运行时测量或在打开时重复查询 DOM。
+ * 下载场景文件需要更宽的菜单，其他场景沿用卡片菜单的默认宽度。
+ * 发布管理按接口模式独立显示，菜单高度由实际渲染的操作项撑开。
  */
+const sceneCardMenuBaseClass = 'manage-dropdown-popper manage-card-menu-popper manage-scene-card-menu-popper'
 const sceneCardMenuPopperClass =
-  sceneCardCapabilities.menuActions.length === 2
-    ? [
-        'manage-dropdown-popper',
-        'manage-card-menu-popper',
-        'manage-scene-card-menu-popper',
-        'manage-scene-card-menu-popper--compact',
-      ].join(' ')
-    : 'manage-dropdown-popper manage-card-menu-popper manage-scene-card-menu-popper'
+  sceneCardCapabilities.canDownloadJson
+    ? `${sceneCardMenuBaseClass} manage-scene-card-menu-popper--wide`
+    : sceneCardMenuBaseClass
 
 /**
  * 为新页签生成不含敏感信息的一次性交接地址。

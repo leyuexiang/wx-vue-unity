@@ -11,6 +11,12 @@ export const targetIdOf = (record: JsonRecord) => string(record.instanceId) ?? s
 export const layerKeyOf = (record: JsonRecord) => string(record.layerKey) ?? string(record.layerId)
 export const layerIdOf = (record: JsonRecord) => string(record.layerKey) ?? string(record.id)
 
+/** 旧目标可能使用 order 或省略顺序，保存合并与加载使用同一解释。 */
+export const readThreeDTargetOrder = (target: JsonRecord): number => {
+  const value = target.sortNo ?? target.order
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
+}
+
 function readContent(value: unknown): JsonRecord | undefined {
   if (isRecord(value)) return value
   if (typeof value !== 'string') return undefined

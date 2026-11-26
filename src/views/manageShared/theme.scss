@@ -3040,49 +3040,22 @@ html:has(.el-overlay:not([style*='display: none'])) .manage-grid-layout__scroll 
   overflow: visible !important;
 }
 
-/* 运维端新增下载场景文件：四项菜单扩高并加宽，避免长文案换行；租户端仍使用紧凑尺寸。 */
+/* 场景操作随平台与接口模式变化，由菜单项和行间距撑开弹层，保留通用卡片菜单的内边距。 */
 .manage-scene-card-menu-popper.el-popper {
-  width: 136px !important;
-  min-width: 136px !important;
-  height: 188px;
-  min-height: 188px;
-  overflow: visible !important;
-}
-.manage-scene-card-menu-popper .el-scrollbar,
-.manage-scene-card-menu-popper .el-scrollbar__wrap,
-.manage-scene-card-menu-popper .el-scrollbar__view {
-  height: 172px !important;
-  max-height: none !important;
-  overflow: visible !important;
-}
-.manage-scene-card-menu-popper .el-scrollbar__bar {
-  display: none !important;
-}
-.manage-scene-card-menu-popper .el-dropdown-menu {
-  width: 120px;
-  min-width: 120px;
-  height: 172px;
-  min-height: 172px;
-  overflow: visible !important;
+  height: auto;
+  min-height: 0;
 }
 
-/* 租户端隐藏授权后只剩两项，恢复与两项通用菜单一致的 100px 外框和 84px 内容区。 */
-.manage-scene-card-menu-popper--compact.el-popper {
-  width: 88px !important;
-  min-width: 88px !important;
-  height: 100px;
-  min-height: 100px;
+/* 含“下载场景文件”的菜单加宽，让长文案保持单行。 */
+.manage-scene-card-menu-popper--wide.el-popper {
+  width: 136px !important;
+  min-width: 136px !important;
 }
-.manage-scene-card-menu-popper--compact .el-scrollbar,
-.manage-scene-card-menu-popper--compact .el-scrollbar__wrap,
-.manage-scene-card-menu-popper--compact .el-scrollbar__view {
-  height: 84px !important;
-}
-.manage-scene-card-menu-popper--compact .el-dropdown-menu {
-  width: 72px;
-  min-width: 72px;
-  height: 84px;
-  min-height: 84px;
+
+/* 菜单内容区跟随弹层可用宽度，两种宽度共用相同的行布局。 */
+.manage-scene-card-menu-popper .el-dropdown-menu {
+  width: 100%;
+  min-width: 0;
 }
 .manage-card-menu-popper .el-dropdown-menu__item {
   box-sizing: border-box;

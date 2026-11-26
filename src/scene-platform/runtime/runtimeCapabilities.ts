@@ -16,10 +16,8 @@ export interface RuntimeCapabilities {
     terrain: boolean
     tileset: boolean
     realtimeShadow: boolean
-    /** GIS 室内模型上的可编辑局部灯光与真实遮挡。 */
+    /** 室内模型的局部灯光编辑能力。系统资源面板仅在显式启用时显示灯光卡片。 */
     indoorLocalLights?: boolean
-    /** 灯光入口被隐藏时供编辑器解释实际运行环境的原因。 */
-    indoorLocalLightsUnavailableReason?: string
     /**
      * 是否具备通用场景后处理管线。
      * 天气适配器内部的后处理阶段不计入此能力；通用后处理任务完成前，

@@ -16,6 +16,5 @@ export class MemorySceneRuntime extends BaseSceneRuntime {
       const entries = group as Record<string, unknown>
       for (const key of Object.keys(entries)) if (typeof entries[key] === 'boolean') entries[key] = false
     }
-    this.capabilities.rendering.indoorLocalLightsUnavailableReason = '二维验收阶段尚未接入 Unity 三维运行时'
   }
 }

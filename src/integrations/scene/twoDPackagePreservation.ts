@@ -8,7 +8,7 @@ import { visitThreeDObjectReferences } from './threeDObjectReferences'
 import { assertNoPublicRequestReferences } from './publicRequestReferences'
 import {
   isEditableBehaviorRecord, isRecord, layerIdOf, layerKeyOf, mergeEditedInstanceDependencies,
-  mergeEditedTarget, records, targetIdOf, type JsonRecord,
+  mergeEditedTarget, readThreeDTargetOrder, records, targetIdOf, type JsonRecord,
 } from './threeDPackageEditMerge'
 const isDeletedThreeDOwner = (value: unknown, ids: ReadonlySet<string>) =>
   isRecord(value) && value.domain === 'threeD' && typeof value.instanceId === 'string' && ids.has(value.instanceId)
@@ -242,6 +242,53 @@ const isGisLayer = (value: unknown): value is JsonRecord => isRecord(value) &&
 
 const isWeatherEffect = (value: unknown): value is JsonRecord => isRecord(value) && value.type === 'weather'
 
+const threeDTargetGroups = ['objects', 'components'] as const
+// 空字符串代表无图层的根级组，undefined 代表按业务父级排序的子节点。
+const rootTargetLayer = (target: JsonRecord): string | undefined =>
+  typeof target.parentInstanceId === 'string' && target.parentInstanceId.trim()
+    ? undefined : (layerKeyOf(target) ?? '')
+
+/**
+ * 模型和组件共用根级排序。只同步发生结构编辑或存在旧序号冲突的组，
+ * 从当前草稿取回组内顺序，同时保留未接管目标和原档的全部扩展字段。
+ */
+function reconcileRootTargetOrders(
+  threeD: JsonRecord, currentTargets: ReadonlyMap<string | undefined, JsonRecord>, changedLayers: Set<string>,
+): boolean {
+  const persistedOrders = new Map<string, Map<number, string>>()
+  for (const key of threeDTargetGroups) {
+    if (!Array.isArray(threeD[key])) continue
+    for (const target of threeD[key]) {
+      if (!isRecord(target)) continue
+      const id = targetIdOf(target)
+      const layer = rootTargetLayer(target)
+      if (!id || layer === undefined || changedLayers.has(layer) || !currentTargets.has(id)) continue
+      let orders = persistedOrders.get(layer)
+      if (!orders) persistedOrders.set(layer, orders = new Map())
+      const order = readThreeDTargetOrder(target)
+      const previousId = orders.get(order)
+      if (previousId && previousId !== id) changedLayers.add(layer)
+      orders.set(order, id)
+    }
+  }
+  if (!changedLayers.size) return false
+
+  let changed = false
+  for (const key of threeDTargetGroups) {
+    if (!Array.isArray(threeD[key])) continue
+    threeD[key] = threeD[key].map((target: unknown) => {
+      if (!isRecord(target)) return target
+      const layer = rootTargetLayer(target)
+      if (layer === undefined || !changedLayers.has(layer)) return target
+      const current = currentTargets.get(targetIdOf(target))
+      if (!current || rootTargetLayer(current) !== layer || typeof current.sortNo !== 'number' || target.sortNo === current.sortNo) return target
+      changed = true
+      return { ...target, sortNo: current.sortNo }
+    })
+  }
+  return changed
+}
+
 export function preserveUneditedThreeDDomain(
   sceneId: string,
   generated: SceneFourPackagePayload,
@@ -261,9 +308,8 @@ export function preserveUneditedThreeDDomain(
   const deleted = deletedObjectIds ?? new Set<string>()
   if (deleted.size) assertOriginalThreeDDeletionAllowed(sceneId, deleted, editableHierarchyIds, saveEdits, original)
   // 两类目标共用编号集合，防止类型分类变化被误判为新增实例；保存时只做线性扫描。
-  const targetGroups = ['objects', 'components'] as const
-  const originalIds = new Set(targetGroups.flatMap(key => records(originalThreeD[key]).map(targetIdOf)))
-  const generatedGroups = targetGroups.map(key => [key, records(generatedThreeD[key])] as const)
+  const originalIds = new Set(threeDTargetGroups.flatMap(key => records(originalThreeD[key]).map(targetIdOf)))
+  const generatedGroups = threeDTargetGroups.map(key => [key, records(generatedThreeD[key])] as const)
   const currentTargets = new Map(generatedGroups.flatMap(([, group]) => group.map(target => [targetIdOf(target), target] as const)))
   const additions = generatedGroups.map(([key, group]) => [key, group
     .filter(target => typeof target.instanceId === 'string' && target.instanceId && !originalIds.has(target.instanceId))] as const)
@@ -273,12 +319,21 @@ export function preserveUneditedThreeDDomain(
   const domains = saveEdits?.domains
   const editedEffects = saveEdits?.effects
   let targetsChanged = false
+  const changedRootLayers = new Set<string>()
+  const markRootLayerChanged = (target: JsonRecord) => {
+    const layer = rootTargetLayer(target)
+    if (layer !== undefined) changedRootLayers.add(layer)
+  }
+  for (const target of newTargets) markRootLayerChanged(target)
   const usedLayerKeys = new Set(newTargets.map(layerKeyOf).filter(Boolean))
   for (const [key, targets] of additions) {
     let groupChanged = false
     // 按字段合并，未知实例字段及未接管目标继续按原始快照保全。
-    const originalTargets = Array.isArray(originalThreeD[key])
-      ? originalThreeD[key].filter((target) => !isRecord(target) || !deleted.has(targetIdOf(target) ?? '')) : []
+    const originalTargets = Array.isArray(originalThreeD[key]) ? originalThreeD[key].filter((target) => {
+      if (!isRecord(target) || !deleted.has(targetIdOf(target) ?? '')) return true
+      markRootLayerChanged(target)
+      return false
+    }) : []
     const updated = originalTargets.map(target => {
       if (!isRecord(target)) return target
       const id = targetIdOf(target)
@@ -302,10 +357,15 @@ export function preserveUneditedThreeDDomain(
         if (current.parentInstanceId === undefined) delete updated.parentInstanceId
         else updated.parentInstanceId = current.parentInstanceId
       }
+      if (hierarchyChanged || fields?.has('layerId') || fields?.has('order')) {
+        markRootLayerChanged(target)
+        markRootLayerChanged(updated)
+      }
       return updated
     })
     if (targets.length || groupChanged || deleted.size) threeD[key] = [...updated, ...targets]
   }
+  if (reconcileRootTargetOrders(threeD, currentTargets, changedRootLayers)) targetsChanged = true
   // 仅合并新增实例的区块归属和显式删除，原区块扩展及未接管成员继续保留。
   if (deleted.size || newIds.size) {
     const originalStreaming = isRecord(originalThreeD.streaming) ? originalThreeD.streaming : {}

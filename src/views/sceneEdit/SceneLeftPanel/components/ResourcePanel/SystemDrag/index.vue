@@ -10,9 +10,6 @@
         clearable
       />
     </div>
-    <div v-if="indoorLightNotice" class="scene-edit-indoor-light-notice" role="status">
-      {{ indoorLightNotice }}
-    </div>
     <el-scrollbar class="scene-edit-resource-scroll">
       <div class="scene-edit-resource-groups">
         <el-collapse v-model="activeNames" expand-icon-position="left">
@@ -55,7 +52,7 @@ import { systemDataList } from '@/config/leftDragDataList'
 import { filterDataList } from '@/utils/utils'
 import type { GeometryModel, FileModel, EffectDragItem } from '@/types/threeScene'
 import type { LightDragItem, FirstPersonDragItem } from '@/integrations/scene/editorCreationRouter'
-import { computed, ref, getCurrentInstance, onBeforeUnmount, onMounted } from 'vue'
+import { ref, getCurrentInstance, onBeforeUnmount, onMounted } from 'vue'
 import { throttle } from 'lodash-es'
 import { MITT_ON_KEY_ENUM } from '@/enums/index'
 import type { RuntimeCapabilities } from '@/scene-platform'
@@ -74,12 +71,6 @@ type SystemDragGroup = { name: string; key: string; children: SystemDragItem[] }
 
 const searchValue = ref('')
 const runtimeCapabilities = ref<RuntimeCapabilities | null>(null)
-const indoorLightNotice = computed(() => {
-  const capabilities = runtimeCapabilities.value
-  if (!capabilities || capabilities.rendering.indoorLocalLights) return ''
-  return capabilities.rendering.indoorLocalLightsUnavailableReason
-    ?? '当前运行环境未启用室内灯光，请检查渲染能力。'
-})
 const collapseList = ref<SystemDragGroup[]>([])
 const dim3dModelGroups = ref<Awaited<ReturnType<typeof loadDim3dModelGroups>>>([])
 // 默认展开所有当前可用折叠项。
@@ -94,8 +85,8 @@ const getAvailableSystemDataList = (): SystemDragGroup[] =>
 
 const syncCollapseList = () => {
   /**
-   * 先按 Runtime 能力过滤，再按搜索词过滤。
-   * 这样搜索“标注”时不会绕过能力开关重新暴露不可用入口。
+   * 先按渲染能力过滤系统资源，再按搜索词缩小列表。
+   * 关闭灯光能力时，整组灯光资源直接省略，搜索也只匹配当前可用的入口。
    */
   collapseList.value = filterDataList(
     searchValue.value,

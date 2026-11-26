@@ -425,6 +425,34 @@ describe('模型拖拽到双端运行时', () => {
     expect(JSON.parse(body[0].dependenciesJson!).resources[0].assetId).toBe('published-model')
   })
 
+  it('新增模型时，正式保存同步同组旧几何体的草稿排序并可重开', async () => {
+    const { host, create } = await setup()
+    const primitiveId = await createEditorUnityObject(
+      { name: '立方体', modelType: DRAG_MODEL_ENUM.Geometry, type: 'BoxGeometry', icon: '' },
+      { clientX: 250, clientY: 180 }, { host, isActive: () => true },
+    )
+    const original = serializeSceneDefinitionToFourPackages(host.getStore().getScene())
+    const threeD = JSON.parse(original.threeDJson)
+    // 旧修订允许序号留空洞，打开后编辑仓库会将唯一的根级几何体重排为零。
+    threeD.components[0].sortNo = 1
+    threeD.components[0].vendorField = { keep: true }
+    retainOriginalScenePackages(sceneId, { ...original, threeDJson: JSON.stringify(threeD) })
+    const modelId = await create()
+    setActiveSceneViewportHost(host)
+    const saveAll = vi.fn(async (_body: Dim3dSceneSaveAllBody) => ({ code: 200, data: { sceneId, conflict: false } }))
+    await saveEditorSceneDefinition({
+      widgetSceneFragment: null, sceneGlobalState: null, saveContext: { sceneId, lockToken: 'test-lock' },
+      dim3dSaveOptions: { saveAll, createRequestId: () => 'mixed-root-save' },
+    })
+    const [saved] = saveAll.mock.calls[0]!
+    const reopened = assembleSceneDefinitionFromRuntimeFragments({
+      manifest: { fragmentType: 'manifest', fragmentKey: sceneId, contentJson: JSON.stringify(saved) },
+      options: { sceneId, resolvedAssetUrls: { 'published-model': '/model.glb' } },
+    })
+    expect(reopened.objects.map(({ id, order }) => [id, order])).toEqual([[primitiveId, 0], [modelId, 1]])
+    expect(JSON.parse(saved.threeDJson).components[0]).toMatchObject({ sortNo: 0, vendorField: { keep: true } })
+  })
+
   it('已保存模型在 Unity 会话重新编辑后，正式保存入口提交当前变换', async () => {
     const { host, create } = await setup()
     const id = (await create())!
