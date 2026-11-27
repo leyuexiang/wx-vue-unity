@@ -7,8 +7,8 @@ import request from '@/request.ts'
 export interface ListGisTileRes {
   code: number
   data: {
-    /** GIS 信息 ID */
-    id: number
+    /** GIS 信息编号：新目录使用字符串，兼容旧接口及既有测试数据的数值编号。 */
+    id: string | number
     /** 切片名称 */
     gisName: string
     /** 数据类型 */
@@ -31,6 +31,10 @@ export interface ListGisTileRes {
     latitude: string
     /** 经度 */
     longitude: string
+    /** 可选的真实覆盖范围，顺序为西、南、东、北，旧接口可不返回。 */
+    bounds?: number[]
+    /** 可选的真实切片后缀，旧接口仍沿用 JPG。 */
+    fileExtension?: string
   }[]
   msg: string
 }

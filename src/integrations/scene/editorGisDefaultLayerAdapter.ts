@@ -67,9 +67,12 @@ const removeRuntimeFallbackImageryLayers = (scene: SceneDefinition): SceneDefini
 })
 
 const resolveTileBaseUrl = (path: string): string =>
-  path.startsWith('/')
-    ? `${EDITOR_GIS_SOURCE_HOST}${path}`
-    : `${EDITOR_GIS_SOURCE_HOST}/${path}`
+  // 目录可以直接给出部署后的完整地址；重开补齐元数据时不能再加一次代理前缀。
+  /^https?:\/\//i.test(path)
+    ? path
+    : path.startsWith('/')
+      ? `${EDITOR_GIS_SOURCE_HOST}${path}`
+      : `${EDITOR_GIS_SOURCE_HOST}/${path}`
 
 const toFiniteNumber = (value: unknown): number | null => {
   const numericValue = typeof value === 'string' ? Number(value) : value
@@ -157,6 +160,12 @@ const resolveMinimumTileLevel = (): number => {
 }
 
 const createTileRectangleDegrees = (tile: GisTileRecord): [number, number, number, number] | undefined => {
+  // 新目录读取实际 TMS 范围；不能再把完整数据裁成中心点周围的固定层级格网。
+  if (Array.isArray(tile.bounds) && tile.bounds.length === 4 && tile.bounds.every(Number.isFinite)) {
+    const [west, south, east, north] = tile.bounds as [number, number, number, number]
+    if (west >= -180 && south >= -90 && east <= 180 && north <= 90 && west < east && south < north)
+      return [west, south, east, north]
+  }
   const longitude = toFiniteNumber(tile.longitude)
   const latitude = toFiniteNumber(tile.latitude)
   if (longitude === null || latitude === null) return undefined
@@ -174,7 +183,7 @@ const createTileRectangleDegrees = (tile: GisTileRecord): [number, number, numbe
   ) * 180 - 90
 
   /**
-   * 当前后端只给中心经纬度，没有给真实行政区 bounds。
+   * 兼容只给中心经纬度、未提供真实覆盖范围的旧目录。
    * 文昌市低层级瓦片显示为“白底上的城市轮廓”，用 8 级瓦片格生成城市级 rectangle：
    * 既限制影像只出现在文昌周边，又避免把中心点附近的极小 rectangle 拉成十字条纹。
    */
@@ -207,7 +216,9 @@ export const createEditorGisLocalImageryLayerOptions = (
   nextOptions.tileSize = toFiniteNumber(tile.tileSize) ?? 256
   nextOptions.maximumLevel = maximumLevel
   nextOptions.minimumLevel = resolveMinimumTileLevel()
-  nextOptions.fileExtension = 'jpg'
+  // 新字段只扩展现有读取合同；未提供格式的旧记录继续按 JPG 消费。
+  const extension = tile.fileExtension?.trim().toLowerCase()
+  nextOptions.fileExtension = extension && ['jpg', 'jpeg', 'png'].includes(extension) ? extension : 'jpg'
   if (rectangleDegrees) {
     nextOptions.rectangleDegrees = rectangleDegrees
   }

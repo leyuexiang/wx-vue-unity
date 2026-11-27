@@ -33,4 +33,32 @@ describe('GIS 环境配置', () => {
     expect(createEditorGisLocalImageryLayerOptions(tile).maximumLevel).toBe(19)
     expect(createEditorGisLocalImageryLayerOptions(tile, { maximumLevel: 15 }).maximumLevel).toBe(15)
   })
+
+  it.each([undefined, 'https://previous.example/gis-source/tile/old'])('重开时按稳定字符串编号恢复完整 HTTPS 地址：%s', async savedUrl => {
+    vi.stubEnv('VITE_GIS_SOURCE_URL', '/gis-source')
+    const { ensureEditorGisDefaultImageryLayer } = await import('../editorGisDefaultLayerAdapter')
+    const current = { ...tile, id: '2344945282589520749', path: 'https://maps.example/gis-source/World_%E5%BD%B1%E5%83%8F' }
+    const scene = createSceneDefinition({ id: 'reopen-gis', name: '重开场景', type: 'gis' })
+    scene.layers = [{ id: 'local', name: '影像', type: 'imagery', provider: 'local', url: savedUrl,
+      visible: true, locked: false, order: 0, metadata: { tileId: current.id } }]
+    const result = await ensureEditorGisDefaultImageryLayer(scene, {
+      api: { listGisTile: async () => ({ code: 200, data: [current], msg: '成功' }) },
+    })
+    expect(result.layers[0]?.url).toBe(current.path)
+    expect(result.layers[0]?.metadata?.tileId).toBe(current.id)
+  })
+
+  it('优先使用真实描述中的覆盖范围和图像格式，避免按中心点裁切实际影像', async () => {
+    const { createEditorGisLocalImageryLayerOptions } = await import('../editorGisDefaultLayerAdapter')
+    const metadata = { ...tile, bounds: [110, 19, 112, 21], fileExtension: 'png' }
+    const options = createEditorGisLocalImageryLayerOptions(metadata)
+    expect(options.rectangleDegrees).toEqual([110, 19, 112, 21])
+    expect(options.fileExtension).toBe('png')
+  })
+
+  it('完整全球范围不因中心点是零而被裁成零度附近的局部切片', async () => {
+    const { createEditorGisLocalImageryLayerOptions } = await import('../editorGisDefaultLayerAdapter')
+    const metadata = { ...tile, longitude: '0', latitude: '0', bounds: [-180, -90, 180, 90] }
+    expect(createEditorGisLocalImageryLayerOptions(metadata).rectangleDegrees).toEqual([-180, -90, 180, 90])
+  })
 })
