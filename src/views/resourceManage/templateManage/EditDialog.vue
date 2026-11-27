@@ -56,7 +56,7 @@
               <el-input
                 v-model="ruleForm.templateName"
                 class="template-dialog__control"
-                maxlength="50"
+                :maxlength="templateNameMaxLength"
                 clearable
                 placeholder="请输入名称"
                 :disabled="detailLoading || submitting"
@@ -119,13 +119,12 @@
         </div>
 
         <!--
-          旧模板资源编辑接口仍没有元素类型字段，因此编辑模式保持只读；快照另存接口已经明确
-          提供 saveScope，另存模式允许选择并映射为 twoD、threeD、all。
+          另存才选择保存范围。编辑快照时回显已发布的范围，文件型模板没有对应字段。
         -->
         <div
+          v-if="isSaveAsMode || elementTypePresentation"
           class="template-dialog__element-type"
-          :aria-label="isSaveAsMode ? '模板保存范围' : '模板元素类型，编辑接口暂未开放修改'"
-          :title="isSaveAsMode ? '请选择模板保存范围' : '模板元素类型编辑接口暂未开放'"
+          aria-label="模板保存范围"
         >
           <el-radio-group
             v-model="elementTypePresentation"
@@ -136,6 +135,9 @@
             <el-radio value="3D">3D元素</el-radio>
             <el-radio value="2D_3D">2D+3D元素</el-radio>
           </el-radio-group>
+          <span v-if="snapshotSceneTypeLabel" class="template-dialog__scene-type">
+            {{ snapshotSceneTypeLabel }}
+          </span>
         </div>
 
         <el-form-item
@@ -203,23 +205,24 @@ import { to } from '@/utils/asyncHandler'
 import { getDim3dOssFileById, uploadDim3dOssFile } from '@/servers/manual/dim3d/api/oss'
 import { DIM3D_ADMIN_API } from '@/servers/manual/dim3d/api/constants'
 import {
+  editDim3dSceneTemplate,
   editDim3dTemplate,
+  getDim3dSceneTemplateInfo,
   getDim3dTemplateInfo,
+  readDim3dTemplateMetadata,
+  type Dim3dTemplateSaveScope,
   type Dim3dTemplateType,
 } from '@/servers/manual/dim3d/api/template'
 import {
+  createSnapshotTemplateEditPayload,
   createTemplateEditPayload,
   getTemplateEditMissingFieldMessage,
   type TemplateEditFormState,
+  type TemplateEditRecord,
 } from './templateEditState'
 import { DEFAULT_TEMPLATE_TYPE, TEMPLATE_TYPE_OPTIONS } from './config'
+import { SCENE_CREATION_TYPE_OPTIONS } from '../../SceneManage/sceneType'
 import type { EditorDim3dSceneTemplateForm } from '@/integrations/scene/editorDim3dSceneTemplateService'
-
-/** 列表卡片只作为打开详情的最小上下文，完整可保存字段必须从详情接口取得。 */
-interface TemplateEditRecord {
-  id: string
-  imgPath?: string
-}
 
 interface TemplateOption {
   value: string
@@ -235,13 +238,19 @@ const ELEMENT_TYPE_TO_SAVE_SCOPE = {
   '2D_3D': 'all',
 } as const satisfies Record<TemplateElementType, EditorDim3dSceneTemplateForm['saveScope']>
 
+/** 快照编辑只回显后端保存的范围，避免把缺失字段误显示为纯二维。 */
+const SAVE_SCOPE_TO_ELEMENT_TYPE: Record<Dim3dTemplateSaveScope, TemplateElementType> = {
+  twoD: '2D',
+  threeD: '3D',
+  all: '2D_3D',
+}
+
 type UploadError = Parameters<NonNullable<UploadRequestOptions['onError']>>[0]
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
   /**
-   * save-as 供场景编辑器提交当前四包快照，不读取旧模板详情，也绝不调用模板资源编辑接口。
-   * 两种模式仅复用同一套表单视觉，提交字段严格按各自真实契约分流。
+   * 另存模式由场景编辑器采集四包，编辑模式依据记录来源选择快照或文件目录接口。
    */
   mode: { type: String as PropType<'edit' | 'save-as'>, default: 'edit' },
   editRecord: { type: Object as PropType<TemplateEditRecord> },
@@ -258,6 +267,9 @@ const emit = defineEmits(['update:visible', 'updateList', 'template-type-change'
 
 /** 标题由入口模式集中派生，保证可见标题和关闭按钮无障碍名称始终一致。 */
 const isSaveAsMode = computed(() => props.mode === 'save-as')
+const isSnapshotEdit = computed(() => Boolean(props.editRecord?.templateSceneId))
+/** 快照接口支持 100 字名称，编辑旧数据时保留完整名称。 */
+const templateNameMaxLength = computed(() => isSnapshotEdit.value && !isSaveAsMode.value ? 100 : 50)
 const dialogTitle = computed(() => (isSaveAsMode.value ? '另存为模板' : '编辑模板'))
 
 const ruleFormRef = ref<FormInstance>()
@@ -267,14 +279,14 @@ const coverUploading = ref(false)
 const submitting = ref(false)
 const coverPreviewUrl = ref('')
 /** 编辑模式仅展示该状态；另存模式会通过固定映射生成真实 saveScope。 */
-const elementTypePresentation = ref<TemplateElementType>('2D')
+const elementTypePresentation = ref<TemplateElementType>()
+const snapshotSceneTypeLabel = ref('')
 let initController: AbortController | undefined
 let uploadController: AbortController | undefined
 let latestInitRequestId = 0
 
 /**
- * 编辑功能不预填详情字段；另存模式可传入固定默认类型，使弹窗打开即与设计稿的行业方案一致。
- * 模板文件仍只由模板详情回填；资源归属由保存适配层按“模板仅属于系统资源”的业务规则固定补齐。
+ * 编辑从各自目录详情回填表单，另存模式沿用默认行业方案类型。
  */
 const createEmptyForm = (templateType?: Dim3dTemplateType): TemplateEditFormState => ({
   templateName: '',
@@ -289,7 +301,11 @@ const ruleForm = reactive<TemplateEditFormState>(createEmptyForm())
 const rules = computed<FormRules<TemplateEditFormState>>(() => ({
   templateName: [
     { required: true, message: '请输入模板名称', trigger: 'blur' },
-    { min: 1, max: 50, message: '模板名称长度为 1 到 50 个字符', trigger: 'blur' },
+    {
+      max: templateNameMaxLength.value,
+      message: `模板名称最多为 ${templateNameMaxLength.value} 个字符`,
+      trigger: 'blur',
+    },
   ],
   // 两种模式都必须明确选择固定模板类型，后续接口补齐字段时无需再次调整表单契约。
   templateType: [{ required: true, message: '请选择模板类型', trigger: 'change' }],
@@ -321,8 +337,7 @@ const resolveCoverPreviewUrl = async (
 }
 
 /**
- * 每次打开都从详情接口重建表单，避免列表缺 templateFileId 时发生空字段保存。请求序号和
- * AbortController 双重保护快速切卡、关闭弹窗等场景，过期响应不会回写当前表单。
+ * 以目录编号读取对应详情，快照编辑只需要元数据。过期详情和封面请求不能回写新表单。
  */
 const initializeEditForm = async (record?: TemplateEditRecord) => {
   const requestId = ++latestInitRequestId
@@ -333,7 +348,8 @@ const initializeEditForm = async (record?: TemplateEditRecord) => {
 
   Object.assign(ruleForm, createEmptyForm())
   coverPreviewUrl.value = ''
-  elementTypePresentation.value = '2D'
+  elementTypePresentation.value = undefined
+  snapshotSceneTypeLabel.value = ''
   ruleFormRef.value?.clearValidate()
 
   if (!id) {
@@ -343,8 +359,11 @@ const initializeEditForm = async (record?: TemplateEditRecord) => {
   }
 
   detailLoading.value = true
+  const options = { signal: controller.signal, suppressNotFoundNotification: true }
   const [error, response] = await to(
-    getDim3dTemplateInfo(id, { signal: controller.signal, suppressNotFoundNotification: true }),
+    record?.templateSceneId
+      ? getDim3dSceneTemplateInfo(id, { ...options, params: { includeRevision: false } })
+      : getDim3dTemplateInfo(id, options),
   )
   if (requestId !== latestInitRequestId || controller.signal.aborted || !props.visible) return
 
@@ -356,17 +375,25 @@ const initializeEditForm = async (record?: TemplateEditRecord) => {
   }
 
   const detail = response.data
-  const coverImageId = String(detail.coverImageId ?? '').trim()
+  const coverImageId = String(detail.coverAssetId ?? detail.coverImageId ?? '').trim()
+  const { saveScope, sceneType } = readDim3dTemplateMetadata(detail)
+  if (record?.templateSceneId && saveScope) elementTypePresentation.value = SAVE_SCOPE_TO_ELEMENT_TYPE[saveScope]
+  if (record?.templateSceneId && saveScope && saveScope !== 'twoD') {
+    snapshotSceneTypeLabel.value = SCENE_CREATION_TYPE_OPTIONS.find((option) => option.value === sceneType)?.label ?? ''
+  }
   Object.assign(ruleForm, {
     templateName: String(detail.templateName ?? '').trim(),
     templateDesc: String(detail.templateDesc ?? '').trim(),
-    templateType: detail.templateType as Dim3dTemplateType | undefined,
+    templateType: detail.templateType,
     category: String(detail.category ?? '').trim(),
     templateFileId: String(detail.templateFileId ?? '').trim(),
     coverImageId: coverImageId || undefined,
   })
+  if (detail.templateType) emit('template-type-change', detail.templateType)
 
-  const coverUrl = await resolveCoverPreviewUrl(coverImageId, record?.imgPath, controller.signal)
+  const coverUrl = await resolveCoverPreviewUrl(
+    coverImageId, record?.coverImageId === coverImageId ? record?.imgPath : undefined, controller.signal,
+  )
   if (requestId !== latestInitRequestId || controller.signal.aborted || !props.visible) return
   coverPreviewUrl.value = coverUrl
   detailLoading.value = false
@@ -385,6 +412,7 @@ const initializeSaveAsForm = () => {
   Object.assign(ruleForm, createEmptyForm(DEFAULT_TEMPLATE_TYPE))
   coverPreviewUrl.value = ''
   elementTypePresentation.value = '2D'
+  snapshotSceneTypeLabel.value = ''
   ruleFormRef.value?.clearValidate()
 }
 
@@ -393,7 +421,6 @@ const initializeSaveAsForm = () => {
  * 分类编码属于类型专属值域，不能把行业方案已选编码带到展厅模板提交请求中。
  */
 const handleTemplateTypeChange = (value: Dim3dTemplateType) => {
-  if (!isSaveAsMode.value) return
   ruleForm.category = ''
   emit('template-type-change', value)
 }
@@ -458,8 +485,10 @@ const handleCoverUpload = async (options: UploadRequestOptions) => {
     if (response.code !== 200) throw new Error(response.msg || '封面上传失败')
     if (!ossId) throw new Error('封面上传成功但缺少文件编号')
 
+    const previewUrl = response.data?.url?.trim() || await resolveCoverPreviewUrl(ossId, undefined, controller.signal)
+    if (controller.signal.aborted) return
     ruleForm.coverImageId = ossId
-    coverPreviewUrl.value = response.data?.url?.trim() || ''
+    coverPreviewUrl.value = previewUrl
     coverUploadRef.value?.clearFiles()
     options.onSuccess?.(response)
     ElMessage.success('封面上传成功')
@@ -479,8 +508,7 @@ const handleCoverUpload = async (options: UploadRequestOptions) => {
 }
 
 /**
- * 保存先执行可见字段校验，再校验隐藏的模板文件编号，最后通过统一适配器生成请求体。
- * 这一顺序既不让用户看到无关的内部字段校验，也确保提交锁阻止连续点击造成重复编辑。
+ * 表单校验后按目录类型选择请求体。仅文件型模板需要保留原模板文件绑定。
  */
 const handleConfirm = async () => {
   if (!ruleFormRef.value || submitting.value) return
@@ -490,6 +518,7 @@ const handleConfirm = async () => {
   }
 
   const valid = await ruleFormRef.value.validate().catch(() => false)
+  if (submitting.value || !props.visible) return
   if (!valid) {
     ElMessage.error('请填写完整信息')
     return
@@ -508,11 +537,16 @@ const handleConfirm = async () => {
       ElMessage.error('请选择模板类型')
       return
     }
+    const elementType = elementTypePresentation.value
+    if (!elementType) {
+      ElMessage.error('请选择模板保存范围')
+      return
+    }
     const form: EditorDim3dSceneTemplateForm = {
       name: ruleForm.templateName.trim(),
       templateType: ruleForm.templateType,
       category: ruleForm.category.trim(),
-      saveScope: ELEMENT_TYPE_TO_SAVE_SCOPE[elementTypePresentation.value],
+      saveScope: ELEMENT_TYPE_TO_SAVE_SCOPE[elementType],
       ...(ruleForm.templateDesc.trim() ? { sceneDesc: ruleForm.templateDesc.trim() } : {}),
       ...(String(ruleForm.coverImageId ?? '').trim()
         ? { coverAssetId: String(ruleForm.coverImageId).trim() }
@@ -532,12 +566,12 @@ const handleConfirm = async () => {
     return
   }
 
-  const missingMessage = getTemplateEditMissingFieldMessage(ruleForm)
+  const missingMessage = getTemplateEditMissingFieldMessage(ruleForm, !isSnapshotEdit.value)
   if (missingMessage) {
     ElMessage.error(missingMessage)
     return
   }
-  const body = createTemplateEditPayload(ruleForm)
+  const body = isSnapshotEdit.value ? createSnapshotTemplateEditPayload(ruleForm) : createTemplateEditPayload(ruleForm)
   const id = String(props.editRecord?.id ?? '').trim()
   if (!body || !id) {
     ElMessage.error(body ? '当前模板缺少有效编号，无法保存' : '模板信息不完整，暂不能保存')
@@ -545,7 +579,9 @@ const handleConfirm = async () => {
   }
 
   submitting.value = true
-  const [error, response] = await to(editDim3dTemplate(id, body))
+  const [error, response] = await to(
+    'templateFileId' in body ? editDim3dTemplate(id, body) : editDim3dSceneTemplate(id, body),
+  )
   submitting.value = false
   if (error || (response?.code !== undefined && response.code !== 200)) {
     ElMessage.error(error?.message || response?.msg || '编辑模板失败，请稍后重试')
@@ -577,7 +613,8 @@ const handleReset = () => {
   coverUploading.value = false
   submitting.value = false
   coverPreviewUrl.value = ''
-  elementTypePresentation.value = '2D'
+  elementTypePresentation.value = undefined
+  snapshotSceneTypeLabel.value = ''
   coverUploadRef.value?.clearFiles()
   Object.assign(ruleForm, createEmptyForm())
   ruleFormRef.value?.clearValidate()
@@ -846,8 +883,16 @@ const handleReset = () => {
 }
 .template-dialog__element-type {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
   align-items: center;
   min-height: 22px;
+}
+/* 仅含三维内容的快照回显场景类型，使用与表单标签一致的主题文字。 */
+.template-dialog__scene-type {
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--manage-text-2, #595959);
 }
 .template-dialog__radio-group {
   display: flex;

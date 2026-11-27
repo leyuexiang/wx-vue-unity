@@ -1,4 +1,12 @@
-import type { Dim3dTemplateForm, Dim3dTemplateType } from '@/servers/manual/dim3d/api/template'
+import type { Dim3dSceneTemplateEditBody, Dim3dTemplateForm, Dim3dTemplateType } from '@/servers/manual/dim3d/api/template'
+
+/** 卡片只提供详情定位和已经解析的同一张封面，保存值由详情回填。 */
+export interface TemplateEditRecord {
+  id: string
+  templateSceneId?: string
+  coverImageId?: string
+  imgPath?: string
+}
 
 /** 编辑弹窗的最小表单状态；页面显示层与接口字段在此处保持一一对应。 */
 export interface TemplateEditFormState {
@@ -44,13 +52,25 @@ export function createTemplateEditPayload(
 }
 
 /**
- * 返回首个缺失字段的中文提示。模板文件编号在界面中不展示，但编辑接口保存时仍必填，
- * 因此详情异常时需要明确阻断；资源归属已经在请求边界固定为系统资源，无需参与表单校验。
+ * 返回首个缺失字段的提示。文件型模板还需要详情里的原文件编号。
  */
-export function getTemplateEditMissingFieldMessage(form: TemplateEditFormState) {
+export function getTemplateEditMissingFieldMessage(form: TemplateEditFormState, requiresTemplateFile = true) {
   if (!form.templateName.trim()) return '请输入模板名称'
   if (!form.templateType) return '请选择模板类型'
   if (!form.category.trim()) return '请选择模板分类'
-  if (!String(form.templateFileId ?? '').trim()) return '模板详情缺少模板文件编号，暂不能保存'
+  if (requiresTemplateFile && !form.templateFileId.trim()) return '模板详情缺少模板文件编号，暂不能保存'
   return ''
+}
+
+/** 快照编辑允许清空描述，封面保持原编号直至上传新文件。 */
+export function createSnapshotTemplateEditPayload(form: TemplateEditFormState): Dim3dSceneTemplateEditBody | undefined {
+  if (!form.templateType || getTemplateEditMissingFieldMessage(form, false)) return undefined
+  const coverAssetId = form.coverImageId?.trim()
+  return {
+    templateName: form.templateName.trim(),
+    templateDesc: form.templateDesc.trim(),
+    templateType: form.templateType,
+    category: form.category.trim(),
+    ...(coverAssetId ? { coverAssetId } : {}),
+  }
 }

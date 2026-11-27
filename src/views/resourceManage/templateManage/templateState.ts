@@ -86,7 +86,10 @@ export async function resolveTemplateSnapshotMetadata(
   const templateSceneId = String(row.templateSceneId ?? '').trim()
   if (!templateSceneId || !isTemplateBusinessId(row.id) || hasTemplateCreationMetadata(metadata)) return metadata
 
-  const { data } = await getDim3dSceneTemplateInfo(String(row.id).trim(), { suppressNotFoundNotification: true })
+  const { data } = await getDim3dSceneTemplateInfo(String(row.id).trim(), {
+    params: { includeRevision: false },
+    suppressNotFoundNotification: true,
+  })
   if (!data || String(data.templateSceneId ?? '').trim() !== templateSceneId) return metadata
   const detail = readDim3dTemplateMetadata(data)
   return {

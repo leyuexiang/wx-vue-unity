@@ -159,13 +159,13 @@
               </el-tooltip>
 
               <div class="manage-model-card__actions">
-                <!-- 编辑必须先读取详情，避免列表记录缺少 templateFileId 时覆盖原模板文件绑定。 -->
+                <!-- 快照和文件模板共用编辑按钮，由详情入口识别各自的可保存字段。 -->
                 <el-button
                   circle
                   class="manage-model-card__more"
                   title="编辑模板"
                   aria-label="编辑模板"
-                  :disabled="Boolean(slotProps.record.templateSceneId) || isOperationPending(slotProps.record.id)"
+                  :disabled="isOperationPending(slotProps.record.id)"
                   @click.stop.prevent="openTemplateEditDialog(slotProps.record)"
                 >
                   <img
@@ -234,13 +234,13 @@
     </section>
 
     <!--
-      模板编辑弹窗独立于列表渲染。仅向其传递字典选项和当前卡片的编号、已解析封面地址，
-      模板文件、资源归属等完整可保存字段由弹窗内部详情请求获得，避免列表状态被耦合污染。
+      弹窗使用当前所选模板类型的分类字典。由目录编号和来源选择详情接口。
     -->
     <EditDialog
       v-model:visible="templateEditVisible"
       :edit-record="templateEditRecord"
-      :categories="activeCategories"
+      :categories="templateEditCategories"
+      @template-type-change="selectTemplateEditType"
       @update-list="refreshTemplateListAfterEdit"
     />
 
@@ -324,6 +324,7 @@ import SceneTypeRadioGroup from '../../SceneManage/SceneTypeRadioGroup.vue'
 import { DEFAULT_SCENE_CREATION_TYPE } from '../../SceneManage/sceneType'
 import { useManageTheme } from '../../manageShared/manageTheme'
 import EditDialog from './EditDialog.vue'
+import type { TemplateEditRecord } from './templateEditState'
 import { DEFAULT_TEMPLATE_TYPE, TEMPLATE_TYPE_OPTIONS } from './config'
 import {
   createTemplateListRequestParams,
@@ -425,7 +426,8 @@ const listError = ref('')
 const listLoading = ref(false)
 /** 编辑弹窗只保存当前卡片的最小打开上下文，详情和保存状态由子组件隔离管理。 */
 const templateEditVisible = ref(false)
-const templateEditRecord = ref<{ id: string; imgPath?: string }>()
+const templateEditRecord = ref<TemplateEditRecord>()
+const templateEditType = ref<Dim3dTemplateType>(DEFAULT_TEMPLATE_TYPE)
 
 type TemplateCategoryOption = { value: string; label: string }
 
@@ -437,6 +439,9 @@ const categoriesByTemplateType = ref(new Map<Dim3dTemplateType, TemplateCategory
 const categoryLabelsByTemplateType = ref(new Map<Dim3dTemplateType, Map<string, string>>())
 const activeCategories = computed(
   () => categoriesByTemplateType.value.get(activeTemplateType.value) || [],
+)
+const templateEditCategories = computed(
+  () => categoriesByTemplateType.value.get(templateEditType.value) || [],
 )
 const activeCategoryLabels = computed(
   () => categoryLabelsByTemplateType.value.get(activeTemplateType.value) || EMPTY_CATEGORY_LABELS,
@@ -485,7 +490,7 @@ const list = computed(() =>
       item.id !== undefined && item.id !== null
         ? String(item.id)
         : createStableTemplateKey(item, index)
-    const coverImageId = String(item.coverImageId ?? '').trim()
+    const coverImageId = String(item.coverImageId ?? item.coverAssetId ?? '').trim()
     const templateSnapshotLabel = item.templateSceneId
       ? getTemplateSnapshotLabel(getTemplateCardMetadata(item))
       : ''
@@ -502,6 +507,7 @@ const list = computed(() =>
       name: item.templateName?.trim() || '--',
       description: item.templateDesc?.trim() || '--',
       category,
+      coverImageId,
       updateTime: item.updateTime || '',
       imgPath: coverImageId ? coverUrlByOssId.value.get(coverImageId) || '' : '',
       statusLabel,
@@ -637,7 +643,7 @@ const resolveCoverUrls = async (rows: Dim3dTemplatePageVo[], requestId: number) 
   const ids = [
     ...new Set(
       rows
-        .map((row) => String(row.coverImageId ?? '').trim())
+        .map((row) => String(row.coverImageId ?? row.coverAssetId ?? '').trim())
         .filter((id) => id && !coverUrlByOssId.value.has(id)),
     ),
   ]
@@ -918,21 +924,26 @@ const createSceneFromTemplate = async () => {
   }
 }
 
-/**
- * 编辑入口只接受真实业务编号；列表缺主键时生成的渲染回退键绝不能用于详情或编辑请求。
- * 已解析的封面地址一并传入，弹窗会优先复用，避免重复请求同一 OSS 资源。
- */
+/** 编辑使用目录业务编号定位；已解析封面只在文件编号与详情相符时复用。 */
 const openTemplateEditDialog = (record: TemplateCardRecord) => {
-  if (String(record.templateSceneId ?? '').trim()) {
-    ElMessage.info('场景快照模板暂不支持编辑模板文件字段')
-    return
-  }
   if (!isTemplateBusinessId(record.id)) {
     ElMessage.warning('当前模板缺少有效编号，无法编辑')
     return
   }
-  templateEditRecord.value = { id: record.id, imgPath: record.imgPath }
+  templateEditType.value = activeTemplateType.value
+  templateEditRecord.value = {
+    id: record.id,
+    templateSceneId: String(record.templateSceneId ?? '').trim() || undefined,
+    coverImageId: record.coverImageId,
+    imgPath: record.imgPath,
+  }
   templateEditVisible.value = true
+}
+
+/** 切换编辑分类字典独立于列表筛选，保留用户当前页签和页码。 */
+const selectTemplateEditType = (templateType: Dim3dTemplateType) => {
+  templateEditType.value = templateType
+  if (!categoriesByTemplateType.value.has(templateType)) void getCategories(templateType)
 }
 
 /** 编辑成功后保持现有筛选与页码，仅精确刷新当前列表页，不重新请求无关字典或分类统计。 */

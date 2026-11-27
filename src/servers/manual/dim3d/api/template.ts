@@ -105,10 +105,19 @@ export function readDim3dTemplateMetadata(row: Dim3dTemplatePageVo): Dim3dTempla
 }
 
 /** 文件型模板详情返回契约枚举，也兼容历史响应直接返回字典类型编码。 */
-type FileTemplateDetailPayload = Omit<Dim3dTemplateDetailResponse, 'data'> & {
+type TemplateDetailPayload = Omit<Dim3dTemplateDetailResponse, 'data'> & {
   data?: Omit<Dim3dTemplateDetailVo, 'templateType'> & {
     templateType?: Dim3dTemplateType | keyof typeof DIM3D_TEMPLATE_TYPE
   }
+}
+
+/** 快照目录编辑使用独立字段，封面保存对象存储文件编号。 */
+export interface Dim3dSceneTemplateEditBody {
+  templateName: string
+  templateDesc: string
+  templateType: Dim3dTemplateType
+  category: string
+  coverAssetId?: string
 }
 
 /**
@@ -195,8 +204,8 @@ export async function pageDim3dSceneTemplate(
   )
 }
 
-export function getDim3dSceneTemplateInfo(id: string, options?: Record<string, unknown>) {
-  return request<Dim3dTemplateDetailResponse>(
+export async function getDim3dSceneTemplateInfo(id: string, options?: Record<string, unknown>) {
+  const response = await request<TemplateDetailPayload>(
     `${DIM3D_SCENE_TEMPLATE_API_PREFIX}/info/${encodeURIComponent(id)}`,
     {
       method: 'GET',
@@ -204,6 +213,15 @@ export function getDim3dSceneTemplateInfo(id: string, options?: Record<string, u
       passAuth: true,
       ...(options || {}),
     },
+  )
+  return normalizeTemplateDetail(response)
+}
+
+/** 快照模板使用场景目录编号编辑基础信息，沿用当前登录端的路径分流。 */
+export function editDim3dSceneTemplate(id: string, body: Dim3dSceneTemplateEditBody) {
+  return request<Dim3dTemplateVoidResponse>(
+    `${DIM3D_SCENE_TEMPLATE_API_PREFIX}/edit/${encodeURIComponent(id)}`,
+    { method: 'PUT', data: body, headers: getDim3dHeaders(), passAuth: true },
   )
 }
 
@@ -334,7 +352,7 @@ export async function getDim3dTemplateInfo(
   id: string,
   options?: Record<string, unknown>,
 ): Promise<Dim3dTemplateDetailResponse> {
-  const response = await request<FileTemplateDetailPayload>(
+  const response = await request<TemplateDetailPayload>(
     `${DIM3D_TEMPLATE_API_PREFIX}/info/${encodeURIComponent(id)}`,
     {
       method: 'GET',
@@ -344,6 +362,11 @@ export async function getDim3dTemplateInfo(
     },
   )
 
+  return normalizeTemplateDetail(response)
+}
+
+/** 两类模板详情共用表单的字典类型编码。 */
+function normalizeTemplateDetail(response: TemplateDetailPayload): Dim3dTemplateDetailResponse {
   const detail = response.data
   let templateType = detail?.templateType
   // 编辑弹窗及分类请求共用字典类型编码，后端目录继续使用正式模板枚举。
