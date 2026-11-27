@@ -142,7 +142,7 @@
           </div>
         </ScenePropertyRow>
 
-        <ScenePropertyRow>
+        <ScenePropertyRow v-if="!object.firstPerson">
           <template #label>
             <span>缩放</span>
             <button
@@ -184,6 +184,31 @@
         </ScenePropertyRow>
       </div>
     </section>
+    <section v-if="object.firstPerson" class="scene-edit-property-section">
+      <div class="scene-edit-property-section__header">第一人称相机</div>
+      <div class="scene-edit-property-section__body">
+        <ScenePropertyRow label="启用漫游">
+          <ScenePropertySwitch :model-value="object.firstPerson.enabled" :disabled="!canEdit"
+            @update:model-value="commitFirstPerson('enabled', Boolean($event))" />
+        </ScenePropertyRow>
+        <ScenePropertyRow v-for="field in firstPersonNumbers" :key="field.key" :label="field.label" control-fill>
+          <ScenePropertyNumberInput :model-value="object.firstPerson[field.key]" :min="field.min" :max="field.max"
+            :step="field.step" :precision="field.precision" :disabled="!canEdit"
+            @edit-commit="(value, session) => commitFirstPerson(field.key, value, session)" />
+        </ScenePropertyRow>
+        <ScenePropertyRow label="锁定上下视角">
+          <ScenePropertySwitch :model-value="object.firstPerson.lockPitch" :disabled="!canEdit"
+            @update:model-value="commitFirstPerson('lockPitch', Boolean($event))" />
+        </ScenePropertyRow>
+        <ScenePropertyRow label="碰撞检测">
+          <ScenePropertySwitch :model-value="object.firstPerson.collisionEnabled" :disabled="!canEdit"
+            @update:model-value="commitFirstPerson('collisionEnabled', Boolean($event))" />
+        </ScenePropertyRow>
+        <el-button v-if="getActiveSceneViewportHost()?.getRuntime().capabilities.editing.firstPerson"
+          type="primary" :disabled="!object.visible || object.firstPerson.enabled === false || !!editorSceneOperation"
+          @click="openFirstPersonPreview">打开第一人称预览</el-button>
+      </div>
+    </section>
   </div>
 
   <el-empty
@@ -198,12 +223,15 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Lock, Unlock } from '@element-plus/icons-vue'
 import { editorSceneOperation, subscribeEditorSceneBeforeOperation } from '@/integrations/scene/editorSceneOperationGate'
-import type { CommandBus, SceneObject, SceneStore, SceneTransform } from '@/scene-platform'
+import type { CommandBus, FirstPersonConfig, SceneObject, SceneStore, SceneTransform } from '@/scene-platform'
+import { SCENE_FIRST_PERSON_PREVIEW_EVENT } from '@/integrations/scene/sceneFirstPersonAction'
+import { getActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
 import {
   createUpdateObjectExtensionsCommand,
   createUpdateObjectNameCommand,
   createUpdateObjectTransformCommand,
   createUpdateObjectVisibilityCommand,
+  createUpdateFirstPersonCommand,
 } from '@/scene-platform'
 import ScenePropertyInput from '../../PropertyControls/ScenePropertyInput/index.vue'
 import ScenePropertyNumberInput from '../../PropertyControls/ScenePropertyNumberInput/index.vue'
@@ -250,11 +278,47 @@ const object = computed(() => {
   return props.store && props.objectId ? props.store.getObject(props.objectId) : null
 })
 
-const isSupportedObject = computed(() => object.value?.type === 'model' || object.value?.type === 'primitive' || object.value?.type === 'group')
+const isSupportedObject = computed(() => object.value?.type === 'model' || object.value?.type === 'primitive' ||
+  object.value?.type === 'group' || (object.value?.type === 'camera' && !!object.value.firstPerson))
 const isEffectivelyLocked = computed(() =>
   Boolean(props.store && props.objectId && props.store.isObjectEffectivelyLocked(props.objectId)),
 )
 const canEdit = computed(() => Boolean(object.value && props.commandBus && !isEffectivelyLocked.value && !editorSceneOperation.value))
+
+// 数值范围与播放器协议一致；角色高度变化时同步更新眼高与胶囊半径上限。
+const firstPersonNumbers = computed(() => {
+  const height = object.value?.firstPerson?.height ?? 1.8
+  return [
+    { key: 'height', label: '人物高度', min: 0.5, max: 10, step: 0.1, precision: 2 },
+    { key: 'eyeHeight', label: '眼高', min: 0.3, max: height, step: 0.05, precision: 2 },
+    { key: 'collisionRadius', label: '碰撞半径', min: 0.05, max: height / 2, step: 0.05, precision: 2 },
+    { key: 'moveSpeed', label: '移动速度', min: 0, max: 30, step: 0.1, precision: 2 },
+    { key: 'lookSensitivity', label: '旋转灵敏度', min: 0.0001, max: 0.02, step: 0.0001, precision: 4 },
+    { key: 'fov', label: '视场角', min: 30, max: 120, step: 1, precision: 0 },
+  ] as const
+})
+
+const commitFirstPerson = <K extends keyof FirstPersonConfig>(
+  key: K, value: FirstPersonConfig[K] | null | undefined, session?: symbol,
+) => {
+  const current = object.value
+  if (!canEdit.value || !current?.firstPerson || value == null || current.firstPerson[key] === value) return
+  const field = firstPersonNumbers.value.find(item => item.key === key)
+  if (field && (typeof value !== 'number' || !Number.isFinite(value) || value < field.min || value > field.max)) return
+  try {
+    // 与起点变换沿用同一命令历史，保存与撤销都以场景对象配置为准。
+    props.commandBus!.execute(createUpdateFirstPersonCommand(current.id, { [key]: value }, session))
+  } catch (error) {
+    reportCommandFailure(error)
+  }
+}
+
+const openFirstPersonPreview = () => {
+  const current = object.value
+  if (current?.firstPerson && current.firstPerson.enabled !== false) {
+    window.dispatchEvent(new CustomEvent(SCENE_FIRST_PERSON_PREVIEW_EVENT, { detail: current.id }))
+  }
+}
 const assetLabel = computed(() =>
   object.value?.asset ? `${object.value.asset.kind} · ${object.value.asset.id}` : '',
 )

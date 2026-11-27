@@ -16,6 +16,7 @@ import {
   type UnitySessionInitializeResponse,
   type UnitySceneSnapshotDto,
   type UnityModelPreviewAction,
+  type UnityFirstPersonAction,
 } from '@/unity-runtime/protocol/types'
 import type { UnityCloudRuntime, UnityRuntimeEventMap } from './UnityCloudRuntime'
 import { authContext } from '@/auth/authContext'
@@ -72,6 +73,13 @@ export class JsonRpcUnityCloudRuntime implements UnityCloudRuntime {
     }
     // Reads wait for queued writes. A stalled camera sample must never delay the next edit or scene load.
     return action.action === 'get' ? this.lifecycle.then(operation) : this.schedule(operation)
+  }
+
+  controlFirstPerson(action: UnityFirstPersonAction): Promise<void> {
+    return this.schedule(async () => {
+      if (this.capabilities?.features['firstPerson.control'] !== true) throw new Error('当前播放器需要更新后才能进入第一人称')
+      this.assertSuccess(await this.send<UnityFirstPersonAction, { active: boolean }>('editor.v1.firstPerson.control', action))
+    })
   }
   /** 等待播放器处理已送达的鼠标输入及其提交事件。只确认时序，不读取或替换三维对象。 */
   flushTransformCommits(): Promise<void> {

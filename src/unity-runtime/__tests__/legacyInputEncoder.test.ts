@@ -33,6 +33,20 @@ describe('LegacyInputEncoder', () => {
     expect(view(packet).getFloat32(stateOffset + 4, true)).toBeCloseTo(540)
   })
 
+  it('在云画面外松开鼠标时只清除按键并保留最后有效坐标', () => {
+    const encoder = new LegacyInputEncoder()
+    const bounds = { left: 0, top: 0, width: 640, height: 360 } as DOMRect
+    const press = { type: 'mousedown', clientX: 320, clientY: 180, movementX: 0, movementY: 0, buttons: 1 } as MouseEvent
+    encoder.pointer(press, bounds, 1920, 1080)
+    const release = { ...press, type: 'mouseup', clientX: 800, movementX: 480, buttons: 0 } as MouseEvent
+    const packet = encoder.pointer(release, bounds, 1920, 1080)!
+    const stateOffset = 12 + 24
+    expect(view(packet).getFloat32(stateOffset, true)).toBe(960)
+    expect(view(packet).getFloat32(stateOffset + 8, true)).toBe(0)
+    expect(view(packet).getUint16(stateOffset + 24, true)).toBe(0)
+    expect(encoder.pointer(release, bounds, 1920, 1080)).toBeNull()
+  })
+
   it.each([
     [0, -100, 1], [0, 100, -1],
     [1, -3, 1], [1, 3, -1],

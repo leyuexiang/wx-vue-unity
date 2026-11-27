@@ -8,9 +8,9 @@
         data-scene-preview-runtime
       />
       <LayerDOM />
-      <div v-if="firstPersonObject?.firstPerson?.enabled" class="scene-preview-first-person-tools">
-        <button type="button" @click="toggleFirstPerson">{{ firstPersonActive ? '退出第一人称' : '进入第一人称' }}</button>
-        <span v-if="firstPersonCollisionMessage">{{ firstPersonCollisionMessage }}</span>
+      <div v-if="firstPersonObject" class="scene-preview-first-person-tools">
+        <button type="button" :disabled="firstPersonPending" @click="toggleFirstPerson">{{ firstPersonActive ? '退出第一人称' : '进入第一人称' }}</button>
+        <span v-if="firstPersonMessage || firstPersonActive">{{ firstPersonMessage || 'W、A、S、D 移动，按住 Shift 跑步，空格跳跃，左键拖动转向，Esc 退出' }}</span>
       </div>
     </div>
     <section
@@ -61,10 +61,6 @@ import { sceneMediaServerKey } from '@/integrations/scene/useSceneMediaServer'
 import type renderScene from '@/utils/renderScene'
 import { useSceneWidgetStore } from '@/stores/sceneEditStore'
 import {
-  FirstPersonPreviewController,
-  type FirstPersonPreviewPose,
-  type SceneCameraState,
-  type SceneObject,
   type SceneRuntime,
   type SceneType,
 } from '@/scene-platform'
@@ -98,6 +94,7 @@ import { hasIotPermission } from '@/auth/iotNavigation'
 import { issuePublicationTicket, renewManagedPreviewTicket, type PublicationReadTicket } from '@/integrations/scene/fixedPublicationManagement'
 import { loadFixedScenePublication, type FixedPublication } from '@/integrations/scene/fixedScenePublication'
 import { UnityEditorSceneRuntime } from '@/unity-runtime/runtime/UnityEditorSceneRuntime'
+import { useFirstPersonPreview } from '@/integrations/scene/useFirstPersonPreview'
 import { unityRenderConfig } from '@/unity-runtime/renderMode'
 import { clearAuthenticationRuntime } from '@/auth/runtime'
 import { tokenCache } from '@/utils/utils'
@@ -143,134 +140,14 @@ const stageLayout = reactive({
 let resizeObserver: ResizeObserver | null = null
 let previewRuntimeController: ScenePreviewRuntimeController | null = null
 let previewClosed = false
-const firstPersonObject = ref<SceneObject | null>(null)
-const firstPersonActive = ref(false)
-const firstPersonCollisionMessage = ref('')
-let firstPersonRuntime: SceneRuntime | null = null
-let firstPersonController: FirstPersonPreviewController | null = null
-let firstPersonPreviousCamera: SceneCameraState | null = null
-let firstPersonFrame: number | null = null
-let firstPersonLastFrameTime = 0
-
-const applyFirstPersonPose = (pose: FirstPersonPreviewPose) => {
-  const runtime = firstPersonRuntime
-  const object = firstPersonObject.value
-  if (!runtime || !object?.firstPerson || !firstPersonActive.value) return
-  if (runtime.setFirstPersonPose) {
-    runtime.setFirstPersonPose({
-      position: pose.position,
-      heading: pose.heading,
-      pitch: pose.pitch,
-      eyeHeight: object.firstPerson.eyeHeight,
-      fov: object.firstPerson.fov,
-    })
-    return
-  }
-  const camera = runtime.getCamera()
-  if (camera.kind === 'three' && object.transform.kind === 'local') {
-    const eye: [number, number, number] = [
-      pose.position[0],
-      pose.position[1] + object.firstPerson.eyeHeight,
-      pose.position[2],
-    ]
-    void runtime.setCamera({
-      ...camera,
-      position: eye,
-      target: [
-        eye[0] + Math.sin(pose.heading),
-        eye[1] + Math.sin(pose.pitch),
-        eye[2] - Math.cos(pose.heading),
-      ],
-      fov: object.firstPerson.fov,
-    })
-  } else if (camera.kind === 'cesium' && object.transform.kind === 'geo') {
-    runtime.setFirstPersonFov?.(object.firstPerson.fov)
-    void runtime.setCamera({
-      ...camera,
-      destination: [pose.position[0], pose.position[1], pose.position[2] + object.firstPerson.eyeHeight],
-      orientation: { heading: pose.heading, pitch: pose.pitch, roll: 0 },
-    })
-  }
-}
-
-const releaseFirstPersonInput = () => {
-  firstPersonController?.pointerUp()
-  for (const key of ['w', 'a', 's', 'd']) firstPersonController?.keyUp(key)
-}
-const handleFirstPersonKeyDown = (event: KeyboardEvent) => {
-  if (!firstPersonActive.value || !['w', 'a', 's', 'd'].includes(event.key.toLowerCase())) return
-  const target = event.target as HTMLElement | null
-  if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
-  event.preventDefault()
-  firstPersonController?.keyDown(event.key)
-}
-const handleFirstPersonKeyUp = (event: KeyboardEvent) => firstPersonController?.keyUp(event.key)
-const handleFirstPersonPointerDown = (event: PointerEvent) => {
-  if (!firstPersonActive.value || event.button !== 0 || !runtimeHostRef.value?.contains(event.target as Node)) return
-  firstPersonController?.pointerDown(event.clientX, event.clientY)
-}
-const handleFirstPersonPointerMove = (event: PointerEvent) => {
-  firstPersonController?.pointerMove(event.clientX, event.clientY)
-}
-const handleFirstPersonPointerUp = () => firstPersonController?.pointerUp()
-const tickFirstPerson = (time: number) => {
-  if (!firstPersonController) { firstPersonFrame = null; return }
-  firstPersonController.step((time - firstPersonLastFrameTime) / 1000)
-  firstPersonLastFrameTime = time
-  firstPersonFrame = requestAnimationFrame(tickFirstPerson)
-}
-const exitFirstPerson = () => {
-  if (firstPersonFrame !== null) cancelAnimationFrame(firstPersonFrame)
-  firstPersonFrame = null
-  releaseFirstPersonInput()
-  firstPersonController?.dispose()
-  firstPersonController = null
-  firstPersonRuntime?.setFirstPersonInputEnabled?.(false)
-  firstPersonRuntime?.setFirstPersonPerformanceMode?.(false)
-  if (firstPersonPreviousCamera && firstPersonRuntime) void firstPersonRuntime.setCamera(firstPersonPreviousCamera)
-  firstPersonPreviousCamera = null
-  firstPersonActive.value = false
-  firstPersonCollisionMessage.value = ''
-}
-const enterFirstPerson = (runtime: SceneRuntime, object: SceneObject) => {
-  if (!object.firstPerson?.enabled) return
-  exitFirstPerson()
-  firstPersonRuntime = runtime
-  firstPersonObject.value = object
-  firstPersonPreviousCamera = runtime.getCamera()
-  firstPersonActive.value = true
-  runtime.setFirstPersonInputEnabled?.(true)
-  runtime.setFirstPersonPerformanceMode?.(true)
-  firstPersonController = new FirstPersonPreviewController({
-    config: object.firstPerson,
-    transform: object.transform,
-    isCollisionAvailable: () => runtime.isFirstPersonCollisionAvailable?.() ?? false,
-    canMove: (position, movement) =>
-      runtime.canMoveFirstPerson?.({
-        position,
-        height: object.firstPerson!.height,
-        radius: object.firstPerson!.collisionRadius,
-        objectId: object.id,
-        movement,
-      }) ?? false,
-    onBlocked: (reason) => {
-      firstPersonCollisionMessage.value =
-        reason === 'unavailable' ? '碰撞查询不可用，移动已暂停' : '已碰到障碍物'
-    },
-    onUnblocked: () => { firstPersonCollisionMessage.value = '' },
-    onChange: applyFirstPersonPose,
-  })
-  firstPersonController.reset()
-  firstPersonLastFrameTime = performance.now()
-  firstPersonFrame = requestAnimationFrame(tickFirstPerson)
-}
-const toggleFirstPerson = () => {
-  if (firstPersonActive.value) exitFirstPerson()
-  else if (firstPersonRuntime && firstPersonObject.value) enterFirstPerson(firstPersonRuntime, firstPersonObject.value)
-}
+const firstPerson = useFirstPersonPreview()
+const {
+  object: firstPersonObject, active: firstPersonActive, pending: firstPersonPending,
+  message: firstPersonMessage, toggle: toggleFirstPerson,
+} = firstPerson
 let stopPreviewGisObjectInteraction: (() => void) | null = null
 let previewTicketRefresher: ScenePreviewTicketRefresher | null = null
-/** 公开加密预览续期需要密码；只保留在当前页面内存，卸载时立即清除。 */
+/** 加密预览续期凭据只保留在当前页面内存，卸载时立即清除。 */
 let previewTicketRefreshPassword = ''
 
 type PreviewAccessState =
@@ -494,9 +371,7 @@ const mountSceneDefinitionPreview = async (
   }
 
   previewRuntimeType.value = result.runtimeType
-  firstPersonRuntime = result.runtime
-  // 内存宿主不具备第一人称渲染能力，不能因为保存包存在相机就开放三维输入循环。
-  firstPersonObject.value = null
+  firstPerson.configure(result.runtime, result.scene?.objects ?? [])
   const mediaServerId = result.scene?.settings.mediaServerId
   previewMediaServerId.value = typeof mediaServerId === 'string' ? mediaServerId : ''
   const renderSceneApi = result.renderSceneApi as renderScene | null
@@ -521,8 +396,9 @@ const mountSceneDefinitionPreview = async (
   /**
    * 预览页只通过只读端口进入二维预览态，不写入编辑态 Store。
    */
+  if (firstPersonObject.value) await firstPerson.setActive(true)
+  if (previewClosed || previewRuntimeController !== controller) return false
   enterPreviewAndExecuteWidgetStatus()
-  // 二维预览不自动开启已保存相机的三维输入循环。
 
   previewTicketRefresher?.stop()
   previewTicketRefresher = session ? createScenePreviewTicketRefresher(session, {
@@ -625,9 +501,7 @@ const openPreview = async (password?: string) => {
 
   /** 每次重新建立预览会话前丢弃旧密码，只有本次成功校验后才交给续期闭包。 */
   previewTicketRefreshPassword = ''
-  exitFirstPerson()
-  firstPersonObject.value = null
-  firstPersonRuntime = null
+  firstPerson.reset()
   previewRuntimeController?.dispose()
   previewTicketRefresher?.stop()
   previewTicketRefresher = null
@@ -738,12 +612,6 @@ const submitPreviewPassword = async () => {
 onMounted(async () => {
   window.addEventListener('pagehide', clearPreviewAuthOnExit)
   window.addEventListener('beforeunload', clearPreviewAuthOnExit)
-  window.addEventListener('keydown', handleFirstPersonKeyDown)
-  window.addEventListener('keyup', handleFirstPersonKeyUp)
-  window.addEventListener('blur', releaseFirstPersonInput)
-  window.addEventListener('pointerdown', handleFirstPersonPointerDown)
-  window.addEventListener('pointermove', handleFirstPersonPointerMove)
-  window.addEventListener('pointerup', handleFirstPersonPointerUp)
   loadingInfo.loading = true
   resizeObserver = new ResizeObserver(updateStageLayout)
   if (viewportRef.value) {
@@ -765,13 +633,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   previewClosed = true
-  exitFirstPerson()
-  window.removeEventListener('keydown', handleFirstPersonKeyDown)
-  window.removeEventListener('keyup', handleFirstPersonKeyUp)
-  window.removeEventListener('blur', releaseFirstPersonInput)
-  window.removeEventListener('pointerdown', handleFirstPersonPointerDown)
-  window.removeEventListener('pointermove', handleFirstPersonPointerMove)
-  window.removeEventListener('pointerup', handleFirstPersonPointerUp)
   window.removeEventListener('pagehide', clearPreviewAuthOnExit)
   window.removeEventListener('beforeunload', clearPreviewAuthOnExit)
   resizeObserver?.disconnect()

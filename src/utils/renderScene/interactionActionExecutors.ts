@@ -18,6 +18,7 @@ import { createParameterSourceReader } from '@/utils/dataConfig/interactionParam
 import { getRecordPaginationSelection } from '@/utils/dataConfig/recordPaginationSelection'
 import { findSceneObjectByTargetId } from './sceneObjectTargetResolver'
 import { getWidgetRuntimePort } from '@/integrations/scene/widgetRuntime/ports'
+import { SCENE_FIRST_PERSON_TOGGLE_EVENT } from '@/integrations/scene/sceneFirstPersonAction'
 import {
   runInteractionSequence,
   createInteractionLifecycleGuard,
@@ -61,6 +62,10 @@ const executePreparedInteractionAction = (action: ActionItem, context: Interacti
       return executeSceneObjectCameraMove(action, context)
     case ACTION_TYPE_ENUM.SwitchView:
       return executeSceneCameraViewSwitch(action, context)
+    case ACTION_TYPE_ENUM.ToggleFirstPerson:
+      // 当前预览宿主统一管理起点、占用状态和原镜头恢复。
+      if (context.sceneRuntime?.capabilities.editing.firstPerson) window.dispatchEvent(new Event(SCENE_FIRST_PERSON_TOGGLE_EVENT))
+      return
     case ACTION_TYPE_ENUM.PassParameters:
       return executeRequestParameterAction(action, context)
     case ACTION_TYPE_ENUM.ModelVisibilityWithValue:

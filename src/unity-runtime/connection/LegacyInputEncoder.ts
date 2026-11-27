@@ -69,7 +69,12 @@ export class LegacyInputEncoder {
     const top = rect.top + (rect.height - height * scale) / 2
     const x = (event.clientX - left) / scale
     const y = height - (event.clientY - top) / scale
-    if (x < 0 || x > width || y < 0 || y > height) return null
+    if (x < 0 || x > width || y < 0 || y > height) {
+      // 拖动后在画面外松开时保留最后一个有效坐标，只同步按键状态，避免播放器一直认为左键被按住。
+      if (event.type !== 'mouseup' || this.buttons === event.buttons) return null
+      this.buttons = event.buttons
+      return this.mouseState(this.lastPosition.x, this.lastPosition.y, 0, 0, 0, 0, this.buttons)
+    }
     this.lastPosition = { x, y }
     this.buttons = event.buttons
     // Unity's native mouse uses positive, normalized steps for scrolling up.

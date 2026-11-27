@@ -34,6 +34,8 @@ export interface RuntimeCapabilities {
     annotation: boolean
     /** 是否显示测量工具入口；测距、测角等细分能力由工具实现继续判断。 */
     measure: boolean
+    /** 播放器支持创建第一人称起点，并在预览中接管角色与镜头。 */
+    firstPerson?: boolean
   }
   assets: {
     glb: boolean

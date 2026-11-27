@@ -1,5 +1,6 @@
 import { getRuntimeEnviroWeatherConfig } from '@/integrations/scene/editorSceneWeatherAdapter'
 import { getEditorGisBaseLayer, getEditorGisImageryCameraTarget } from '@/integrations/scene/editorSceneGisAdapter'
+import { findFirstPersonStart } from '@/integrations/scene/sceneFirstPersonAction'
 import type { FrameTarget, PickWorldPoint, SceneDefinition, SceneLayer, SceneObject, SceneSettings, ScreenPoint, ViewportHost } from '@/scene-platform'
 import { createUpdateObjectTransformCommand } from '@/scene-platform'
 import { BaseSceneRuntime } from '@/scene-platform/runtime/baseSceneRuntime'
@@ -24,7 +25,7 @@ import type {
   ObjectInteractionMoveCameraOptions,
   ObjectInteractionSwitchViewOptions,
 } from '@/scene-platform/runtime/sceneRuntime'
-import type { UnityCameraConfig, UnityInteractionActionDto, UnitySessionInitializePayload } from '../protocol/types'
+import type { UnityCameraConfig, UnityFirstPersonAction, UnityInteractionActionDto, UnitySessionInitializePayload } from '../protocol/types'
 import { getUnityCameraConfig } from './editorCameraConfig'
 import type { VegetationSystemDefinition } from '@/scene-platform/core/types'
 import { checkVegetationTilesForUnity } from './vegetationTilesPreflight'
@@ -146,6 +147,24 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
 
   get cameraAvailable(): boolean { return this.unity?.capabilities?.features['camera.control'] === true }
   get vegetationAvailable(): boolean { return this.unity?.capabilities?.features['vegetation.instanced'] === true }
+
+  /** 等待本场景和预览切换就绪，再将键鼠焦点交给真实播放器。 */
+  async controlFirstPerson(action: UnityFirstPersonAction): Promise<void> {
+    const unity = this.unity
+    const epoch = this.sceneEpoch
+    const isCurrent = () => unity === this.unity && epoch === this.sceneEpoch && !this.disposed
+    await this.operations
+    await this.modeOperation
+    if (!unity || !this.scene || !isCurrent()) throw new Error('第一人称所在场景已切换')
+    if (action.action === 'enter' && this.remoteMode !== 'preview') throw new Error('请在场景预览就绪后进入第一人称')
+    if (this.transport instanceof LegacyUnityTransport) this.transport.sendReleaseInput()
+    await unity.controlFirstPerson(action)
+    if (!isCurrent()) throw new Error('第一人称所在场景已切换')
+    if (action.action === 'enter' && this.remoteMode === 'preview') {
+      const surface = this.video ?? this.renderContainer?.querySelector('canvas')
+      surface?.focus({ preventScroll: true })
+    }
+  }
 
   async controlVegetation(payload: Record<string, unknown>) {
     await this.operations
@@ -282,6 +301,14 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
         })
       }
       video.addEventListener('blur', () => (this.transport as LegacyUnityTransport | null)?.sendReleaseInput())
+      // 鼠标在视频内按下后可以移出视频再释放，沿用现有输入通道提交最终按钮状态。
+      const onReleaseOutsideVideo = (event: MouseEvent) => {
+        if (document.activeElement === video && !video.contains(event.target as Node)) {
+          (this.transport as LegacyUnityTransport | null)?.sendPointerInput(event, video.getBoundingClientRect())
+        }
+      }
+      window.addEventListener('mouseup', onReleaseOutsideVideo, true)
+      this.unsubscribe.push(() => window.removeEventListener('mouseup', onReleaseOutsideVideo, true))
       container.append(video)
       this.video = video
       const transport = new LegacyUnityTransport(this.options.cloudConfig, video)
@@ -306,12 +333,15 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     const unity = new JsonRpcUnityCloudRuntime(this.transport, this.options.publicationResources)
     this.unity = unity
     await unity.connect()
+    // 发布凭证在握手阶段直接启用只读预览，装载前没有草稿可发送模式命令。
+    this.remoteMode = this.options.publicationResources ? 'preview' : 'edit'
     if (!unity.capabilities?.sceneTypes.includes(this.type)) throw new Error(`当前 Unity 播放器不支持 ${this.type === 'gis' ? 'GIS' : '普通三维'} 场景，请更新对应端的播放器`)
     this.capabilities.rendering.imagery = this.type === 'gis' && unity.capabilities.features['gis.imagery'] === true
     this.capabilities.rendering.terrain = this.type === 'gis' && unity.capabilities.features['gis.terrain'] === true
     this.capabilities.rendering.tileset = this.type === 'gis' && unity.capabilities.features['gis.tileset'] === true
     // 资源面板根据真实协商结果开放模型入口；这里表示可加载已发布模型，不表示按网页地址直接导入文件。
     this.capabilities.assets.glb = unity.capabilities.objectTypes.includes('model') && unity.capabilities.features['scene.loadDraft'] !== false
+    this.capabilities.editing.firstPerson = unity.capabilities.objectTypes.includes('camera') && unity.capabilities.features['firstPerson.control'] === true
     this.capabilities.effects.weather = unity.capabilities.features['weather.enviro3'] === true
     this.capabilities.effects.weatherRuntime = this.capabilities.effects.weather
     this.capabilities.effects.atmosphere = this.capabilities.effects.weather
@@ -366,7 +396,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     }
     this.reportDeferredObjects()
     this.options.onStatus('Unity 场景已就绪')
-    const autoPlayPath = openingScene && scene.type === 'gis' && scene.cameraPaths?.find(path => path.enabled && path.autoPlay)
+    const hasFirstPersonPreview = !this.editingEnabled && this.capabilities.editing.firstPerson && findFirstPersonStart(scene.objects)
+    const autoPlayPath = openingScene && !hasFirstPersonPreview && scene.type === 'gis' && scene.cameraPaths?.find(path => path.enabled && path.autoPlay)
     if (autoPlayPath && this.cameraAvailable) {
       void this.controlCamera({ action: 'play', path: autoPlayPath }).catch(error => {
         if (epoch === this.sceneEpoch) this.options.onStatus(error instanceof Error ? error.message : '自动播放相机路径失败')
@@ -416,7 +447,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     if (!this.unity) throw new Error('Unity 运行时尚未连接')
     if (!this.scene) throw new Error('Unity 场景尚未加载')
     const previous = this.projectedInstanceIds
-    const projected = projectSceneForUnityLoadedInstances(this.scene, loadedInstanceIds)
+    const projected = projectSceneForUnityLoadedInstances(this.scene, loadedInstanceIds, this.capabilities.editing.firstPerson === true)
     // 将父级链纳入驻留集合，避免父节点虽被投影却被交互层误判为未加载。
     const next = new Set(projected.objects.map((object) => object.instanceId))
     const operation = this.operations.then(async () => {
@@ -501,7 +532,7 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     super.setEditingEnabled(enabled)
     const nextMode = enabled ? 'edit' : 'preview'
     const unity = this.unity
-    if (!unity || !this.scene || this.remoteMode === nextMode) return Promise.resolve()
+    if (!unity || !this.scene) return Promise.resolve()
 
     const operation = this.modeOperation.then(async () => {
       if (this.unity !== unity || this.remoteMode === nextMode) return
@@ -660,7 +691,8 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   }
   private reportDeferredObjects(): void {
     if (!this.scene) return
-    const warnings = getUnityDeferredRenderWarnings({ ...this.scene, effects: [...this.effectMap.values()] }, this.capabilities.effects.weather)
+    const warnings = getUnityDeferredRenderWarnings({ ...this.scene, effects: [...this.effectMap.values()] },
+      this.capabilities.effects.weather, this.capabilities.editing.firstPerson === true)
     if (this.scene.vegetation?.enabled && !this.vegetationAvailable)
       warnings.push('当前播放器需要更新后才能显示植被，种植配置已保存在场景中。')
     if (this.type === 'gis' && (this.scene.settings.three as Record<string, unknown> | undefined)?.gis &&
@@ -674,8 +706,9 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
   }
 
   private isDeferredInUnity(object: SceneObject): boolean {
-    return (this.projectedInstanceIds !== null && !this.projectedInstanceIds.has(object.id)) ||
-      this.deferredDescendants.has(object.id) || isUnityDeferredObject(object) ||
+    const staysResident = this.capabilities.editing.firstPerson && object.type === 'camera' && object.firstPerson
+    return (this.projectedInstanceIds !== null && !this.projectedInstanceIds.has(object.id) && !staysResident) ||
+      this.deferredDescendants.has(object.id) || isUnityDeferredObject(object, this.capabilities.editing.firstPerson === true) ||
       (object.type === 'model' && this.missingModelAssetIds.has(getUnityModelAssetId(object)))
   }
 
@@ -691,9 +724,10 @@ export class UnityEditorSceneRuntime extends BaseSceneRuntime {
     const current = storeScene?.id === scene.id ? storeScene : scene
     const projectionScene = useCurrentEffects && scene.id === this.scene?.id
       ? { ...scene, effects, settings: current.settings } : scene
+    const supportsFirstPerson = this.capabilities.editing.firstPerson === true
     const draft = this.projectedInstanceIds === null
-      ? projectSceneForUnity(projectionScene)
-      : projectSceneForUnityLoadedInstances(projectionScene, this.projectedInstanceIds)
+      ? projectSceneForUnity(projectionScene, supportsFirstPerson)
+      : projectSceneForUnityLoadedInstances(projectionScene, this.projectedInstanceIds, supportsFirstPerson)
     const camera = this.withDefaultCameraAntialiasing(draft.camera ?? {})
     const childrenByParent = new Map<string, string[]>()
     for (const object of draft.objects) {

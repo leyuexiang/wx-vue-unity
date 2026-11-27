@@ -58,8 +58,11 @@ export async function createEditorUnityObject(
   },
 ): Promise<string | null> {
   if (!context.isActive()) return null
+  if (model.modelType === DRAG_MODEL_ENUM.FirstPerson && !context.host.getRuntime().capabilities.editing.firstPerson) {
+    throw new Error('当前播放器需要更新后才能添加第一人称')
+  }
   if (model.modelType !== DRAG_MODEL_ENUM.Model && model.modelType !== DRAG_MODEL_ENUM.CustomModel
-    && model.modelType !== DRAG_MODEL_ENUM.Geometry) {
+    && model.modelType !== DRAG_MODEL_ENUM.Geometry && model.modelType !== DRAG_MODEL_ENUM.FirstPerson) {
     throw new Error('当前渲染暂不支持拖入此类三维资源')
   }
   const { host } = context

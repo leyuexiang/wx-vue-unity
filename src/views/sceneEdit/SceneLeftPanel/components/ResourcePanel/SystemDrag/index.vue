@@ -21,8 +21,9 @@
           >
             <div class="scene-edit-resource-grid">
               <div
-                draggable="true"
-                @dragstart="() => onDragStart(base)"
+                :draggable="!isDragDisabled(base)"
+                :aria-disabled="isDragDisabled(base) || undefined"
+                @dragstart="onDragStart($event, base)"
                 v-for="base in item.children"
                 @dragend="onDragEnd"
                 :key="getDragItemKey(base)"
@@ -38,6 +39,9 @@
                 <span class="scene-edit-resource-card__name">{{ base.name }}</span>
               </div>
             </div>
+            <p v-if="item.key === 'camera' && firstPersonDisabledReason" class="first-person-disabled-hint">
+              {{ firstPersonDisabledReason }}
+            </p>
           </el-collapse-item>
         </el-collapse>
       </div>
@@ -52,14 +56,15 @@ import { systemDataList } from '@/config/leftDragDataList'
 import { filterDataList } from '@/utils/utils'
 import type { GeometryModel, FileModel, EffectDragItem } from '@/types/threeScene'
 import type { LightDragItem, FirstPersonDragItem } from '@/integrations/scene/editorCreationRouter'
-import { ref, getCurrentInstance, onBeforeUnmount, onMounted } from 'vue'
+import { computed, ref, getCurrentInstance, onBeforeUnmount, onMounted } from 'vue'
 import { throttle } from 'lodash-es'
-import { MITT_ON_KEY_ENUM } from '@/enums/index'
+import { DRAG_MODEL_ENUM, MITT_ON_KEY_ENUM } from '@/enums/index'
 import type { RuntimeCapabilities } from '@/scene-platform'
 import { subscribeActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
 import {
   filterEditorSceneDragGroupsByRuntimeCapabilities,
   getEditorSceneRuntimeCapabilities,
+  getFirstPersonDragDisabledReason,
 } from '@/integrations/scene/editorSceneToolCapabilityAdapter'
 import { loadDim3dModelGroups, mergeModelResourceGroups } from '../modelResource'
 
@@ -71,6 +76,9 @@ type SystemDragGroup = { name: string; key: string; children: SystemDragItem[] }
 
 const searchValue = ref('')
 const runtimeCapabilities = ref<RuntimeCapabilities | null>(null)
+const firstPersonDisabledReason = computed(() => getFirstPersonDragDisabledReason(runtimeCapabilities.value))
+const isDragDisabled = (item: SystemDragItem) =>
+  item.modelType === DRAG_MODEL_ENUM.FirstPerson && Boolean(firstPersonDisabledReason.value)
 const collapseList = ref<SystemDragGroup[]>([])
 const dim3dModelGroups = ref<Awaited<ReturnType<typeof loadDim3dModelGroups>>>([])
 // 默认展开所有当前可用折叠项。
@@ -113,8 +121,12 @@ const handleSearch = throttle(() => {
   syncCollapseList()
 }, 500)
 
-// 拖拽开始
-const onDragStart = (item: SystemDragItem) => {
+// 播放器未就绪或不支持时保留资源卡和说明，同时拦截可能已开始的拖拽事件。
+const onDragStart = (event: DragEvent, item: SystemDragItem) => {
+  if (isDragDisabled(item)) {
+    event.preventDefault()
+    return
+  }
   $eventBus?.emit(MITT_ON_KEY_ENUM.MODEL_DRAG_START, item)
 }
 
@@ -142,3 +154,17 @@ onBeforeUnmount(() => {
   handleSearch.cancel()
 })
 </script>
+
+<style scoped lang="scss">
+.scene-edit-resource-card[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.first-person-disabled-hint {
+  margin: 0 8px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgb(255 255 255 / 70%);
+}
+</style>

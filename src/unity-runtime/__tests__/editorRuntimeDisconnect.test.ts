@@ -29,7 +29,8 @@ vi.mock('../runtime/JsonRpcUnityCloudRuntime', () => ({ JsonRpcUnityCloudRuntime
 describe('编辑运行时断开通知', () => {
   beforeEach(() => {
     source.listeners.clear()
-    vi.stubGlobal('window', globalThis)
+    // 云画面拖动会注册窗口级释放监听，测试窗口提供同样的事件接口。
+    vi.stubGlobal('window', { setTimeout, clearTimeout, addEventListener: vi.fn(), removeEventListener: vi.fn() })
     vi.stubGlobal('document', { createElement: () => ({ style: {}, addEventListener: vi.fn(), remove: vi.fn() }) })
   })
   afterEach(() => vi.unstubAllGlobals())
@@ -49,6 +50,7 @@ describe('编辑运行时断开通知', () => {
     emit({ state: 'failed', message: '渲染机进程已关闭' })
     expect(onDisconnected).toHaveBeenCalledExactlyOnceWith('渲染机进程已关闭')
     runtime.dispose()
+    expect(window.removeEventListener).toHaveBeenCalledWith('mouseup', expect.any(Function), true)
     emit({ state: 'failed' })
     expect(onDisconnected).toHaveBeenCalledOnce()
     expect(source.listeners.size).toBe(0)

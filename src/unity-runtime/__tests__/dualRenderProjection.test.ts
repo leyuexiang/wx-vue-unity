@@ -38,7 +38,7 @@ describe('dual Unity render contract', () => {
     expect(saved.cameraPaths).toEqual(scene.cameraPaths)
   })
 
-  it.each(['gis', 'local3d'] as const)('loads a mixed %s scene without losing deferred cameras or other objects from save packages', (type) => {
+  it.each(['gis', 'local3d'] as const)('按播放器能力投影 %s 第一人称并保留原始存档', (type) => {
     const scene = createSceneDefinition({ id: 'mixed', name: 'Mixed', type,
       coordinateSystem: type === 'gis' ? { kind: 'wgs84', defaultLongitude: 110, defaultLatitude: 19, defaultHeight: 0, terrainEnabled: false }
         : { kind: 'local', unit: 'meter', upAxis: 'Y', gridEnabled: true } })
@@ -52,11 +52,15 @@ describe('dual Unity render contract', () => {
     }))
     const saved = serializeSceneDefinitionToFourPackages(scene)
     const draft = projectSceneForUnity(scene)
-    expect(draft.objects.map((object) => object.instanceId)).toEqual(['group', 'primitive'])
+    expect(draft.objects.map((object) => object.instanceId)).toEqual(['camera', 'group', 'primitive'])
+    expect(draft.objects[0]?.properties.firstPerson).toEqual(scene.objects[0]?.firstPerson)
+    expect(projectSceneForUnity(scene, false).objects.map(object => object.instanceId)).toEqual(['group', 'primitive'])
+    expect(projectSceneForUnityLoadedInstances(scene, new Set()).objects.map(object => object.instanceId)).toEqual(['camera'])
     expect(serializeSceneDefinitionToFourPackages(scene)).toEqual(saved)
     const savedCamera = JSON.parse(saved.threeDJson).components.find((object: { instanceId: string }) => object.instanceId === 'camera')
     expect(savedCamera.contentJson.firstPerson).toMatchObject({ enabled: true, fov: 60 })
-    const warnings = getUnityDeferredRenderWarnings(scene).join()
+    const warnings = getUnityDeferredRenderWarnings(scene, false, false).join()
+    expect(getUnityDeferredRenderWarnings(scene).join()).not.toContain('（camera）')
     for (const objectType of ['camera', 'effect', 'image', 'tileset', 'light', 'annotation']) expect(warnings).toContain(`（${objectType}）`)
   })
   it('loads GIS content with saved effects and reports the deferred effects without altering saved data', () => {

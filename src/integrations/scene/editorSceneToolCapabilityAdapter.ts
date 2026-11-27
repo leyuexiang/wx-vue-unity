@@ -42,6 +42,17 @@ export const canUseEditorSceneAnnotation = (
   capabilities: RuntimeCapabilities | null | undefined,
 ): boolean => capabilities?.editing.annotation === true
 
+/** 第一人称资源始终可见，只有声明支持的播放器才能接收拖入操作。 */
+export const getFirstPersonDragDisabledReason = (
+  capabilities: RuntimeCapabilities | null | undefined,
+): string | undefined => {
+  const supported = capabilities?.editing.firstPerson
+  if (supported === true) return undefined
+  return supported === false
+    ? '当前播放器不支持第一人称，请更新播放器后重试。'
+    : '连接支持第一人称的三维播放器后可拖入。'
+}
+
 /**
  * 过滤顶部测量按钮列表。
  *

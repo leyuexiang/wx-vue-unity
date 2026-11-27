@@ -122,6 +122,7 @@ export type UnityEditorMethod =
   | 'editor.v1.model.preview'
   | 'editor.v1.vegetation.control'
   | 'editor.v1.camera.control'
+  | 'editor.v1.firstPerson.control'
   | 'editor.v1.weather.describe'
   | 'editor.v1.weather.apply'
   | 'editor.v1.weather.getState'
@@ -146,6 +147,9 @@ export type UnityModelPreviewAction =
   | { action: 'background'; background: string }
   | { action: 'reset' }
   | { action: 'clear' }
+
+/** 只在进入和退出时发送命令，按键与鼠标继续使用播放器已有输入通道。 */
+export type UnityFirstPersonAction = { action: 'enter'; instanceId: string } | { action: 'exit' }
 
 /** 只传递可序列化动作参数；Unity 运行时根据稳定实例编号解析草稿对象。 */
 export type UnityInteractionActionDto =

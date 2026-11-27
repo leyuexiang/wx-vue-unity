@@ -22,7 +22,7 @@
       @after-import="sceneCanvasRef?.restartSceneDataPolling()"
       @scene-imported="sceneOperationRef?.markSceneDirty()"
       @save-template="openSaveAsTemplateDialog"
-      @preview="handlePreviewScene"
+      @preview="handlePreviewScene()"
       @save="handleSaveSceneConfig"
       @publish="releaseScene"
       @back="handleBackToPreviousPage"
@@ -111,15 +111,16 @@
     <div class="scene-edit-preview-actions">
       <div class="flex">
         <el-button
-          v-if="previewFirstPersonObject?.firstPerson?.enabled"
+          v-if="previewFirstPersonObject"
           size="small"
           type="primary"
+          :disabled="previewFirstPersonPending"
           @click="toggleEditorFirstPersonPreview"
         >{{ previewFirstPersonActive ? '退出第一人称' : '进入第一人称' }}</el-button>
         <span
-          v-if="previewFirstPersonCollisionMessage"
+          v-if="previewFirstPersonMessage || previewFirstPersonActive"
           class="scene-edit-preview-collision-message"
-        >{{ previewFirstPersonCollisionMessage }}</span>
+        >{{ previewFirstPersonMessage || 'W、A、S、D 移动，按住 Shift 跑步，空格跳跃，左键拖动转向，Esc 退出' }}</span>
         <el-button
           icon="CloseBold"
           aria-label="关闭预览"
@@ -177,13 +178,8 @@ import { getWidgetOverlayHostPort } from '@/integrations/scene/widgetRuntime'
 import { getActiveSceneViewportHost } from '@/integrations/scene/editorScenePlatformHost'
 import { captureEditorSceneDraftPackages } from '@/integrations/scene/editorSceneSaveAdapter'
 import { readWidgetSceneFragment } from '@/integrations/scene/widgetRuntime/widgetSceneFragment'
-import {
-  FirstPersonPreviewController,
-  type FirstPersonPreviewPose,
-  type SceneCameraState,
-  type SceneObject,
-  type SceneRuntime,
-} from '@/scene-platform'
+import { SCENE_FIRST_PERSON_PREVIEW_EVENT } from '@/integrations/scene/sceneFirstPersonAction'
+import { useFirstPersonPreview } from '@/integrations/scene/useFirstPersonPreview'
 import {
   readSceneRequestFailure,
   type EditorDim3dSceneSaveBookmark,
@@ -228,131 +224,16 @@ const sceneCanvasRef = ref<InstanceType<typeof SceneCanvas>>()
 const { $eventBus } = getCurrentInstance()?.proxy || {}
 
 const isPreviewScene = ref(false)
-const previewFirstPersonObject = ref<SceneObject | null>(null)
-const previewFirstPersonActive = ref(false)
-const previewFirstPersonCollisionMessage = ref('')
-let previewFirstPersonRuntime: SceneRuntime | null = null
-let previewFirstPersonController: FirstPersonPreviewController | null = null
-let previewPreviousCamera: SceneCameraState | null = null
+const firstPerson = useFirstPersonPreview()
+const {
+  object: previewFirstPersonObject, active: previewFirstPersonActive,
+  pending: previewFirstPersonPending, message: previewFirstPersonMessage,
+  toggle: toggleEditorFirstPersonPreview,
+} = firstPerson
 let previewPathRuntime: UnityEditorSceneRuntime | null = null
-let previewFirstPersonFrame: number | null = null
-let previewFirstPersonLastFrameTime = 0
 let editorPreviewGeneration = 0
+let requestedFirstPersonId: string | undefined
 
-const applyEditorFirstPersonPose = (pose: FirstPersonPreviewPose) => {
-  const runtime = previewFirstPersonRuntime
-  const object = previewFirstPersonObject.value
-  if (!runtime || !object?.firstPerson || !previewFirstPersonActive.value) return
-  if (runtime.setFirstPersonPose) {
-    runtime.setFirstPersonPose({
-      position: pose.position,
-      heading: pose.heading,
-      pitch: pose.pitch,
-      eyeHeight: object.firstPerson.eyeHeight,
-      fov: object.firstPerson.fov,
-    })
-    return
-  }
-  const camera = runtime.getCamera()
-  const { eyeHeight, fov } = object.firstPerson
-  if (camera.kind === 'three' && object.transform.kind === 'local') {
-    const eye: [number, number, number] = [pose.position[0], pose.position[1] + eyeHeight, pose.position[2]]
-    void runtime.setCamera({
-      ...camera, position: eye,
-      target: [eye[0] + Math.sin(pose.heading), eye[1] + Math.sin(pose.pitch), eye[2] - Math.cos(pose.heading)],
-      fov,
-    })
-  } else if (camera.kind === 'cesium' && object.transform.kind === 'geo') {
-    runtime.setFirstPersonFov?.(fov)
-    void runtime.setCamera({
-      ...camera,
-      destination: [pose.position[0], pose.position[1], pose.position[2] + eyeHeight],
-      orientation: { heading: pose.heading, pitch: pose.pitch, roll: 0 },
-    })
-  }
-}
-
-const releaseEditorFirstPersonInput = () => {
-  previewFirstPersonController?.pointerUp()
-  for (const key of ['w', 'a', 's', 'd']) previewFirstPersonController?.keyUp(key)
-}
-const handleEditorFirstPersonKeyDown = (event: KeyboardEvent) => {
-  if (!previewFirstPersonActive.value || event.ctrlKey || event.metaKey || event.altKey) return
-  if (!['w', 'a', 's', 'd'].includes(event.key.toLowerCase())) return
-  const target = event.target
-  if (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
-  ) {
-    return
-  }
-  event.preventDefault()
-  previewFirstPersonController?.keyDown(event.key)
-}
-const handleEditorFirstPersonKeyUp = (event: KeyboardEvent) => previewFirstPersonController?.keyUp(event.key)
-const handleEditorFirstPersonPointerDown = (event: PointerEvent) => {
-  if (!previewFirstPersonActive.value || event.button !== 0) return
-  if (!(event.target instanceof HTMLCanvasElement) || !event.target.closest('#preview #scene-render')) return
-  event.preventDefault()
-  previewFirstPersonController?.pointerDown(event.clientX, event.clientY)
-}
-const handleEditorFirstPersonPointerMove = (event: PointerEvent) => {
-  previewFirstPersonController?.pointerMove(event.clientX, event.clientY)
-}
-const handleEditorFirstPersonPointerUp = () => previewFirstPersonController?.pointerUp()
-const tickEditorFirstPersonPreview = (time: number) => {
-  if (!previewFirstPersonController) { previewFirstPersonFrame = null; return }
-  previewFirstPersonController.step((time - previewFirstPersonLastFrameTime) / 1000)
-  previewFirstPersonLastFrameTime = time
-  previewFirstPersonFrame = requestAnimationFrame(tickEditorFirstPersonPreview)
-}
-const stopEditorFirstPersonPreview = () => {
-  if (previewFirstPersonFrame !== null) cancelAnimationFrame(previewFirstPersonFrame)
-  previewFirstPersonFrame = null
-  releaseEditorFirstPersonInput()
-  previewFirstPersonController?.dispose()
-  previewFirstPersonController = null
-  previewFirstPersonRuntime?.setFirstPersonInputEnabled?.(false)
-  previewFirstPersonRuntime?.setFirstPersonPerformanceMode?.(false)
-  if (previewPreviousCamera && previewFirstPersonRuntime) {
-    void previewFirstPersonRuntime.setCamera(previewPreviousCamera)
-  }
-  previewPreviousCamera = null
-  previewFirstPersonActive.value = false
-  previewFirstPersonCollisionMessage.value = ''
-}
-const startEditorFirstPersonPreview = () => {
-  const object = previewFirstPersonObject.value
-  const runtime = previewFirstPersonRuntime
-  if (!object?.firstPerson?.enabled || !runtime) return
-  stopEditorFirstPersonPreview()
-  previewPreviousCamera = runtime.getCamera()
-  previewFirstPersonActive.value = true
-  runtime.setFirstPersonInputEnabled?.(true)
-  runtime.setFirstPersonPerformanceMode?.(true)
-  previewFirstPersonController = new FirstPersonPreviewController({
-    config: object.firstPerson,
-    transform: object.transform,
-    isCollisionAvailable: () => runtime.isFirstPersonCollisionAvailable?.() ?? false,
-    canMove: (position, movement) => runtime.canMoveFirstPerson?.({
-      position, height: object.firstPerson!.height,
-      radius: object.firstPerson!.collisionRadius, objectId: object.id, movement,
-    }) ?? false,
-    onBlocked: (reason) => {
-      previewFirstPersonCollisionMessage.value =
-        reason === 'unavailable' ? '碰撞查询不可用，移动已暂停' : '已碰到障碍物'
-    },
-    onUnblocked: () => { previewFirstPersonCollisionMessage.value = '' },
-    onChange: applyEditorFirstPersonPose,
-  })
-  previewFirstPersonController.reset()
-  previewFirstPersonLastFrameTime = performance.now()
-  previewFirstPersonFrame = requestAnimationFrame(tickEditorFirstPersonPreview)
-}
-const toggleEditorFirstPersonPreview = () => {
-  if (previewFirstPersonActive.value) stopEditorFirstPersonPreview()
-  else startEditorFirstPersonPreview()
-}
 const teleportTo = ref('#scene')
 const activeLeftPanel = ref(LEFT_SCENE_PANEL_ENUM.Resource)
 const activeInspectorPanel = ref(RIGHT_SCENE_PANEL_ENUM.Base)
@@ -857,13 +738,6 @@ const isPublish = computed(() => {
 })
 // 监听预览场景
 onMounted(async () => {
-  window.addEventListener('keydown', handleEditorFirstPersonKeyDown)
-  window.addEventListener('keyup', handleEditorFirstPersonKeyUp)
-  window.addEventListener('blur', releaseEditorFirstPersonInput)
-  window.addEventListener('pointerdown', handleEditorFirstPersonPointerDown)
-  window.addEventListener('pointermove', handleEditorFirstPersonPointerMove)
-  window.addEventListener('pointerup', handleEditorFirstPersonPointerUp)
-  window.addEventListener('pointercancel', handleEditorFirstPersonPointerUp)
   document.body.classList.add('scene-edit-route-open')
   if (ENABLE_SCENE_LOCK) {
     window.addEventListener('beforeunload', releaseSceneLockBeforeUnload)
@@ -914,22 +788,31 @@ onMounted(async () => {
   })
 
   $eventBus?.on(MITT_ON_KEY_ENUM.PREVIEW_SCENE, (value) => {
-    if (!value) return
+    if (!value || isPreviewScene.value) return
     const generation = ++editorPreviewGeneration
-    stopEditorFirstPersonPreview()
     const host = getActiveSceneViewportHost()
-    previewFirstPersonRuntime = host?.getRuntime() ?? null
-    previewFirstPersonObject.value = null // 二维阶段不开放三维第一人称预览
+    const runtime = host?.getRuntime() ?? null
+    const sceneStore = host?.getStore()
+    firstPerson.configure(runtime, sceneStore?.getObjects() ?? [], requestedFirstPersonId ?? sceneStore?.getSelectedObjectId() ?? undefined)
+    requestedFirstPersonId = undefined
     isPreviewScene.value = value
     teleportTo.value = '#preview'
     /**
      * 预览切换只通过二维叠加宿主端口协调。
      * 当前端口仍包旧 sceneApi，后续替换三维运行时时编辑页不需要跟着改。
      */
-    void Promise.resolve().then(() => {
+    void Promise.resolve().then(async () => {
       if (generation !== editorPreviewGeneration || !isPreviewScene.value) return
-      const entering = getWidgetOverlayHostPort().enterPreview()
-      const runtime = host?.getRuntime()
+      // 起点刚改完就打开预览时，先等已有编辑命令投影到播放器。
+      if (previewFirstPersonObject.value) await host?.getBridge().flush()
+      if (generation !== editorPreviewGeneration || !isPreviewScene.value) return
+      await getWidgetOverlayHostPort().enterPreview()
+      if (generation !== editorPreviewGeneration || !isPreviewScene.value) return
+      // 有漫游起点时先进入第一人称，避免自动相机路径同时占用主相机。
+      if (previewFirstPersonObject.value) {
+        await firstPerson.setActive(true)
+        return
+      }
       const path = host?.getStore().getCameraPaths().find(item => item.enabled && item.autoPlay)
       if (path && runtime instanceof UnityEditorSceneRuntime && runtime.cameraAvailable) {
         previewPathRuntime = runtime
@@ -937,8 +820,6 @@ onMounted(async () => {
           if (generation === editorPreviewGeneration) ElMessage.error(error instanceof Error ? error.message : '相机路径播放失败')
         })
       }
-      if (generation === editorPreviewGeneration && isPreviewScene.value) startEditorFirstPersonPreview()
-      return entering
     }).catch((error) => {
       if (generation !== editorPreviewGeneration) return
       appLogger.error('SceneEdit', '进入场景预览失败', error)
@@ -1109,9 +990,7 @@ const closePreviewScene = () => {
     })
     previewPathRuntime = null
   }
-  stopEditorFirstPersonPreview()
-  previewFirstPersonObject.value = null
-  previewFirstPersonRuntime = null
+  firstPerson.reset()
   isPreviewScene.value = false
   teleportTo.value = '#scene'
   getWidgetOverlayHostPort().exitPreview()
@@ -1251,7 +1130,7 @@ const handleSaveAsTemplate = async (form: EditorDim3dSceneTemplateForm) => {
     release()
   }
 }
-const handlePreviewScene = () => {
+const handlePreviewScene = (firstPersonId?: string) => {
   if (editorSceneOperation.value) return
   if (!sceneLockReady.value || sceneLockLost.value) {
     ElMessage.warning(
@@ -1265,6 +1144,7 @@ const handlePreviewScene = () => {
   }
   // 预览切换会清空选中态；先结算数据面板的防抖草稿，避免运行时读到旧温度或旧映射。
   flushEditorSceneEdits()
+  requestedFirstPersonId = firstPersonId
   sceneOperationRef.value?.handlePreviewScene()
 }
 
@@ -1276,6 +1156,14 @@ const handleBackToPreviousPage = createEditorSceneExitController({
   releaseSceneLock: stopSceneLockHeartbeat,
   returnToManagement: () => router.replace({ name: 'sceneManage' }),
 })
+
+/** 属性面板使用同一场景预览入口，保留编辑门禁与二维叠加层的完整切换。 */
+const openSelectedFirstPersonPreview = (event: Event) => {
+  const objectId = (event as CustomEvent<string>).detail
+  if (objectId && !isPreviewScene.value) handlePreviewScene(objectId)
+}
+onMounted(() => window.addEventListener(SCENE_FIRST_PERSON_PREVIEW_EVENT, openSelectedFirstPersonPreview))
+onBeforeUnmount(() => window.removeEventListener(SCENE_FIRST_PERSON_PREVIEW_EVENT, openSelectedFirstPersonPreview))
 
 /** 断开后立即停用编辑画布和保存入口，但不标记失锁，确保仍执行当前页签的真实解锁请求。 */
 const handleRendererDisconnected = (message: string) => {
@@ -1370,14 +1258,6 @@ const releaseScene = async () => {
 onUnmounted(() => {
   releaseLostLease?.()
   editorPreviewGeneration += 1
-  stopEditorFirstPersonPreview()
-  window.removeEventListener('keydown', handleEditorFirstPersonKeyDown)
-  window.removeEventListener('keyup', handleEditorFirstPersonKeyUp)
-  window.removeEventListener('blur', releaseEditorFirstPersonInput)
-  window.removeEventListener('pointerdown', handleEditorFirstPersonPointerDown)
-  window.removeEventListener('pointermove', handleEditorFirstPersonPointerMove)
-  window.removeEventListener('pointerup', handleEditorFirstPersonPointerUp)
-  window.removeEventListener('pointercancel', handleEditorFirstPersonPointerUp)
   void stopSceneLockHeartbeat()
   window.removeEventListener('beforeunload', releaseSceneLockBeforeUnload)
   window.removeEventListener('pagehide', releaseSceneLockBeforeUnload)

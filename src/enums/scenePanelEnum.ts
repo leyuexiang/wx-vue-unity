@@ -58,6 +58,8 @@ export enum ACTION_TYPE_ENUM {
   JumpLink = 'jumpLink',
   SwitchScene = 'switchScene',
   SwitchView = 'switchView',
+  /** 由当前预览宿主切换第一人称。 */
+  ToggleFirstPerson = 'toggleFirstPerson',
   ModelVisibility = 'modelVisibility',
   /** 切换模型显隐并把触发源数据字段写入目标模型属性。 */
   // 统一传参入口；旧枚举仅用于读取历史配置。

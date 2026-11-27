@@ -14,15 +14,16 @@ const primitiveNames: Record<string, string> = {
 
 const unityDraftObjectTypes = new Set<EditorObject['type']>(['model', 'primitive', 'group'])
 
-/** Keep objects outside the current Unity protocol in SceneStore and save packages. */
-export const isUnityDeferredObject = (object: EditorObject): boolean => !unityDraftObjectTypes.has(object.type)
+/** 第一人称相机在旧播放器上仍保留在场景存档，待能力协商通过后才投影。 */
+export const isUnityDeferredObject = (object: EditorObject, firstPersonSupported = true): boolean =>
+  !unityDraftObjectTypes.has(object.type) && !(firstPersonSupported && object.type === 'camera' && object.firstPerson)
 
 export const getUnityModelAssetId = (object: EditorObject): string =>
   String(object.asset?.metadata?.assetId ?? object.asset?.id ?? '').trim()
 
-export const getUnityDeferredRenderWarnings = (scene: EditorScene, weatherSupported = false): string[] => {
+export const getUnityDeferredRenderWarnings = (scene: EditorScene, weatherSupported = false, firstPersonSupported = true): string[] => {
   const names = [...new Set([
-    ...scene.objects.filter(isUnityDeferredObject).map((object) => `${object.name || object.id}（${object.type}）`),
+    ...scene.objects.filter(object => isUnityDeferredObject(object, firstPersonSupported)).map((object) => `${object.name || object.id}（${object.type}）`),
     ...scene.effects.filter((effect) => effect.params.enabled !== false && !(weatherSupported && effect.type === 'weather' && effect.params.provider === 'enviro3')).map((effect) => effect.type),
   ])]
   if (!names.length) return []
@@ -119,6 +120,7 @@ export const projectObjectForUnity = (object: EditorObject, sceneId?: string): U
     // 拾取状态与编辑锁分开传输；没有历史字段的对象默认允许画布拾取。
     properties: {
       ...(primitiveType ? { primitiveType } : {}),
+      ...(object.type === 'camera' && object.firstPerson ? { firstPerson: object.firstPerson } : {}),
       pickable: typeof pickable === 'boolean' ? pickable : true,
       ...(typeof deviceId === 'string' ? { deviceId } : {}),
       ...(instanceDefinition === undefined ? {} : { instanceDefinition }),
@@ -126,10 +128,10 @@ export const projectObjectForUnity = (object: EditorObject, sceneId?: string): U
   }
 }
 
-export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
+export const projectSceneForUnity = (scene: EditorScene, firstPersonSupported = true): UnityScene => {
   if (scene.type === 'gis' && scene.coordinateSystem.kind !== 'wgs84') throw new Error('GIS 场景必须使用 WGS84 坐标系')
   const index = buildSceneNodeIndex(scene.objects)
-  const renderObjects = scene.objects.filter((object) => !isUnityDeferredObject(object))
+  const renderObjects = scene.objects.filter((object) => !isUnityDeferredObject(object, firstPersonSupported))
   const renderedIds = new Set(renderObjects.map((object) => object.id))
   for (const object of renderObjects) {
     const parent = index.parentById.get(object.id)
@@ -185,18 +187,24 @@ export const projectSceneForUnity = (scene: EditorScene): UnityScene => {
 export const projectSceneForUnityLoadedInstances = (
   scene: EditorScene,
   loadedInstanceIds: ReadonlySet<string>,
+  firstPersonSupported = true,
 ): UnityScene => {
   const index = buildSceneNodeIndex(scene.objects)
   const projectedIds = new Set<string>()
-  loadedInstanceIds.forEach((instanceId) => {
+  const includeWithParents = (instanceId: string) => {
     let current: string | undefined = instanceId
     while (current && !projectedIds.has(current)) {
       projectedIds.add(current)
       current = index.parentById.get(current)
     }
+  }
+  loadedInstanceIds.forEach(includeWithParents)
+  // 漫游起点始终驻留，避免模型分片调度把相机起点误当作未加载的模型卸载。
+  if (firstPersonSupported) scene.objects.forEach(object => {
+    if (object.type === 'camera' && object.firstPerson) includeWithParents(object.id)
   })
   return projectSceneForUnity({
     ...scene,
     objects: scene.objects.filter((object) => projectedIds.has(object.id)),
-  })
+  }, firstPersonSupported)
 }

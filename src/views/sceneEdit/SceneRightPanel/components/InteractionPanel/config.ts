@@ -86,6 +86,10 @@ export const actionTypeOptions = [
     value: ACTION_TYPE_ENUM.SwitchView,
   },
   {
+    label: '切换第一人称',
+    value: ACTION_TYPE_ENUM.ToggleFirstPerson,
+  },
+  {
     label: '切换场景',
     value: ACTION_TYPE_ENUM.SwitchScene,
   },
